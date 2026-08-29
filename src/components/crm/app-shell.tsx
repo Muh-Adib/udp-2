@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import DashboardModule from "@/components/crm/dashboard-module";
+import NotificationCenter from "@/components/crm/notification-center";
 import PipelineModule from "@/components/crm/pipeline-module";
 import InboxModule from "@/components/crm/inbox-module";
 import ContactsModule from "@/components/crm/contacts-module";
@@ -188,6 +189,9 @@ export default function AppShell() {
                 ))}
               </SelectContent>
             </Select>
+
+            {/* Pusat notifikasi (bell) */}
+            <NotificationCenter />
 
             {/* User menu */}
             <DropdownMenu>

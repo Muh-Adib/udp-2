@@ -12,6 +12,7 @@ export async function seedDatabase(force = false) {
   // Clean (order matters)
   await db.changeRequest.deleteMany();
   await db.approvalRequest.deleteMany();
+  await db.notificationState.deleteMany();
   await db.estimation.deleteMany();
   await db.quotation.deleteMany();
   await db.auditLog.deleteMany();

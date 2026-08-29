@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, CircleDashed, CircleDotDashed,
+  CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
   Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -375,6 +375,233 @@ function TimelineView({ projects, onOpen }: { projects: ProjectDTO[]; onOpen: (p
   );
 }
 
+// ============ Calendar (bulanan) view ============
+
+type CalendarEvent =
+  | { kind: "project"; project: ProjectDTO }
+  | { kind: "milestone"; project: ProjectDTO; milestone: MilestoneDTO };
+
+// 2024-01-01 adalah Senin → ["Sen","Sel","Rab","Kam","Jum","Sab","Min"]
+const WEEKDAY_LABELS: string[] = Array.from({ length: 7 }, (_, i) =>
+  new Intl.DateTimeFormat("id-ID", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2024, 0, 1 + i)))
+);
+
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function CalendarView({ projects, onOpenDetail }: {
+  projects: ProjectDTO[];
+  onOpenDetail: (p: ProjectDTO) => void;
+}) {
+  const [cursor, setCursor] = useState(() => {
+    const n = new Date();
+    return { year: n.getFullYear(), month: n.getMonth() };
+  });
+
+  // Event per tanggal (key "y-m-d" lokal). Project/milestone tanpa dueDate diabaikan.
+  // Milestone hanya dari project berstatus bukan completed/cancelled.
+  const eventsByDay = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    const push = (d: Date, ev: CalendarEvent) => {
+      const key = dateKey(d);
+      const arr = map.get(key);
+      if (arr) arr.push(ev);
+      else map.set(key, [ev]);
+    };
+    for (const p of projects) {
+      if (p.dueDate) {
+        const d = new Date(p.dueDate);
+        if (!Number.isNaN(d.getTime())) push(d, { kind: "project", project: p });
+      }
+      if (p.status !== "completed" && p.status !== "cancelled") {
+        for (const m of p.milestones ?? []) {
+          if (!m.dueDate) continue;
+          const d = new Date(m.dueDate);
+          if (!Number.isNaN(d.getTime())) push(d, { kind: "milestone", project: p, milestone: m });
+        }
+      }
+    }
+    return map;
+  }, [projects]);
+
+  // Grid 6 baris × 7 kolom (Senin-based) — tinggi konsisten antar bulan.
+  const cells = useMemo(() => {
+    const offset = (new Date(cursor.year, cursor.month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+    return Array.from({ length: 42 }, (_, i) => {
+      const day = i - offset + 1;
+      const valid = day >= 1 && day <= daysInMonth;
+      return { i, day: valid ? day : null, date: valid ? new Date(cursor.year, cursor.month, day) : null };
+    });
+  }, [cursor]);
+
+  const now = new Date();
+  const todayKey = dateKey(now);
+  const isCurrentMonth = cursor.year === now.getFullYear() && cursor.month === now.getMonth();
+  const monthLabel = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric" })
+    .format(new Date(cursor.year, cursor.month, 1));
+
+  // Warna brand unik (maks 4) untuk legenda "Deadline project".
+  const brandColors = useMemo(() => {
+    const seen: string[] = [];
+    for (const p of projects) {
+      if (p.brand?.color && !seen.includes(p.brand.color)) seen.push(p.brand.color);
+      if (seen.length >= 4) break;
+    }
+    return seen;
+  }, [projects]);
+
+  function shiftMonth(delta: number) {
+    setCursor((c) => {
+      const d = new Date(c.year, c.month + delta, 1);
+      return { year: d.getFullYear(), month: d.getMonth() };
+    });
+  }
+
+  if (projects.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+        <CalendarDays className="h-8 w-8 text-zinc-300" aria-hidden />
+        <p className="text-sm text-zinc-400">Tidak ada project untuk filter ini.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto crm-scroll rounded-xl border bg-white shadow-sm">
+      <div className="min-w-[680px] p-4">
+        {/* Header bulan */}
+        <div className="flex items-center gap-1">
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => shiftMonth(-1)} aria-label="Bulan sebelumnya">
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+          </Button>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => shiftMonth(1)} aria-label="Bulan berikutnya">
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          </Button>
+          <p className="ml-1 text-sm font-semibold text-zinc-900">{monthLabel}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto h-8"
+            onClick={() => setCursor({ year: now.getFullYear(), month: now.getMonth() })}
+            disabled={isCurrentMonth}
+          >
+            Hari ini
+          </Button>
+        </div>
+
+        {/* Grid kalender */}
+        <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200">
+          <div className="grid grid-cols-7 border-b border-zinc-200 bg-zinc-50">
+            {WEEKDAY_LABELS.map((w, i) => (
+              <div
+                key={w}
+                className={`px-2 py-1.5 text-[11px] font-semibold text-zinc-500 ${i < 6 ? "border-r border-zinc-200" : ""}`}
+              >
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {cells.map((cell) => {
+              const dayEvents = cell.date ? eventsByDay.get(dateKey(cell.date)) ?? [] : [];
+              const visible = dayEvents.slice(0, 3);
+              const rest = dayEvents.slice(3);
+              const restTitle = rest
+                .map((ev) => (ev.kind === "project" ? `${ev.project.code} · deadline` : `${ev.project.code} · ${ev.milestone.name}`))
+                .join("\n");
+              const isWeekend = cell.i % 7 >= 5;
+              const isToday = cell.date ? dateKey(cell.date) === todayKey : false;
+              const bgCls = !cell.date ? "bg-zinc-50/40" : isToday ? "bg-zinc-100" : isWeekend ? "bg-zinc-50/60" : "";
+              return (
+                <div
+                  key={cell.i}
+                  className={`min-h-[92px] p-1.5 ${bgCls} ${cell.i % 7 !== 6 ? "border-r border-zinc-100" : ""} ${cell.i < 35 ? "border-b border-zinc-100" : ""}`}
+                >
+                  <div className="flex items-center">
+                    {cell.day !== null ? (
+                      isToday ? (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-900 px-1 text-[11px] font-bold leading-none text-white tabular-nums">
+                          {cell.day}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] leading-none text-zinc-500 tabular-nums">{cell.day}</span>
+                      )
+                    ) : null}
+                  </div>
+                  {visible.length > 0 ? (
+                    <div className="mt-1 space-y-1">
+                      {visible.map((ev) =>
+                        ev.kind === "project" ? (
+                          <button
+                            key={`p-${ev.project.id}`}
+                            type="button"
+                            onClick={() => onOpenDetail(ev.project)}
+                            title={`${ev.project.code} · ${ev.project.name} · deadline · ${ev.project.progress}%`}
+                            aria-label={`Buka detail project ${ev.project.name} (deadline)`}
+                            className="block w-full truncate rounded px-1.5 py-0.5 text-left text-[10px] font-medium text-white transition-opacity hover:opacity-80"
+                            style={{ backgroundColor: ev.project.brand?.color ?? "#3f3f46" }}
+                          >
+                            {ev.project.code} · deadline
+                          </button>
+                        ) : (
+                          <button
+                            key={`m-${ev.milestone.id}`}
+                            type="button"
+                            onClick={() => onOpenDetail(ev.project)}
+                            title={`${ev.project.code} · ${ev.milestone.name} · ${msMeta(ev.milestone.status).label}`}
+                            aria-label={`Buka detail project ${ev.project.name} — milestone ${ev.milestone.name}`}
+                            className="flex w-full items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50"
+                            style={{ borderLeftWidth: 2, borderLeftColor: ev.project.brand?.color ?? "#a1a1aa" }}
+                          >
+                            <span
+                              className={`h-1.5 w-1.5 shrink-0 rotate-45 rounded-[1px] ${
+                                ev.milestone.status === "done" ? "bg-emerald-500" : ev.milestone.status === "in_progress" ? "bg-amber-500" : "bg-zinc-300"
+                              }`}
+                              aria-hidden
+                            />
+                            <span className="truncate">{ev.milestone.name}</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  ) : null}
+                  {rest.length > 0 ? (
+                    <span className="mt-1 block truncate text-[10px] font-medium text-zinc-500" title={restTitle}>
+                      +{rest.length} lagi
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Legenda */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-500">
+          <span className="flex items-center gap-1.5">
+            <span className="flex -space-x-1" aria-hidden>
+              {(brandColors.length > 0 ? brandColors : [null]).map((c, idx) => (
+                <span
+                  key={idx}
+                  className="h-2.5 w-3 rounded-full ring-1 ring-white"
+                  style={{ backgroundColor: c ?? "#a1a1aa" }}
+                />
+              ))}
+            </span>
+            Deadline project
+          </span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProjectsSkeleton() {
   return (
     <div className="space-y-6" aria-hidden>
@@ -404,7 +631,7 @@ export default function ProjectsModule() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const [brandFilter, setBrandFilter] = useState("all");
-  const [view, setView] = useState<"cards" | "timeline">("cards");
+  const [view, setView] = useState<"cards" | "timeline" | "calendar">("cards");
 
   const [detail, setDetail] = useState<ProjectDTO | null>(null);
   const [editStatus, setEditStatus] = useState("planning");
@@ -657,6 +884,17 @@ export default function ProjectsModule() {
             >
               <ChartGantt className="h-3.5 w-3.5" aria-hidden /> Timeline
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setView("calendar")}
+              aria-pressed={view === "calendar"}
+              aria-label="Tampilan kalender"
+              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "calendar" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+            >
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden /> Kalender
+            </Button>
           </div>
         </div>
       </div>
@@ -665,7 +903,7 @@ export default function ProjectsModule() {
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
       ) : null}
 
-      {/* Tampilan kartu / timeline */}
+      {/* Tampilan kartu / timeline / kalender */}
       {view === "cards" ? (
         (projects ?? []).length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
@@ -684,6 +922,8 @@ export default function ProjectsModule() {
             ))}
           </div>
         )
+      ) : view === "calendar" ? (
+        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} />
       ) : (projects ?? []).length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
           <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />

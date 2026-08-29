@@ -1,0 +1,1095 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, CircleDashed, CircleDotDashed,
+     6→  Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
+     7→  type LucideIcon,
+     8→} from "lucide-react";
+     9→import { toast } from "sonner";
+    10→
+    11→import {
+    12→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    13→  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    14→} from "@/components/ui/alert-dialog";
+    15→import { Badge } from "@/components/ui/badge";
+    16→import { Button } from "@/components/ui/button";
+    17→import {
+    18→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    19→} from "@/components/ui/dialog";
+    20→import { Input } from "@/components/ui/input";
+    21→import { Label } from "@/components/ui/label";
+    22→import { Progress } from "@/components/ui/progress";
+    23→import {
+    24→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    25→} from "@/components/ui/select";
+    26→import {
+    27→  Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
+    28→} from "@/components/ui/sheet";
+    29→import { Skeleton } from "@/components/ui/skeleton";
+    30→import { Textarea } from "@/components/ui/textarea";
+    31→import { api } from "@/lib/crm/api-client";
+    32→import { useCrmStore } from "@/lib/crm/store";
+    33→import type { ChangeRequestDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
+    34→import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
+    35→
+    36→// ============ Meta ============
+    37→
+    38→const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
+    39→  planning: { label: "Perencanaan", cls: "bg-zinc-100 text-zinc-600" },
+    40→  in_progress: { label: "Berjalan", cls: "bg-amber-100 text-amber-700" },
+    41→  review: { label: "Review", cls: "bg-violet-100 text-violet-700" },
+    42→  completed: { label: "Selesai", cls: "bg-emerald-100 text-emerald-700" },
+    43→};
+    44→
+    45→const MILESTONE_STATUS: Record<string, { label: string; cls: string; icon: LucideIcon }> = {
+    46→  done: { label: "Selesai", cls: "border-emerald-200 bg-emerald-50 text-emerald-700 line-through decoration-emerald-500", icon: CheckCircle2 },
+    47→  in_progress: { label: "Dikerjakan", cls: "border-amber-200 bg-amber-50 text-amber-700", icon: CircleDotDashed },
+    48→  pending: { label: "Menunggu", cls: "border-zinc-200 bg-white text-zinc-500", icon: CircleDashed },
+    49→};
+    50→
+    51→const CR_STATUS: Record<string, { label: string; cls: string }> = {
+    52→  pending: { label: "Menunggu Persetujuan", cls: "bg-amber-100 text-amber-700" },
+    53→  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+    54→  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+    55→  cancelled: { label: "Dibatalkan", cls: "bg-zinc-100 text-zinc-600" },
+    56→};
+    57→
+    58→function statusMeta(s: string) {
+    59→  return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+    60→}
+    61→
+    62→function crMeta(s: string) {
+    63→  return CR_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+    64→}
+    65→
+    66→function msMeta(s: string) {
+    67→  return MILESTONE_STATUS[s] ?? { label: s, cls: "border-zinc-200 bg-white text-zinc-500", icon: CircleDashed };
+    68→}
+    69→
+    70→function dueSoon(p: ProjectDTO): boolean {
+    71→  if (p.status === "completed" || !p.dueDate) return false;
+    72→  const diffDays = (new Date(p.dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    73→  return diffDays < 7;
+    74→}
+    75→
+    76→// ============ Sub-komponen kecil ============
+    77→
+    78→function ProjectCard({ project, onOpen, onMilestoneClick }: {
+    79→  project: ProjectDTO;
+    80→  onOpen: () => void;
+    81→  onMilestoneClick: (m: MilestoneDTO) => void;
+    82→}) {
+    83→  const st = statusMeta(project.status);
+    84→  const brand = project.brand;
+    85→  const pendingCrCount = (project.changeRequests ?? []).filter((c) => c.status === "pending").length;
+    86→  return (
+    87→    <button
+    88→      type="button"
+    89→      onClick={onOpen}
+    90→      aria-label={`Buka detail project ${project.name}`}
+    91→      className="rounded-xl border bg-white p-4 text-left shadow-sm transition-colors hover:border-zinc-300 hover:shadow-md"
+    92→    >
+    93→      <div className="flex items-start justify-between gap-2">
+    94→        <div className="min-w-0">
+    95→          <p className="font-mono text-[11px] text-zinc-500">{project.code}</p>
+    96→          <p className="mt-0.5 truncate text-sm font-semibold text-zinc-900">{project.name}</p>
+    97→        </div>
+    98→        <div className="flex shrink-0 items-center gap-1.5">
+    99→          {pendingCrCount > 0 ? (
+   100→            <span
+   101→              title="Ada change request menunggu persetujuan klien"
+   102→              aria-label={`Ada ${pendingCrCount} change request menunggu`}
+   103→              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+   104→            >
+   105→              <GitPullRequestArrow className="h-3 w-3" aria-hidden />
+   106→              {pendingCrCount} CR
+   107→            </span>
+   108→          ) : null}
+   109→          <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+   110→        </div>
+   111→      </div>
+   112→
+   113→      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+   114→        {brand ? (
+   115→          <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
+   116→            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
+   117→            {brand.name}
+   118→          </span>
+   119→        ) : null}
+   120→        {project.company?.name ? <span className="truncate">{project.company.name}</span> : null}
+   121→      </div>
+   122→
+   123→      <div className="mt-3 space-y-1.5">
+   124→        <div className="flex items-center justify-between text-xs text-zinc-500">
+   125→          <span>Progress</span>
+   126→          <span className="font-semibold tabular-nums text-zinc-700">{project.progress}%</span>
+   127→        </div>
+   128→        <Progress value={project.progress} aria-label={`Progress project ${project.progress}%`} />
+   129→      </div>
+   130→
+   131→      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+   132→        <div className="flex items-center gap-1.5 text-zinc-600">
+   133→          <User2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+   134→          <span className="truncate">{project.pmName ?? "Belum ada PM"}</span>
+   135→        </div>
+   136→        <div className="flex items-center justify-end gap-1.5 text-zinc-600">
+   137→          <span className="truncate font-medium">{formatCurrency(project.contractValue)}</span>
+   138→        </div>
+   139→        <div className={`flex items-center gap-1.5 ${dueSoon(project) ? "font-medium text-rose-600" : "text-zinc-600"}`}>
+   140→          <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden />
+   141→          <span>Deadline {formatDate(project.dueDate)}</span>
+   142→        </div>
+   143→      </div>
+   144→
+   145→      {(project.milestones ?? []).length > 0 ? (
+   146→        <div className="mt-3 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+   147→          {(project.milestones ?? []).map((m) => {
+   148→            const meta = msMeta(m.status);
+   149→            const Icon = meta.icon;
+   150→            return (
+   151→              <span
+   152→                key={m.id}
+   153→                role="button"
+   154→                tabIndex={0}
+   155→                onClick={() => onMilestoneClick(m)}
+   156→                onKeyDown={(e) => {
+   157→                  if (e.key === "Enter" || e.key === " ") {
+   158→                    e.preventDefault();
+   159→                    e.stopPropagation();
+   160→                    onMilestoneClick(m);
+   161→                  }
+   162→                }}
+   163→                aria-label={`Milestone ${m.name} — ${meta.label}. Klik untuk menandai selesai`}
+   164→                className={`inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors hover:border-zinc-400 ${meta.cls}`}
+   165→              >
+   166→                <Icon className="h-3 w-3 shrink-0" aria-hidden />
+   167→                <span className="truncate">{m.name}</span>
+   168→              </span>
+   169→            );
+   170→          })}
+   171→        </div>
+   172→      ) : null}
+   173→    </button>
+   174→  );
+   175→}
+   176→
+   177→// ============ Timeline (Gantt) view ============
+   178→
+   179→const DAY_MS = 24 * 60 * 60 * 1000;
+   180→
+   181→function shortDate(ts: number): string {
+   182→  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(ts);
+   183→}
+   184→
+   185→function TimelineRow({ project, pct, onOpen }: {
+   186→  project: ProjectDTO;
+   187→  pct: (ts: number) => number;
+   188→  onOpen: (p: ProjectDTO) => void;
+   189→}) {
+   190→  const barCls =
+   191→    project.status === "in_progress" ? "bg-zinc-900/90"
+   192→    : project.status === "review" ? "bg-violet-500"
+   193→    : project.status === "completed" ? "bg-emerald-500"
+   194→    : "bg-zinc-400";
+   195→  const startTs = project.startDate ? new Date(project.startDate).getTime() : NaN;
+   196→  const endTs = project.dueDate ? new Date(project.dueDate).getTime() : NaN;
+   197→  const hasStart = Number.isFinite(startTs);
+   198→  const hasEnd = Number.isFinite(endTs);
+   199→  const leftPct = hasStart ? pct(startTs) : null;
+   200→  const widthPct = hasStart && hasEnd ? Math.max(pct(endTs) - pct(startTs), 2) : null;
+   201→  const barWidth = widthPct !== null ? Math.min(widthPct, 100 - (leftPct ?? 0)) : null;
+   202→  const barTitle = `${project.name} · ${formatDate(project.startDate)} → ${formatDate(project.dueDate)} · ${project.progress}%`;
+   203→
+   204→  return (
+   205→    <button
+   206→      type="button"
+   207→      onClick={() => onOpen(project)}
+   208→      aria-label={`Buka detail project ${project.name}`}
+   209→      className="flex h-11 w-full border-t border-zinc-100 text-left transition-colors hover:bg-zinc-50"
+   210→    >
+   211→      <div className="flex w-[200px] shrink-0 items-center gap-2 overflow-hidden pr-3">
+   212→        <span
+   213→          className="h-2 w-2 shrink-0 rounded-full"
+   214→          style={{ backgroundColor: project.brand?.color ?? "#a1a1aa" }}
+   215→          aria-hidden
+   216→        />
+   217→        <div className="min-w-0">
+   218→          <p className="truncate font-mono text-[11px] leading-tight text-zinc-500">{project.code}</p>
+   219→          <p className="truncate text-sm leading-tight text-zinc-800">{project.name}</p>
+   220→        </div>
+   221→      </div>
+   222→      <div className="relative flex-1">
+   223→        {leftPct !== null && barWidth !== null ? (
+   224→          <div
+   225→            className={`absolute top-1/2 h-5 -translate-y-1/2 rounded-full ${barCls}`}
+   226→            style={{ left: `${leftPct}%`, width: `${barWidth}%` }}
+   227→            title={barTitle}
+   228→          >
+   229→            {widthPct !== null && widthPct >= 14 ? (
+   230→              <span className="absolute inset-y-0 right-1.5 flex items-center text-[10px] font-semibold text-white">
+   231→                {project.progress}%
+   232→              </span>
+   233→            ) : null}
+   234→          </div>
+   235→        ) : null}
+   236→        {leftPct !== null && barWidth !== null && widthPct !== null && widthPct < 14 ? (
+   237→          <span
+   238→            className="absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-zinc-500"
+   239→            style={{ left: `calc(${leftPct + barWidth}% + 6px)` }}
+   240→          >
+   241→            {project.progress}%
+   242→          </span>
+   243→        ) : null}
+   244→        {leftPct !== null && barWidth === null ? (
+   245→          <span
+   246→            className={`absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full ${barCls}`}
+   247→            style={{ left: `${leftPct}%` }}
+   248→            title={barTitle}
+   249→          />
+   250→        ) : null}
+   251→        {!hasStart && !hasEnd ? (
+   252→          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-zinc-400">
+   253→            Tanpa tanggal
+   254→          </span>
+   255→        ) : null}
+   256→        {(project.milestones ?? []).map((m) => {
+   257→          if (!m.dueDate) return null;
+   258→          const ts = new Date(m.dueDate).getTime();
+   259→          if (!Number.isFinite(ts)) return null;
+   260→          const dCls =
+   261→            m.status === "done" ? "bg-emerald-500"
+   262→            : m.status === "in_progress" ? "bg-amber-500"
+   263→            : "bg-zinc-300";
+   264→          return (
+   265→            <span
+   266→              key={m.id}
+   267→              className={`absolute h-2.5 w-2.5 rounded-[2px] ${dCls}`}
+   268→              style={{
+   269→                left: `${pct(ts)}%`,
+   270→                top: "calc(50% - 10px)",
+   271→                transform: "translate(-50%, -50%) rotate(45deg)",
+   272→              }}
+   273→              title={`${m.name} · ${msMeta(m.status).label}`}
+   274→            />
+   275→          );
+   276→        })}
+   277→      </div>
+   278→    </button>
+   279→  );
+   280→}
+   281→
+   282→function TimelineView({ projects, onOpen }: { projects: ProjectDTO[]; onOpen: (p: ProjectDTO) => void }) {
+   283→  const range = useMemo(() => {
+   284→    const now = Date.now();
+   285→    let min: number | null = null;
+   286→    let max: number | null = null;
+   287→    for (const p of projects) {
+   288→      let contributed = false;
+   289→      const track = (raw?: string | Date | number | null) => {
+   290→        if (!raw) return;
+   291→        const ts = new Date(raw).getTime();
+   292→        if (!Number.isFinite(ts)) return;
+   293→        min = min === null ? ts : Math.min(min, ts);
+   294→        max = max === null ? ts : Math.max(max, ts);
+   295→        contributed = true;
+   296→      };
+   297→      track(p.startDate);
+   298→      track(p.dueDate);
+   299→      for (const m of p.milestones ?? []) track(m.dueDate);
+   300→      if (!contributed) track(now); // fallback: project tanpa tanggal → acuan hari ini
+   301→    }
+   302→    if (min === null || max === null) return { min: now - 15 * DAY_MS, max: now + 15 * DAY_MS };
+   303→    const pad = 7 * DAY_MS;
+   304→    return { min: min - pad, max: max + pad };
+   305→  }, [projects]);
+   306→
+   307→  const span = Math.max(range.max - range.min, DAY_MS);
+   308→  const pct = useCallback((ts: number) => Math.max(0, Math.min(100, ((ts - range.min) / span) * 100)), [range.min, span]);
+   309→  const nowPct = pct(Date.now());
+   310→
+   311→  const gridlines = useMemo(() => {
+   312→    const n = 6;
+   313→    return Array.from({ length: n }, (_, i) => {
+   314→      const ratio = i / (n - 1);
+   315→      return { pct: ratio * 100, label: shortDate(range.min + ratio * span) };
+   316→    });
+   317→  }, [range.min, span]);
+   318→
+   319→  const todayTransform = nowPct <= 5 ? "translateX(0)" : nowPct >= 95 ? "translateX(-100%)" : "translateX(-50%)";
+   320→
+   321→  return (
+   322→    <div className="overflow-x-auto crm-scroll rounded-xl border bg-white p-4 shadow-sm">
+   323→      <div className="min-w-[760px]">
+   324→        {/* Sumbu waktu (header) */}
+   325→        <div className="flex">
+   326→          <div className="w-[200px] shrink-0" />
+   327→          <div className="relative h-7 flex-1">
+   328→            {gridlines.map((g, i) => (
+   329→              <span
+   330→                key={i}
+   331→                className="absolute top-0 whitespace-nowrap text-[10px] tabular-nums text-zinc-400"
+   332→                style={{
+   333→                  left: `${g.pct}%`,
+   334→                  transform: i === 0 ? "translateX(0)" : i === gridlines.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+   335→                }}
+   336→              >
+   337→                {g.label}
+   338→              </span>
+   339→            ))}
+   340→            <span
+   341→              className="absolute top-0 whitespace-nowrap text-[10px] font-semibold text-rose-500"
+   342→              style={{ left: `${nowPct}%`, transform: todayTransform }}
+   343→            >
+   344→              Hari ini
+   345→            </span>
+   346→          </div>
+   347→        </div>
+   348→
+   349→        {/* Baris project + gridline vertikal */}
+   350→        <div className="relative">
+   351→          <div className="pointer-events-none absolute inset-y-0 left-[200px] right-0" aria-hidden>
+   352→            {gridlines.map((g, i) => (
+   353→              <div key={i} className="absolute inset-y-0 border-l border-dashed border-zinc-200" style={{ left: `${g.pct}%` }} />
+   354→            ))}
+   355→            <div className="absolute inset-y-0 border-l-2 border-rose-400" style={{ left: `${nowPct}%` }} />
+   356→          </div>
+   357→          {projects.map((p) => (
+   358→            <TimelineRow key={p.id} project={p} pct={pct} onOpen={onOpen} />
+   359→          ))}
+   360→        </div>
+   361→
+   362→        {/* Legenda */}
+   363→        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-500">
+   364→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-400" aria-hidden /> Perencanaan</span>
+   365→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-900/90" aria-hidden /> Berjalan</span>
+   366→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-violet-500" aria-hidden /> Review</span>
+   367→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-emerald-500" aria-hidden /> Selesai</span>
+   368→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
+   369→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
+   370→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+   371→          <span className="flex items-center gap-1.5"><span className="h-3.5 border-l-2 border-rose-400" aria-hidden /> Hari ini</span>
+   372→        </div>
+   373→      </div>
+   374→    </div>
+   375→  );
+   376→}
+   377→
+   378→function ProjectsSkeleton() {
+   379→  return (
+   380→    <div className="space-y-6" aria-hidden>
+   381→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   382→        <div className="space-y-2">
+   383→          <Skeleton className="h-7 w-36" />
+   384→          <Skeleton className="h-4 w-80" />
+   385→        </div>
+   386→        <Skeleton className="h-9 w-28 rounded-lg" />
+   387→      </div>
+   388→      <Skeleton className="h-16 rounded-xl" />
+   389→      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   390→        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56 rounded-xl" />)}
+   391→      </div>
+   392→    </div>
+   393→  );
+   394→}
+   395→
+   396→// ============ Module utama ============
+   397→
+   398→export default function ProjectsModule() {
+   399→  const storeBrands = useCrmStore((s) => s.brands);
+   400→  const user = useCrmStore((s) => s.user);
+   401→
+   402→  const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
+   403→  const [loading, setLoading] = useState(true);
+   404→  const [error, setError] = useState<string | null>(null);
+   405→  const [statusFilter, setStatusFilter] = useState("all");
+   406→  const [brandFilter, setBrandFilter] = useState("all");
+   407→  const [view, setView] = useState<"cards" | "timeline">("cards");
+   408→
+   409→  const [detail, setDetail] = useState<ProjectDTO | null>(null);
+   410→  const [editStatus, setEditStatus] = useState("planning");
+   411→  const [editProgress, setEditProgress] = useState("0");
+   412→  const [savingDetail, setSavingDetail] = useState(false);
+   413→
+   414→  // Change request (Fase 2 — Produksi)
+   415→  const [crDialogOpen, setCrDialogOpen] = useState(false);
+   416→  const [crTitle, setCrTitle] = useState("");
+   417→  const [crDesc, setCrDesc] = useState("");
+   418→  const [crCost, setCrCost] = useState("");
+   419→  const [crDays, setCrDays] = useState("");
+   420→  const [crSaving, setCrSaving] = useState(false);
+   421→  const [decideTarget, setDecideTarget] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" | "cancel" } | null>(null);
+   422→  const [decideNote, setDecideNote] = useState("");
+   423→  const [deciding, setDeciding] = useState(false);
+   424→
+   425→  const canDecideCr = user?.role === "director" || user?.role === "super_admin";
+   426→  const detailCrs = detail?.changeRequests ?? [];
+   427→  const approvedCrSum = detailCrs
+   428→    .filter((c) => c.status === "approved")
+   429→    .reduce((s, c) => s + (c.additionalCost ?? 0), 0);
+   430→
+   431→  const load = useCallback(async (silent = false): Promise<ProjectDTO[]> => {
+   432→    if (!silent) setLoading(true);
+   433→    setError(null);
+   434→    try {
+   435→      const res = await api.projects({
+   436→        status: statusFilter,
+   437→        brandId: brandFilter !== "all" ? brandFilter : undefined,
+   438→      });
+   439→      setProjects(res.projects);
+   440→      return res.projects;
+   441→    } catch (err) {
+   442→      setError(err instanceof Error ? err.message : "Gagal memuat project");
+   443→      if (!silent) toast.error("Gagal memuat data project");
+   444→      return [];
+   445→    } finally {
+   446→      setLoading(false);
+   447→    }
+   448→  }, [statusFilter, brandFilter]);
+   449→
+   450→  useEffect(() => { void load(); }, [load]);
+   451→
+   452→  const stats = useMemo(() => {
+   453→    const list = projects ?? [];
+   454→    return {
+   455→      active: list.filter((p) => p.status === "in_progress" || p.status === "review").length,
+   456→      total: list.length,
+   457→      avgProgress: list.length > 0 ? Math.round(list.reduce((s, p) => s + p.progress, 0) / list.length) : 0,
+   458→    };
+   459→  }, [projects]);
+   460→
+   461→  function openDetail(p: ProjectDTO) {
+   462→    setDetail(p);
+   463→    setEditStatus(p.status);
+   464→    setEditProgress(String(p.progress));
+   465→  }
+   466→
+   467→  function confirmMilestone(project: ProjectDTO, m: MilestoneDTO) {
+   468→    if (m.status === "done") {
+   469→      toast.info(`Milestone "${m.name}" sudah selesai`);
+   470→      return;
+   471→    }
+   472→    toast.info(`Tandai milestone "${m.name}" selesai?`, {
+   473→      description: `Project ${project.code} · progress akan dihitung ulang otomatis`,
+   474→      action: {
+   475→        label: "Ya, selesaikan",
+   476→        onClick: () => { void markMilestoneDone(project, m); },
+   477→      },
+   478→    });
+   479→  }
+   480→
+   481→  /** Ambil ulang daftar project lalu sinkronkan sheet detail dengan data terbaru. */
+   482→  async function refreshDetail() {
+   483→    const fresh = await load(true);
+   484→    setDetail((d) => (d ? fresh.find((p) => p.id === d.id) ?? d : d));
+   485→  }
+   486→
+   487→  async function markMilestoneDone(project: ProjectDTO, m: MilestoneDTO) {
+   488→    try {
+   489→      await api.updateProject({
+   490→        id: project.id,
+   491→        milestoneId: m.id,
+   492→        milestoneStatus: "done",
+   493→      });
+   494→      // API menghitung ulang progress & status project di server — ambil data terbaru
+   495→      toast.success(`Milestone "${m.name}" ditandai selesai`);
+   496→      await refreshDetail();
+   497→    } catch (err) {
+   498→      toast.error(err instanceof Error ? err.message : "Gagal memperbarui milestone");
+   499→    }
+   500→  }
+   501→
+   502→  function openCrDialog() {
+   503→    setCrTitle("");
+   504→    setCrDesc("");
+   505→    setCrCost("");
+   506→    setCrDays("");
+   507→    setCrDialogOpen(true);
+   508→  }
+   509→
+   510→  async function submitCreateCr(e: React.FormEvent) {
+   511→    e?.preventDefault();
+   512→    if (!detail || !user) {
+   513→      toast.error("Sesi tidak ditemukan — muat ulang halaman");
+   514→      return;
+   515→    }
+   516→    const title = crTitle.trim();
+   517→    const description = crDesc.trim();
+   518→    if (!title || !description) {
+   519→      toast.error("Judul dan deskripsi change request wajib diisi");
+   520→      return;
+   521→    }
+   522→    setCrSaving(true);
+   523→    try {
+   524→      const res = await api.createChangeRequest({
+   525→        projectId: detail.id,
+   526→        title,
+   527→        description,
+   528→        additionalCost: Math.max(0, Number(crCost) || 0),
+   529→        additionalDays: Math.max(0, Number(crDays) || 0),
+   530→        requestedBy: user.name,
+   531→        actorRole: user.role,
+   532→      });
+   533→      toast.success(`Change Request ${res.changeRequest.number} diajukan — menunggu persetujuan klien`);
+   534→      setCrDialogOpen(false);
+   535→      await refreshDetail();
+   536→    } catch (err) {
+   537→      toast.error(err instanceof Error ? err.message : "Gagal mengajukan change request");
+   538→    } finally {
+   539→      setCrSaving(false);
+   540→    }
+   541→  }
+   542→
+   543→  function openDecide(cr: ChangeRequestDTO, decision: "approve" | "reject" | "cancel") {
+   544→    setDecideNote("");
+   545→    setDecideTarget({ cr, decision });
+   546→  }
+   547→
+   548→  async function submitDecision() {
+   549→    if (!decideTarget || !user) return;
+   550→    setDeciding(true);
+   551→    try {
+   552→      const res = await api.decideChangeRequest({
+   553→        id: decideTarget.cr.id,
+   554→        decision: decideTarget.decision,
+   555→        decisionNote: decideNote.trim() || undefined,
+   556→        actorName: user.name,
+   557→        actorRole: user.role,
+   558→      });
+   559→      if (decideTarget.decision === "approve") {
+   560→        toast.success(res.invoice
+   561→          ? `CR ${res.changeRequest.number} disetujui — invoice ${res.invoice.number} dibuat`
+   562→          : `CR ${res.changeRequest.number} disetujui`);
+   563→      } else if (decideTarget.decision === "cancel") {
+   564→        toast.info(`CR ${res.changeRequest.number} dibatalkan`);
+   565→      } else {
+   566→        toast.success(`CR ${res.changeRequest.number} ditolak`);
+   567→      }
+   568→      setDecideTarget(null);
+   569→      await refreshDetail();
+   570→    } catch (err) {
+   571→      toast.error(err instanceof Error ? err.message : "Gagal memutuskan change request");
+   572→    } finally {
+   573→      setDeciding(false);
+   574→    }
+   575→  }
+   576→
+   577→  async function saveDetail(e: React.FormEvent) {
+   578→    e?.preventDefault();
+   579→    if (!detail) return;
+   580→    const progress = Math.max(0, Math.min(100, Number(editProgress)));
+   581→    if (!Number.isFinite(progress)) { toast.error("Progress harus angka 0–100"); return; }
+   582→    setSavingDetail(true);
+   583→    try {
+   584→      const res = await api.updateProject({ id: detail.id, status: editStatus, progress });
+   585→      setProjects((prev) => (prev ?? []).map((p) => (p.id === res.project.id ? { ...p, ...res.project } : p)));
+   586→      setDetail((d) => (d ? { ...d, ...res.project, status: editStatus, progress } : d));
+   587→      toast.success(`Project ${res.project.code} diperbarui`);
+   588→    } catch (err) {
+   589→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan project");
+   590→    } finally {
+   591→      setSavingDetail(false);
+   592→    }
+   593→  }
+   594→
+   595→  if (loading && projects === null) return <ProjectsSkeleton />;
+   596→
+   597→  return (
+   598→    <div className="space-y-6">
+   599→      {/* Header */}
+   600→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   601→        <div>
+   602→          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Projects</h1>
+   603→          <p className="text-sm text-zinc-500">Produksi setelah deal berhasil — template workflow per layanan</p>
+   604→        </div>
+   605→        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar project">
+   606→          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   607→        </Button>
+   608→      </div>
+   609→
+   610→      {/* Filter */}
+   611→      <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+   612→        <Select value={statusFilter} onValueChange={setStatusFilter}>
+   613→          <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter status project">
+   614→            <SelectValue placeholder="Status" />
+   615→          </SelectTrigger>
+   616→          <SelectContent>
+   617→            <SelectItem value="all">Semua Status</SelectItem>
+   618→            <SelectItem value="planning">Perencanaan</SelectItem>
+   619→            <SelectItem value="in_progress">Berjalan</SelectItem>
+   620→            <SelectItem value="review">Review</SelectItem>
+   621→            <SelectItem value="completed">Selesai</SelectItem>
+   622→          </SelectContent>
+   623→        </Select>
+   624→        <Select value={brandFilter} onValueChange={setBrandFilter}>
+   625→          <SelectTrigger className="w-full sm:w-[200px]" aria-label="Filter brand project">
+   626→            <SelectValue placeholder="Brand" />
+   627→          </SelectTrigger>
+   628→          <SelectContent>
+   629→            <SelectItem value="all">Semua Brand</SelectItem>
+   630→            {storeBrands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+   631→          </SelectContent>
+   632→        </Select>
+   633→        <div className="flex flex-wrap items-center gap-3 sm:ml-auto">
+   634→          <span className="text-xs text-zinc-500">
+   635→            {stats.total} project · {stats.active} aktif · rata-rata progress {stats.avgProgress}%
+   636→          </span>
+   637→          <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5" role="group" aria-label="Mode tampilan project">
+   638→            <Button
+   639→              type="button"
+   640→              variant="ghost"
+   641→              size="sm"
+   642→              onClick={() => setView("cards")}
+   643→              aria-pressed={view === "cards"}
+   644→              aria-label="Tampilan kartu"
+   645→              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "cards" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+   646→            >
+   647→              <LayoutGrid className="h-3.5 w-3.5" aria-hidden /> Kartu
+   648→            </Button>
+   649→            <Button
+   650→              type="button"
+   651→              variant="ghost"
+   652→              size="sm"
+   653→              onClick={() => setView("timeline")}
+   654→              aria-pressed={view === "timeline"}
+   655→              aria-label="Tampilan timeline"
+   656→              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "timeline" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+   657→            >
+   658→              <ChartGantt className="h-3.5 w-3.5" aria-hidden /> Timeline
+   659→            </Button>
+   660→          </div>
+   661→        </div>
+   662→      </div>
+   663→
+   664→      {error ? (
+   665→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+   666→      ) : null}
+   667→
+   668→      {/* Tampilan kartu / timeline */}
+   669→      {view === "cards" ? (
+   670→        (projects ?? []).length === 0 ? (
+   671→          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+   672→            <FolderKanban className="h-8 w-8 text-zinc-300" aria-hidden />
+   673→            <p className="text-sm text-zinc-400">Belum ada project untuk filter ini.</p>
+   674→          </div>
+   675→        ) : (
+   676→          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   677→            {(projects ?? []).map((p) => (
+   678→              <ProjectCard
+   679→                key={p.id}
+   680→                project={p}
+   681→                onOpen={() => openDetail(p)}
+   682→                onMilestoneClick={(m) => confirmMilestone(p, m)}
+   683→              />
+   684→            ))}
+   685→          </div>
+   686→        )
+   687→      ) : (projects ?? []).length === 0 ? (
+   688→        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+   689→          <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />
+   690→          <p className="text-sm text-zinc-400">Tidak ada project untuk filter ini.</p>
+   691→        </div>
+   692→      ) : (
+   693→        <TimelineView projects={projects ?? []} onOpen={openDetail} />
+   694→      )}
+   695→
+   696→      {/* Sheet detail */}
+   697→      <Sheet open={detail !== null} onOpenChange={(open) => { if (!open) setDetail(null); }}>
+   698→        <SheetContent className="w-full overflow-y-auto crm-scroll sm:max-w-md">
+   699→          {detail ? (
+   700→            <>
+   701→              <SheetHeader>
+   702→                <SheetTitle className="leading-snug">{detail.name}</SheetTitle>
+   703→                <SheetDescription>
+   704→                  <span className="font-mono">{detail.code}</span>
+   705→                  {detail.brand ? ` · ${detail.brand.name}` : ""}
+   706→                  {detail.company?.name ? ` · ${detail.company.name}` : ""}
+   707→                </SheetDescription>
+   708→              </SheetHeader>
+   709→              <div className="mt-4 space-y-5 px-4 pb-8">
+   710→                <div className="flex items-center gap-2">
+   711→                  <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
+   712→                    {statusMeta(detail.status).label}
+   713→                  </Badge>
+   714→                  {detail.serviceCategory ? (
+   715→                    <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-zinc-600">
+   716→                      {detail.serviceCategory}
+   717→                    </Badge>
+   718→                  ) : null}
+   719→                </div>
+   720→
+   721→                <div className="space-y-1.5">
+   722→                  <div className="flex items-center justify-between text-xs text-zinc-500">
+   723→                    <span>Progress</span>
+   724→                    <span className="font-semibold tabular-nums text-zinc-700">{detail.progress}%</span>
+   725→                  </div>
+   726→                  <Progress value={detail.progress} aria-label={`Progress ${detail.progress}%`} />
+   727→                </div>
+   728→
+   729→                <div className="grid grid-cols-2 gap-3 text-sm">
+   730→                  <div>
+   731→                    <p className="text-xs text-zinc-500">Project Manager</p>
+   732→                    <p className="mt-0.5 text-zinc-800">{detail.pmName ?? "-"}</p>
+   733→                  </div>
+   734→                  <div>
+   735→                    <p className="text-xs text-zinc-500">Nilai Kontrak</p>
+   736→                    <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{formatCurrency(detail.contractValue)}</p>
+   737→                    {approvedCrSum > 0 ? (
+   738→                      <p className="mt-0.5 text-[11px] font-medium text-emerald-600">
+   739→                        +{formatCurrency(approvedCrSum)} dari change request
+   740→                      </p>
+   741→                    ) : null}
+   742→                  </div>
+   743→                  <div>
+   744→                    <p className="text-xs text-zinc-500">Mulai</p>
+   745→                    <p className="mt-0.5 text-zinc-800">{formatDate(detail.startDate)}</p>
+   746→                  </div>
+   747→                  <div>
+   748→                    <p className="text-xs text-zinc-500">Deadline</p>
+   749→                    <p className={`mt-0.5 ${dueSoon(detail) ? "font-medium text-rose-600" : "text-zinc-800"}`}>
+   750→                      {formatDate(detail.dueDate)}
+   751→                    </p>
+   752→                  </div>
+   753→                </div>
+   754→
+   755→                {/* Milestones */}
+   756→                <div>
+   757→                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+   758→                    Milestone ({(detail.milestones ?? []).filter((m) => m.status === "done").length}/{(detail.milestones ?? []).length} selesai)
+   759→                  </p>
+   760→                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+   761→                    {(detail.milestones ?? []).map((m) => {
+   762→                      const meta = msMeta(m.status);
+   763→                      const Icon = meta.icon;
+   764→                      return (
+   765→                        <div key={m.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white p-3">
+   766→                          <div className="flex min-w-0 items-center gap-2">
+   767→                            <Icon className={`h-4 w-4 shrink-0 ${m.status === "done" ? "text-emerald-600" : m.status === "in_progress" ? "text-amber-600" : "text-zinc-400"}`} aria-hidden />
+   768→                            <div className="min-w-0">
+   769→                              <p className={`truncate text-sm font-medium ${m.status === "done" ? "text-emerald-700 line-through decoration-emerald-500" : "text-zinc-800"}`}>
+   770→                                {m.name}
+   771→                              </p>
+   772→                              <p className="text-[11px] text-zinc-400">
+   773→                                #{m.order} {m.dueDate ? `· due ${formatDate(m.dueDate)}` : ""}
+   774→                              </p>
+   775→                            </div>
+   776→                          </div>
+   777→                          {m.status !== "done" ? (
+   778→                            <Button
+   779→                              variant="outline"
+   780→                              size="sm"
+   781→                              onClick={() => confirmMilestone(detail, m)}
+   782→                              aria-label={`Tandai milestone ${m.name} selesai`}
+   783→                            >
+   784→                              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Selesaikan
+   785→                            </Button>
+   786→                          ) : (
+   787→                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-100 text-emerald-700">Selesai</Badge>
+   788→                          )}
+   789→                        </div>
+   790→                      );
+   791→                    })}
+   792→                  </div>
+   793→                </div>
+   794→
+   795→                {/* Change Request (Fase 2 — Produksi) */}
+   796→                <div>
+   797→                  <div className="mb-2 flex items-center justify-between gap-2">
+   798→                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+   799→                      <GitPullRequestArrow className="h-3.5 w-3.5" aria-hidden />
+   800→                      Change Request ({detailCrs.length})
+   801→                    </p>
+   802→                    <Button
+   803→                      variant="outline"
+   804→                      size="sm"
+   805→                      onClick={openCrDialog}
+   806→                      aria-label="Ajukan change request baru"
+   807→                    >
+   808→                      <Plus className="h-3.5 w-3.5" aria-hidden /> Ajukan Change Request
+   809→                    </Button>
+   810→                  </div>
+   811→                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+   812→                    {detailCrs.length === 0 ? (
+   813→                      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+   814→                        Belum ada change request untuk project ini.
+   815→                      </div>
+   816→                    ) : (
+   817→                      detailCrs.map((cr) => {
+   818→                        const meta = crMeta(cr.status);
+   819→                        return (
+   820→                          <div key={cr.id} className="rounded-lg border bg-white p-3">
+   821→                            <div className="flex items-center justify-between gap-2">
+   822→                              <span className="font-mono text-[11px] text-zinc-500">{cr.number}</span>
+   823→                              <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>
+   824→                                {meta.label}
+   825→                              </Badge>
+   826→                            </div>
+   827→                            <p className="mt-1.5 text-sm font-semibold text-zinc-900">{cr.title}</p>
+   828→                            <p className="mt-0.5 text-xs text-zinc-500">{cr.description}</p>
+   829→                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+   830→                              <span className="font-semibold tabular-nums text-emerald-700">
+   831→                                +{formatCurrency(cr.additionalCost)}
+   832→                              </span>
+   833→                              <span className="inline-flex items-center gap-1">
+   834→                                <CalendarClock className="h-3.5 w-3.5 text-zinc-500" aria-hidden />
+   835→                                {cr.additionalDays} hari tambahan
+   836→                              </span>
+   837→                              <span>Diajukan oleh {cr.requestedBy}</span>
+   838→                              <span>{timeAgo(cr.createdAt)}</span>
+   839→                            </div>
+   840→                            {cr.status !== "pending" ? (
+   841→                              <div className="mt-2 border-t border-zinc-100 pt-2">
+   842→                                <p className="text-[11px] text-zinc-500">
+   843→                                  Diputuskan oleh {cr.decidedBy ?? "-"}
+   844→                                  {cr.decidedAt ? ` · ${timeAgo(cr.decidedAt)}` : ""}
+   845→                                </p>
+   846→                                {cr.decisionNote ? (
+   847→                                  <p className="mt-0.5 text-[11px] italic text-zinc-500">“{cr.decisionNote}”</p>
+   848→                                ) : null}
+   849→                                {cr.status === "approved" && cr.invoiceId ? (
+   850→                                  <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+   851→                                    <ReceiptText className="h-3 w-3" aria-hidden /> Invoice tambahan diterbitkan
+   852→                                  </span>
+   853→                                ) : null}
+   854→                              </div>
+   855→                            ) : null}
+   856→                            {cr.status === "pending" ? (
+   857→                              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+   858→                                {canDecideCr ? (
+   859→                                  <>
+   860→                                    <Button
+   861→                                      size="sm"
+   862→                                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+   863→                                      onClick={() => openDecide(cr, "approve")}
+   864→                                      aria-label={`Setujui change request ${cr.number}`}
+   865→                                    >
+   866→                                      <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+   867→                                    </Button>
+   868→                                    <Button
+   869→                                      size="sm"
+   870→                                      variant="outline"
+   871→                                      className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   872→                                      onClick={() => openDecide(cr, "reject")}
+   873→                                      aria-label={`Tolak change request ${cr.number}`}
+   874→                                    >
+   875→                                      <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+   876→                                    </Button>
+   877→                                  </>
+   878→                                ) : null}
+   879→                                <Button
+   880→                                  size="sm"
+   881→                                  variant="outline"
+   882→                                  className="border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-800"
+   883→                                  onClick={() => openDecide(cr, "cancel")}
+   884→                                  aria-label={`Batalkan change request ${cr.number}`}
+   885→                                >
+   886→                                  <XCircle className="h-3.5 w-3.5" aria-hidden /> Batalkan
+   887→                                </Button>
+   888→                              </div>
+   889→                            ) : null}
+   890→                          </div>
+   891→                        );
+   892→                      })
+   893→                    )}
+   894→                  </div>
+   895→                </div>
+   896→
+   897→                {/* Update status & progress */}
+   898→                <form onSubmit={saveDetail} className="space-y-3 rounded-xl border bg-zinc-50 p-4">
+   899→                  <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+   900→                    <Factory className="h-3.5 w-3.5" aria-hidden /> Update Produksi
+   901→                  </p>
+   902→                  <div className="grid gap-3 sm:grid-cols-2">
+   903→                    <div className="grid gap-1.5">
+   904→                      <Label htmlFor="proj-status">Status</Label>
+   905→                      <Select value={editStatus} onValueChange={setEditStatus}>
+   906→                        <SelectTrigger id="proj-status"><SelectValue /></SelectTrigger>
+   907→                        <SelectContent>
+   908→                          <SelectItem value="planning">Perencanaan</SelectItem>
+   909→                          <SelectItem value="in_progress">Berjalan</SelectItem>
+   910→                          <SelectItem value="review">Review</SelectItem>
+   911→                          <SelectItem value="completed">Selesai</SelectItem>
+   912→                        </SelectContent>
+   913→                      </Select>
+   914→                    </div>
+   915→                    <div className="grid gap-1.5">
+   916→                      <Label htmlFor="proj-progress">Progress (0–100)</Label>
+   917→                      <Input
+   918→                        id="proj-progress" type="number" min={0} max={100}
+   919→                        value={editProgress}
+   920→                        onChange={(e) => setEditProgress(e.target.value)}
+   921→                      />
+   922→                    </div>
+   923→                  </div>
+   924→                  <SheetFooter className="px-0">
+   925→                    <Button type="submit" disabled={savingDetail} aria-label="Simpan perubahan project">
+   926→                      {savingDetail ? "Menyimpan…" : "Simpan Perubahan"}
+   927→                    </Button>
+   928→                  </SheetFooter>
+   929→                </form>
+   930→              </div>
+   931→            </>
+   932→          ) : null}
+   933→        </SheetContent>
+   934→      </Sheet>
+   935→
+   936→      {/* Dialog pengajuan change request */}
+   937→      <Dialog open={crDialogOpen} onOpenChange={setCrDialogOpen}>
+   938→        <DialogContent className="sm:max-w-md" aria-label="Form pengajuan change request">
+   939→          <DialogHeader>
+   940→            <DialogTitle>Ajukan Change Request</DialogTitle>
+   941→            <DialogDescription>
+   942→              Usulkan perubahan scope untuk {detail?.code ?? "project"}. Setelah klien menyetujui, nilai kontrak &amp;
+   943→              deadline project otomatis diperbarui dan invoice tambahan dibuat.
+   944→            </DialogDescription>
+   945→          </DialogHeader>
+   946→          <form onSubmit={submitCreateCr} className="space-y-3">
+   947→            <div className="grid gap-1.5">
+   948→              <Label htmlFor="cr-title">Judul</Label>
+   949→              <Input
+   950→                id="cr-title"
+   951→                value={crTitle}
+   952→                onChange={(e) => setCrTitle(e.target.value)}
+   953→                placeholder="Contoh: Tambahan halaman landing page"
+   954→                required
+   955→                aria-label="Judul change request"
+   956→              />
+   957→            </div>
+   958→            <div className="grid gap-1.5">
+   959→              <Label htmlFor="cr-desc">Deskripsi perubahan scope</Label>
+   960→              <Textarea
+   961→                id="cr-desc"
+   962→                value={crDesc}
+   963→                onChange={(e) => setCrDesc(e.target.value)}
+   964→                placeholder="Jelaskan perubahan scope yang diminta…"
+   965→                rows={3}
+   966→                required
+   967→                aria-label="Deskripsi perubahan scope"
+   968→              />
+   969→            </div>
+   970→            <div className="grid gap-3 sm:grid-cols-2">
+   971→              <div className="grid gap-1.5">
+   972→                <Label htmlFor="cr-cost">Biaya tambahan (IDR)</Label>
+   973→                <Input
+   974→                  id="cr-cost"
+   975→                  type="number"
+   976→                  min={0}
+   977→                  step={1}
+   978→                  inputMode="numeric"
+   979→                  value={crCost}
+   980→                  onChange={(e) => setCrCost(e.target.value)}
+   981→                  placeholder="0"
+   982→                  aria-label="Biaya tambahan dalam rupiah"
+   983→                />
+   984→              </div>
+   985→              <div className="grid gap-1.5">
+   986→                <Label htmlFor="cr-days">Perpanjangan deadline (hari)</Label>
+   987→                <Input
+   988→                  id="cr-days"
+   989→                  type="number"
+   990→                  min={0}
+   991→                  step={1}
+   992→                  inputMode="numeric"
+   993→                  value={crDays}
+   994→                  onChange={(e) => setCrDays(e.target.value)}
+   995→                  placeholder="0"
+   996→                  aria-label="Perpanjangan deadline dalam hari"
+   997→                />
+   998→              </div>
+   999→            </div>
+  1000→            <p className="text-[11px] text-zinc-500">
+  1001→              Diajukan oleh {user?.name ?? "-"} — menunggu persetujuan Direktur, Super Admin, atau klien.
+  1002→            </p>
+  1003→            <DialogFooter className="gap-2">
+  1004→              <Button
+  1005→                type="button"
+  1006→                variant="outline"
+  1007→                onClick={() => setCrDialogOpen(false)}
+  1008→                disabled={crSaving}
+  1009→                aria-label="Batal ajukan change request"
+  1010→              >
+  1011→                Batal
+  1012→              </Button>
+  1013→              <Button type="submit" disabled={crSaving} aria-label="Kirim pengajuan change request">
+  1014→                {crSaving ? "Mengirim…" : "Ajukan Change Request"}
+  1015→              </Button>
+  1016→            </DialogFooter>
+  1017→          </form>
+  1018→        </DialogContent>
+  1019→      </Dialog>
+  1020→
+  1021→      {/* AlertDialog konfirmasi keputusan change request */}
+  1022→      <AlertDialog
+  1023→        open={decideTarget !== null}
+  1024→        onOpenChange={(open) => { if (!open) setDecideTarget(null); }}
+  1025→      >
+  1026→        <AlertDialogContent>
+  1027→          <AlertDialogHeader>
+  1028→            <AlertDialogTitle>
+  1029→              {decideTarget?.decision === "approve"
+  1030→                ? "Setujui change request?"
+  1031→                : decideTarget?.decision === "cancel"
+  1032→                  ? "Batalkan change request?"
+  1033→                  : "Tolak change request?"}
+  1034→            </AlertDialogTitle>
+  1035→            <AlertDialogDescription>
+  1036→              {decideTarget?.decision === "cancel" ? (
+  1037→                decideTarget
+  1038→                  ? `${decideTarget.cr.number} akan dibatalkan dan tidak diproses lebih lanjut.`
+  1039→                  : ""
+  1040→              ) : (
+  1041→                <>
+  1042→                  {decideTarget
+  1043→                    ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
+  1044→                    : ""}
+  1045→                  {decideTarget?.decision === "approve"
+  1046→                    ? " Nilai kontrak &amp; deadline project akan diperbarui dan invoice tambahan diterbitkan otomatis."
+  1047→                    : " Perubahan scope tidak akan diterapkan."}
+  1048→                </>
+  1049→              )}
+  1050→            </AlertDialogDescription>
+  1051→          </AlertDialogHeader>
+  1052→          <div className="grid gap-1.5">
+  1053→            <Label htmlFor="cr-decision-note">Catatan keputusan (opsional)</Label>
+  1054→            <Textarea
+  1055→              id="cr-decision-note"
+  1056→              value={decideNote}
+  1057→              onChange={(e) => setDecideNote(e.target.value)}
+  1058→              placeholder={
+  1059→                decideTarget?.decision === "approve" ? "Contoh: Disetujui sesuai diskusi dengan klien"
+  1060→                : decideTarget?.decision === "cancel" ? "Contoh: Change request diajukan keliru"
+  1061→                : "Contoh: Scope di luar anggaran tahun ini"
+  1062→              }
+  1063→              rows={3}
+  1064→              aria-label="Catatan keputusan change request"
+  1065→            />
+  1066→          </div>
+  1067→          <AlertDialogFooter>
+  1068→            <AlertDialogCancel disabled={deciding} aria-label="Batal memutuskan change request">Batal</AlertDialogCancel>
+  1069→            <AlertDialogAction
+  1070→              disabled={deciding}
+  1071→              onClick={(e) => { e.preventDefault(); void submitDecision(); }}
+  1072→              className={
+  1073→                decideTarget?.decision === "approve"
+  1074→                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+  1075→                  : decideTarget?.decision === "cancel"
+  1076→                    ? "bg-zinc-900 text-white hover:bg-zinc-700"
+  1077→                    : "bg-rose-600 text-white hover:bg-rose-700"
+  1078→              }
+  1079→              aria-label={`Konfirmasi ${decideTarget?.decision === "approve" ? "setujui" : decideTarget?.decision === "cancel" ? "batalkan" : "tolak"} change request`}
+  1080→            >
+  1081→              {deciding
+  1082→                ? "Memproses…"
+  1083→                : decideTarget?.decision === "approve"
+  1084→                  ? "Ya, Setujui"
+  1085→                  : decideTarget?.decision === "cancel"
+  1086→                    ? "Ya, Batalkan"
+  1087→                    : "Ya, Tolak"}
+  1088→            </AlertDialogAction>
+  1089→          </AlertDialogFooter>
+  1090→        </AlertDialogContent>
+  1091→      </AlertDialog>
+  1092→    </div>
+  1093→  );
+  1094→}
+  1095→

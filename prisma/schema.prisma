@@ -425,3 +425,19 @@ model ApprovalRequest {
   decisionNote  String?
   createdAt     DateTime     @default(now())
 }
+
+// ============ NOTIFIKASI (Fase 3) ============
+// State baca/dismiss per pengguna; isi notifikasi dikomputasi dari data
+// operasional (SLA, approval, CR, task, deadline, invoice) di /api/notifications.
+model NotificationState {
+  id          String    @id @default(cuid())
+  userKey     String // email user (persona demo) — kunci stabilitas per pengguna
+  notifKey    String // kunci notifikasi komputasi, mis. "sla:<id>", "cr:<id>"
+  readAt      DateTime?
+  dismissedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userKey, notifKey])
+  @@index([userKey])
+}

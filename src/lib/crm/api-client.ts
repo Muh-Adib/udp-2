@@ -187,6 +187,15 @@ export const api = {
   escalateLead: (payload: { interactionId: string; note?: string; actorName: string; actorRole: string }) =>
     request<{ task: TaskDTO }>("/api/inbox/escalate", { method: "POST", body: JSON.stringify(payload) }),
 
+  // Notifikasi in-app (Fase 3) — komputasi server + state baca/dismiss per pengguna
+  notifications: (user: string, brandId?: string) => {
+    const sp = new URLSearchParams({ user });
+    if (brandId && brandId !== "all") sp.set("brandId", brandId);
+    return request<{ items: import("@/lib/crm/types").NotificationDTO[]; unread: number }>(`/api/notifications?${sp}`);
+  },
+  markNotifications: (payload: { user: string; action: "read" | "unread" | "dismiss"; keys: string[] }) =>
+    request<{ ok: boolean; updated: number }>("/api/notifications", { method: "POST", body: JSON.stringify(payload) }),
+
   // Audit
   auditLogs: (params?: { limit?: number; entity?: string; action?: string }) => {
     const sp = new URLSearchParams();

@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
+  Download,
   ExternalLink,
   FileUp,
   GitMerge,
@@ -2022,6 +2023,49 @@ function ImportCsvDialog({
   );
 }
 
+// ---------- Ekspor CSV (Task 12-b): kebalikan impor, dari data kontak yang sedang tampil ----------
+
+/** Header persis sesuai kontrak impor (urutan tetap), separator titik-koma. */
+const EXPORT_CSV_HEADERS = [
+  "fullName",
+  "email",
+  "whatsapp",
+  "phone",
+  "company",
+  "position",
+  "country",
+  "city",
+  "consentStatus",
+  "tags",
+] as const;
+
+/** Escape field CSV: kutip ganda + doubling bila mengandung ; " \r \n. */
+function escapeCsvField(value: string): string {
+  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+/** Bangun isi CSV: BOM + CRLF + separator titik-koma (kompatibel dgn parser impor & Excel Indonesia). */
+function buildContactsCsv(contacts: ContactRecord[]): string {
+  const lines: string[] = [EXPORT_CSV_HEADERS.join(";")];
+  for (const c of contacts) {
+    const fields: string[] = [
+      c.fullName ?? "",
+      c.email ?? "",
+      c.whatsapp ?? "",
+      c.phone ?? "",
+      c.company?.name ?? "",
+      c.position ?? "",
+      c.country ?? "",
+      c.city ?? "",
+      c.consentStatus ?? "",
+      parseJsonArray(c.tags).join("; "),
+    ];
+    lines.push(fields.map(escapeCsvField).join(";"));
+  }
+  return "\uFEFF" + lines.join("\r\n");
+}
+
 // ---------- Modul utama ----------
 
 export default function ContactsModule() {
@@ -2161,6 +2205,24 @@ export default function ContactsModule() {
     void refreshAll();
   }, [refreshAll]);
 
+  // Ekspor CSV (Task 12-b): unduh daftar kontak yang sedang tampil (hasil filter pencarian server).
+  const handleExportCsv = useCallback(() => {
+    if (contacts.length === 0) return;
+    const csv = buildContactsCsv(contacts);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const now = new Date();
+    const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    a.href = url;
+    a.download = `kontak-grupcrm-${ymd}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Ekspor CSV selesai — ${contacts.length} kontak diunduh`);
+  }, [contacts]);
+
   async function handleMerge(candidate: MatchCandidateDTO) {
     if (!mergeState) return;
     setMerging(true);
@@ -2269,6 +2331,15 @@ export default function ContactsModule() {
             aria-label="Impor kontak dari file CSV"
           >
             <FileUp className="size-4" /> Impor CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            disabled={contacts.length === 0}
+            aria-label="Ekspor kontak ke file CSV"
+          >
+            <Download className="size-4" /> Ekspor CSV
           </Button>
           {tab === "contacts" ? (
             <Button

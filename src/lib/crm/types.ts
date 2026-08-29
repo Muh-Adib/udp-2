@@ -400,3 +400,29 @@ export interface DashboardData {
   /** Jumlah change request menunggu persetujuan klien (Fase 2 Produksi). */
   pendingChangeRequests?: number;
 }
+
+// ============ NOTIFIKASI (Fase 3) ============
+
+export type NotificationType = "sla" | "approval" | "cr" | "task" | "deadline" | "invoice";
+export type NotificationSeverity = "info" | "warning" | "danger";
+
+/** Notifikasi komputasi: isi dibangun dari data operasional, state baca/dismiss persist di NotificationState. */
+export interface NotificationDTO {
+  /** Kunci unik stabil, mis. "sla:<interactionId>", "cr:<id>", "approval:<id>". */
+  key: string;
+  type: NotificationType;
+  severity: NotificationSeverity;
+  title: string;
+  description: string;
+  /** ModuleKey tujuan saat notifikasi diklik (dashboard/inbox/pipeline/followups/finance/projects). */
+  module: string;
+  brandName?: string | null;
+  brandColor?: string | null;
+  /** Kode/label entitas, mis. "SEG-2026-0007", "CR-2026-0002", "UMS-2026-INV-003". */
+  entityLabel?: string | null;
+  /** Timestamp acuan (ISO) untuk urutan & umur. */
+  at: string;
+  /** Umur dalam jam (dari `at` saat dihitung server). */
+  ageHours: number;
+  read: boolean;
+}

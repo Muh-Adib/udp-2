@@ -28,6 +28,7 @@ import {
   Pencil,
   Phone,
   Plus,
+  Printer,
   ReceiptText,
   Save,
   Send,
@@ -86,7 +87,8 @@ import { api } from "@/lib/crm/api-client";
 import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
-import type { EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
+import type { Brand, EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
+import { QuotationPrintArea } from "@/components/crm/quotation-print";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
@@ -1231,6 +1233,7 @@ function QuotationCard({
   expanded,
   onToggle,
   onEdit,
+  onPrint,
   onAction,
 }: {
   quotation: QuotationDTO;
@@ -1239,6 +1242,7 @@ function QuotationCard({
   expanded: boolean;
   onToggle: () => void;
   onEdit: () => void;
+  onPrint: () => void;
   onAction: (action: QuotationAction) => void;
 }) {
   const items = parseQuotationItems(q.items);
@@ -1277,8 +1281,7 @@ function QuotationCard({
 
       {expanded ? <QuotationDetail quotation={q} items={items} /> : null}
 
-      {q.status === "draft" || q.status === "sent" || q.status === "accepted" ? (
-        <div className="flex flex-wrap gap-2 border-t px-3 py-2">
+      <div className="flex flex-wrap gap-2 border-t px-3 py-2">
           {q.status === "draft" ? (
             <>
               <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800" onClick={() => onAction("send")} disabled={busy}>
@@ -1315,8 +1318,19 @@ function QuotationCard({
               Konversi ke Invoice
             </Button>
           ) : null}
-        </div>
-      ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={`Cetak quotation ${q.number}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPrint();
+            }}
+          >
+            <Printer className="size-4" aria-hidden="true" />
+            Cetak
+          </Button>
+      </div>
     </div>
   );
 }
@@ -1328,6 +1342,7 @@ function QuotationTab({
   defaultCurrency,
   actorName,
   actorRole,
+  onPrint,
   onChanged,
 }: {
   opportunityId: string;
@@ -1336,6 +1351,7 @@ function QuotationTab({
   defaultCurrency: string;
   actorName: string;
   actorRole: string;
+  onPrint: (q: QuotationDTO) => void;
   onChanged: () => void;
 }) {
   const [formOpen, setFormOpen] = useState(false);
@@ -1399,6 +1415,7 @@ function QuotationTab({
               expanded={expandedId === q.id}
               onToggle={() => setExpandedId((v) => (v === q.id ? null : q.id))}
               onEdit={() => openEdit(q)}
+              onPrint={() => onPrint(q)}
               onAction={(a) => void runAction(q, a)}
             />
           ))}
@@ -1467,6 +1484,9 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   const [crossValue, setCrossValue] = useState("");
   const [crossSaving, setCrossSaving] = useState(false);
 
+  // Cetak quotation dari drawer (Task 12-b): target quotation + brand utk QuotationPrintArea.
+  const [printTarget, setPrintTarget] = useState<QuotationDTO | null>(null);
+
   // Sinkron saat parent mengganti opportunity
   useEffect(() => {
     setActiveId(opportunityId);
@@ -1490,6 +1510,24 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Cetak quotation: render #print-area lalu panggil window.print, bersihkan setelah print selesai
+  // (pola finance-module). Guard `open` agar tidak mencetak saat sheet ditutup.
+  useEffect(() => {
+    if (!printTarget || !open) return;
+    const timer = setTimeout(() => window.print(), 100);
+    const after = () => setPrintTarget(null);
+    window.addEventListener("afterprint", after);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("afterprint", after);
+    };
+  }, [printTarget, open]);
+
+  // Bersihkan target cetak saat drawer ditutup.
+  useEffect(() => {
+    if (!open && printTarget) setPrintTarget(null);
+  }, [open, printTarget]);
 
   // Reset state turunan ketika opportunity berubah / data baru masuk
   useEffect(() => {
@@ -1768,8 +1806,15 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
 
   // ---------- Render ----------
 
+  // Brand utk kop quotation yang dicetak (detail API tidak include brand di quotations — fallback null).
+  const printBrand: Brand | null = printTarget
+    ? printTarget.brand ?? brands.find((b) => b.id === printTarget.brandId) ?? null
+    : null;
+
   return (
     <>
+      {/* Area cetak quotation (hanya tampil saat window.print — lihat globals.css) */}
+      {printTarget ? <QuotationPrintArea quotation={printTarget} brand={printBrand} /> : null}
       <Sheet open={open && !!activeId} onOpenChange={onOpenChange}>
         <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl">
           {loading && !data ? (
@@ -2055,6 +2100,7 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       defaultCurrency={data.currency}
                       actorName={actorMeta.actorName}
                       actorRole={actorMeta.actorRole}
+                      onPrint={setPrintTarget}
                       onChanged={handleQuotationChanged}
                     />
                   </TabsContent>
