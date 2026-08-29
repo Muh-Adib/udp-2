@@ -1,0 +1,1060 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+     4→import {
+     5→  AlarmClockOff, AlertTriangle, Check, CheckCircle2, Clock3, Factory, GitPullRequestArrow, Globe, Handshake, Minus, ReceiptText,
+     6→  RefreshCw, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
+     7→} from "lucide-react";
+     8→import {
+     9→  Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
+    10→} from "recharts";
+    11→import { toast } from "sonner";
+    12→
+    13→import { Badge } from "@/components/ui/badge";
+    14→import { Button } from "@/components/ui/button";
+    15→import {
+    16→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    17→} from "@/components/ui/dialog";
+    18→import { Skeleton } from "@/components/ui/skeleton";
+    19→import {
+    20→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    21→} from "@/components/ui/table";
+    22→import { Textarea } from "@/components/ui/textarea";
+    23→import { api } from "@/lib/crm/api-client";
+    24→import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
+    25→import { canAccess, useCrmStore } from "@/lib/crm/store";
+    26→import type { ApprovalRequestDTO, DashboardData } from "@/lib/crm/types";
+    27→import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
+    28→
+    29→// ============ Tipe lokal ============
+    30→
+    31→type KpiTrendKey =
+    32→  | "pipelineValue" | "weightedPipeline" | "winRate"
+    33→  | "wonValue" | "avgResponseHours" | "outstandingInvoices";
+    34→type KpiTrendMap = Partial<Record<KpiTrendKey, number | null>>;
+    35→
+    36→/** DashboardData + field produksi/risko (sudah dikirim API, belum ada di tipe bersama). */
+    37→interface DashboardFullData extends DashboardData {
+    38→  projectsAtRisk: number;
+    39→  productionCapacity: number;
+    40→}
+    41→
+    42→/** State dialog konfirmasi keputusan approval (Direktur). */
+    43→interface ApprovalConfirmState {
+    44→  approval: ApprovalRequestDTO;
+    45→  decision: "approve" | "reject";
+    46→}
+    47→
+    48→const APPROVAL_ENTITY_LABEL: Record<string, string> = {
+    49→  estimation: "Estimasi",
+    50→  discount: "Diskon",
+    51→  budget: "Budget",
+    52→};
+    53→
+    54→function approvalEntityLabel(type: string): string {
+    55→  return APPROVAL_ENTITY_LABEL[type] ?? type;
+    56→}
+    57→
+    58→/** Normalisasi defensif field produksi/risko tanpa mengubah tipe bersama milik main agent. */
+    59→function normalizeDashboard(res: DashboardData): DashboardFullData {
+    60→  const raw = res as Partial<DashboardFullData>;
+    61→  return {
+    62→    ...res,
+    63→    projectsAtRisk: typeof raw.projectsAtRisk === "number" ? raw.projectsAtRisk : 0,
+    64→    productionCapacity: typeof raw.productionCapacity === "number" ? raw.productionCapacity : 0,
+    65→  };
+    66→}
+    67→
+    68→interface KpiDef {
+    69→  key: KpiTrendKey;
+    70→  label: string;
+    71→  value: string;
+    72→  icon: LucideIcon;
+    73→  hint: string;
+    74→  accent: boolean;
+    75→  goodWhen: "up" | "down";
+    76→  badge?: ReactNode;
+    77→}
+    78→
+    79→const TOOLTIP_STYLE: CSSProperties = {
+    80→  borderRadius: 10,
+    81→  border: "1px solid #e4e4e7",
+    82→  background: "#ffffff",
+    83→  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+    84→  fontSize: 12,
+    85→  color: "#18181b",
+    86→};
+    87→
+    88→const TREND_KEYS: KpiTrendKey[] = [
+    89→  "pipelineValue", "weightedPipeline", "winRate", "wonValue", "avgResponseHours", "outstandingInvoices",
+    90→];
+    91→
+    92→const ACTION_BADGE_CLASS: Record<string, string> = {
+    93→  create: "bg-emerald-100 text-emerald-700",
+    94→  update: "bg-amber-100 text-amber-700",
+    95→  delete: "bg-rose-100 text-rose-700",
+    96→  convert: "bg-violet-100 text-violet-700",
+    97→  stage_change: "bg-cyan-100 text-cyan-700",
+    98→  payment: "bg-emerald-100 text-emerald-700",
+    99→  login: "bg-zinc-100 text-zinc-600",
+   100→};
+   101→
+   102→// ============ Helper ============
+   103→
+   104→function deltaPct(cur: number, prev?: number): number | null {
+   105→  if (prev === undefined || prev === 0) return null;
+   106→  const d = ((cur - prev) / prev) * 100;
+   107→  return Number.isFinite(d) ? d : null;
+   108→}
+   109→
+   110→function computeTrends(prev: DashboardData["kpi"] | null, cur: DashboardData["kpi"]): KpiTrendMap {
+   111→  const out: KpiTrendMap = {};
+   112→  for (const key of TREND_KEYS) {
+   113→    out[key] = deltaPct(cur[key], prev?.[key]);
+   114→  }
+   115→  return out;
+   116→}
+   117→
+   118→function trendNode(delta: number | null, goodWhen: "up" | "down"): ReactNode {
+   119→  if (delta === null) return null;
+   120→  if (Math.abs(delta) < 0.1) {
+   121→    return (
+   122→      <span className="inline-flex items-center gap-1 text-zinc-400">
+   123→        <Minus className="h-3 w-3" aria-hidden /> stabil
+   124→      </span>
+   125→    );
+   126→  }
+   127→  const up = delta > 0;
+   128→  const good = up ? goodWhen === "up" : goodWhen === "down";
+   129→  const Icon = up ? TrendingUp : TrendingDown;
+   130→  return (
+   131→    <span className={`inline-flex items-center gap-1 font-medium ${good ? "text-emerald-600" : "text-rose-600"}`}>
+   132→      <Icon className="h-3 w-3 shrink-0" aria-hidden />
+   133→      {up ? "+" : ""}{delta.toFixed(1)}%
+   134→    </span>
+   135→  );
+   136→}
+   137→
+   138→function slaBadgeClass(hours: number): string {
+   139→  if (hours <= 8) return "bg-emerald-100 text-emerald-700";
+   140→  if (hours > 24) return "bg-rose-100 text-rose-700";
+   141→  return "bg-amber-100 text-amber-700";
+   142→}
+   143→
+   144→function formatHours(h: number): string {
+   145→  if (h <= 0) return "< 1 jam";
+   146→  if (h < 1) return `${Math.round(h * 60)} mnt`;
+   147→  return `${Math.round(h)} jam`;
+   148→}
+   149→
+   150→function channelLabel(key: string): string {
+   151→  const found = CHANNELS.find((c) => c.key === key);
+   152→  if (found) return found.label;
+   153→  return key
+   154→    .split("_")
+   155→    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+   156→    .join(" ");
+   157→}
+   158→
+   159→function actionBadgeClass(action: string): string {
+   160→  return ACTION_BADGE_CLASS[action] ?? "bg-zinc-100 text-zinc-600";
+   161→}
+   162→
+   163→// ============ Sub-komponen ============
+   164→
+   165→function KpiCard({
+   166→  label, value, icon: Icon, hint, trend, badge, accentColor, tone = "default",
+   167→}: {
+   168→  label: string;
+   169→  value: string;
+   170→  icon: LucideIcon;
+   171→  hint: string;
+   172→  trend?: ReactNode;
+   173→  badge?: ReactNode;
+   174→  accentColor?: string;
+   175→  /** Fase 3 — tone semantik: danger (rose/red), ok (emerald), default (zinc). */
+   176→  tone?: "default" | "danger" | "ok";
+   177→}) {
+   178→  const valueClass = tone === "danger" ? "text-red-600" : tone === "ok" ? "text-emerald-600" : "text-zinc-900";
+   179→  const chipClass = tone === "danger" ? "bg-rose-100 text-rose-600" : tone === "ok" ? "bg-emerald-100 text-emerald-600" : "bg-zinc-100 text-zinc-600";
+   180→  return (
+   181→    <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
+   182→      {accentColor ? (
+   183→        <span aria-hidden className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accentColor }} />
+   184→      ) : null}
+   185→      <div className="flex items-start justify-between gap-2">
+   186→        <div className="min-w-0">
+   187→          <p className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+   188→          <p className={`mt-1 text-2xl font-bold tabular-nums ${valueClass}`}>{value}</p>
+   189→        </div>
+   190→        <span className={`shrink-0 rounded-lg p-2 ${chipClass}`}>
+   191→          <Icon className="h-4 w-4" aria-hidden />
+   192→        </span>
+   193→      </div>
+   194→      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+   195→        {trend}
+   196→        {badge}
+   197→        <span className="truncate">{hint}</span>
+   198→      </div>
+   199→    </div>
+   200→  );
+   201→}
+   202→
+   203→function SectionCard({
+   204→  title, subtitle, overline, children, ariaLabel, className = "",
+   205→}: {
+   206→  title: string;
+   207→  subtitle?: string;
+   208→  overline?: string;
+   209→  children: ReactNode;
+   210→  ariaLabel: string;
+   211→  className?: string;
+   212→}) {
+   213→  return (
+   214→    <section aria-label={ariaLabel} className={`rounded-xl border bg-white p-4 shadow-sm sm:p-6 ${className}`}>
+   215→      <div className="mb-4">
+   216→        {overline ? (
+   217→          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{overline}</p>
+   218→        ) : null}
+   219→        <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
+   220→        {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+   221→      </div>
+   222→      {children}
+   223→    </section>
+   224→  );
+   225→}
+   226→
+   227→function EmptyState({ text }: { text: string }) {
+   228→  return (
+   229→    <div className="flex items-center gap-2 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-700">
+   230→      <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+   231→      {text}
+   232→    </div>
+   233→  );
+   234→}
+   235→
+   236→/** Baris pengajuan approval: kartu kecil dengan aksi Setujui/Tolak. */
+   237→function ApprovalRow({
+   238→  item, priority, busy, onDecide,
+   239→}: {
+   240→  item: ApprovalRequestDTO;
+   241→  priority: boolean;
+   242→  busy: boolean;
+   243→  onDecide: (approval: ApprovalRequestDTO, decision: "approve" | "reject") => void;
+   244→}) {
+   245→  const brand = item.opportunity?.brand ?? null;
+   246→  const label = item.entityLabel ?? item.entityId;
+   247→  return (
+   248→    <li className={`rounded-xl border bg-white p-3 shadow-sm transition-all hover:border-zinc-300 sm:p-4 ${priority ? "ring-1 ring-amber-300" : ""}`}>
+   249→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   250→        <div className="min-w-0 flex-1 space-y-1.5">
+   251→          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+   252→            <span className="truncate text-sm font-semibold text-zinc-900" title={label}>{label}</span>
+   253→            {priority ? (
+   254→              <Badge className="border-transparent bg-amber-100 text-amber-700">Prioritas</Badge>
+   255→            ) : null}
+   256→            {item.discountPct ? (
+   257→              <Badge className="border-transparent bg-amber-100 text-amber-700">Diskon {item.discountPct}%</Badge>
+   258→            ) : null}
+   259→            <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-zinc-500">
+   260→              {approvalEntityLabel(item.entityType)}
+   261→            </Badge>
+   262→          </div>
+   263→          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+   264→            <span
+   265→              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-bold text-zinc-700"
+   266→              title={item.requestedBy}
+   267→              aria-hidden
+   268→            >
+   269→              {initials(item.requestedBy)}
+   270→            </span>
+   271→            <span className="font-medium text-zinc-700">{item.requestedBy}</span>
+   272→            <span aria-hidden>·</span>
+   273→            <span>diajukan {timeAgo(item.createdAt)}</span>
+   274→            {brand ? (
+   275→              <span className="inline-flex items-center gap-1 text-zinc-600">
+   276→                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
+   277→                {brand.name}
+   278→              </span>
+   279→            ) : null}
+   280→          </div>
+   281→          {item.note ? (
+   282→            <p className="line-clamp-1 text-xs italic text-zinc-500" title={item.note}>{item.note}</p>
+   283→          ) : null}
+   284→        </div>
+   285→        <div className="flex shrink-0 items-center justify-between gap-2 sm:flex-col sm:items-end">
+   286→          <span className="text-sm font-bold tabular-nums text-zinc-900">
+   287→            {item.amount != null ? formatCurrency(item.amount) : "-"}
+   288→          </span>
+   289→          <div className="flex items-center gap-2">
+   290→            <Button
+   291→              size="sm"
+   292→              className="h-8 bg-emerald-600 text-white hover:bg-emerald-700"
+   293→              disabled={busy}
+   294→              onClick={() => onDecide(item, "approve")}
+   295→              aria-label={`Setujui pengajuan ${label}`}
+   296→            >
+   297→              <Check className="h-3.5 w-3.5" aria-hidden />
+   298→              Setujui
+   299→            </Button>
+   300→            <Button
+   301→              size="sm"
+   302→              variant="outline"
+   303→              className="h-8 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   304→              disabled={busy}
+   305→              onClick={() => onDecide(item, "reject")}
+   306→              aria-label={`Tolak pengajuan ${label}`}
+   307→            >
+   308→              <X className="h-3.5 w-3.5" aria-hidden />
+   309→              Tolak
+   310→            </Button>
+   311→          </div>
+   312→        </div>
+   313→      </div>
+   314→    </li>
+   315→  );
+   316→}
+   317→
+   318→function DashboardSkeleton() {
+   319→  return (
+   320→    <div className="space-y-6" aria-hidden>
+   321→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   322→        <div className="space-y-2">
+   323→          <Skeleton className="h-7 w-56" />
+   324→          <Skeleton className="h-4 w-72" />
+   325→        </div>
+   326→        <Skeleton className="h-9 w-36 rounded-lg" />
+   327→      </div>
+   328→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   329→        {Array.from({ length: 6 }).map((_, i) => (
+   330→          <Skeleton key={i} className="h-28 rounded-xl" />
+   331→        ))}
+   332→      </div>
+   333→      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+   334→        <Skeleton className="h-[480px] rounded-xl" />
+   335→        <div className="space-y-4">
+   336→          <Skeleton className="h-64 rounded-xl" />
+   337→          <Skeleton className="h-52 rounded-xl" />
+   338→        </div>
+   339→      </div>
+   340→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   341→        {Array.from({ length: 4 }).map((_, i) => (
+   342→          <Skeleton key={i} className="h-36 rounded-xl" />
+   343→        ))}
+   344→      </div>
+   345→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   346→        <Skeleton className="h-64 rounded-xl" />
+   347→        <Skeleton className="h-64 rounded-xl" />
+   348→      </div>
+   349→    </div>
+   350→  );
+   351→}
+   352→
+   353→// ============ Module utama ============
+   354→
+   355→export default function DashboardModule() {
+   356→  const brands = useCrmStore((s) => s.brands);
+   357→  const user = useCrmStore((s) => s.user);
+   358→  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+   359→
+   360→  const [data, setData] = useState<DashboardFullData | null>(null);
+   361→  const [loading, setLoading] = useState(true);
+   362→  const [fetchTime, setFetchTime] = useState<Date | null>(null);
+   363→  const [trends, setTrends] = useState<KpiTrendMap>({});
+   364→  const prevKpiRef = useRef<DashboardData["kpi"] | null>(null);
+   365→  const [confirmState, setConfirmState] = useState<ApprovalConfirmState | null>(null);
+   366→  const [decisionNote, setDecisionNote] = useState("");
+   367→  const [deciding, setDeciding] = useState(false);
+   368→
+   369→  const load = useCallback(async (silent: boolean) => {
+   370→    if (!silent) setLoading(true);
+   371→    try {
+   372→      const res = normalizeDashboard(await api.dashboard());
+   373→      setTrends(computeTrends(prevKpiRef.current, res.kpi));
+   374→      prevKpiRef.current = res.kpi;
+   375→      setData(res);
+   376→      setFetchTime(new Date());
+   377→    } catch (err) {
+   378→      toast.error("Gagal memuat data Command Center", {
+   379→        description: err instanceof Error ? err.message : "Silakan coba lagi.",
+   380→      });
+   381→    } finally {
+   382→      setLoading(false);
+   383→    }
+   384→  }, []);
+   385→
+   386→  useEffect(() => {
+   387→    void load(false);
+   388→    const id = setInterval(() => void load(true), 60_000);
+   389→    return () => clearInterval(id);
+   390→  }, [load]);
+   391→
+   392→  const openConfirm = useCallback((approval: ApprovalRequestDTO, decision: "approve" | "reject") => {
+   393→    setDecisionNote("");
+   394→    setConfirmState({ approval, decision });
+   395→  }, []);
+   396→
+   397→  const closeConfirm = useCallback(() => {
+   398→    if (deciding) return;
+   399→    setConfirmState(null);
+   400→    setDecisionNote("");
+   401→  }, [deciding]);
+   402→
+   403→  const submitDecision = useCallback(async () => {
+   404→    if (!confirmState || !user || deciding) return;
+   405→    const isReject = confirmState.decision === "reject";
+   406→    const note = decisionNote.trim();
+   407→    if (isReject && !note) {
+   408→      toast.error("Catatan keputusan wajib diisi saat menolak pengajuan.");
+   409→      return;
+   410→    }
+   411→    setDeciding(true);
+   412→    try {
+   413→      await api.decideApproval({
+   414→        id: confirmState.approval.id,
+   415→        decision: confirmState.decision,
+   416→        decisionNote: note || undefined,
+   417→        actorName: user.name,
+   418→        actorRole: user.role,
+   419→      });
+   420→      toast.success(isReject ? "Pengajuan ditolak" : "Pengajuan disetujui", {
+   421→        description: `${confirmState.approval.entityLabel ?? "Pengajuan"} — keputusan tercatat sebagai ${user.name}.`,
+   422→      });
+   423→      setConfirmState(null);
+   424→      setDecisionNote("");
+   425→      await load(true);
+   426→    } catch (err) {
+   427→      const msg = err instanceof Error ? err.message : "Silakan coba lagi.";
+   428→      if (/403|direktur|akses|izin/i.test(msg)) {
+   429→        toast.error("Akses ditolak", { description: msg });
+   430→      } else {
+   431→        toast.error("Gagal memutus pengajuan", { description: msg });
+   432→      }
+   433→    } finally {
+   434→      setDeciding(false);
+   435→    }
+   436→  }, [confirmState, deciding, decisionNote, load, user]);
+   437→
+   438→  if (!data) {
+   439→    if (loading) return <DashboardSkeleton />;
+   440→    return (
+   441→      <section aria-label="Error memuat data" className="rounded-xl border bg-white p-10 text-center shadow-sm">
+   442→        <AlertTriangle className="mx-auto h-8 w-8 text-rose-500" aria-hidden />
+   443→        <p className="mt-3 text-sm font-medium text-zinc-900">Gagal memuat data Command Center</p>
+   444→        <p className="mt-1 text-xs text-zinc-500">Periksa koneksi server, lalu coba muat ulang.</p>
+   445→        <Button size="sm" className="mt-4" onClick={() => void load(false)}>
+   446→          <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+   447→        </Button>
+   448→      </section>
+   449→    );
+   450→  }
+   451→
+   452→  const kpi = data.kpi;
+   453→  const canDecide = user?.role === "director" || user?.role === "super_admin";
+   454→  const pendingApprovals = data.pendingApprovals ?? [];
+   455→  // Fase 3 — SLA monitoring
+   456→  const slaBreaches = data.slaBreaches ?? 0;
+   457→  // Fase 2 Produksi — CR menunggu persetujuan klien
+   458→  const pendingCRs = data.pendingChangeRequests ?? 0;
+   459→  const canOpenInbox = canAccess("inbox", user?.role);
+   460→  const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
+   461→  const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
+   462→  const funnelMap = new Map(data.funnel.map((f) => [f.stage, f] as const));
+   463→  const funnelMax = Math.max(...data.funnel.map((f) => f.count), 1);
+   464→  const wonCount = data.funnel.find((f) => f.stage === "won")?.count ?? 0;
+   465→
+   466→  const bestMarketerIdx = data.marketingPerf.reduce((best, m, i, arr) => {
+   467→    const cur = arr[best];
+   468→    if (m.won > cur.won || (m.won === cur.won && m.leads > cur.leads)) return i;
+   469→    return best;
+   470→  }, 0);
+   471→
+   472→  const lostMax = Math.max(...data.lostReasons.map((r) => r.count), 1);
+   473→
+   474→  const kpiCards: KpiDef[] = [
+   475→    {
+   476→      key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue),
+   477→      icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up",
+   478→    },
+   479→    {
+   480→      key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline),
+   481→      icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up",
+   482→    },
+   483→    {
+   484→      key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`,
+   485→      icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, accent: true, goodWhen: "up",
+   486→    },
+   487→    {
+   488→      key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue),
+   489→      icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up",
+   490→    },
+   491→    {
+   492→      key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours),
+   493→      icon: Timer, hint: "rata-rata waktu respons lead", accent: false, goodWhen: "down",
+   494→      badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge>,
+   495→    },
+   496→    {
+   497→      key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices),
+   498→      icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down",
+   499→    },
+   500→  ];
+   501→
+   502→  return (
+   503→    <div className="space-y-6">
+   504→      {/* ============ Header ============ */}
+   505→      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   506→        <div>
+   507→          <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">Command Center</h1>
+   508→          <p className="mt-0.5 text-sm text-zinc-500">Ringkasan eksekutif lintas brand</p>
+   509→        </div>
+   510→        <div className="flex items-center gap-2">
+   511→          {user ? (
+   512→            <div className="mr-1 hidden items-center gap-2 md:flex" title={user.email}>
+   513→              <span
+   514→                className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
+   515→                style={{ backgroundColor: user.avatarColor }}
+   516→                aria-hidden
+   517→              >
+   518→                {initials(user.name)}
+   519→              </span>
+   520→              <div className="text-xs leading-tight">
+   521→                <div className="font-semibold text-zinc-900">{user.name}</div>
+   522→                <div className="text-zinc-500">{ROLES.find((r) => r.key === user.role)?.label ?? user.role}</div>
+   523→              </div>
+   524→            </div>
+   525→          ) : null}
+   526→          <Badge variant="outline" className="gap-1.5 bg-white">
+   527→            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+   528→            {activeBrandCount} brand aktif
+   529→          </Badge>
+   530→          <Button
+   531→            variant="outline"
+   532→            size="sm"
+   533→            onClick={() => void load(false)}
+   534→            disabled={loading}
+   535→            aria-label="Muat ulang data dashboard"
+   536→            title="Muat ulang data"
+   537→          >
+   538→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden />
+   539→            <span className="hidden sm:inline">Muat ulang</span>
+   540→          </Button>
+   541→        </div>
+   542→      </header>
+   543→
+   544→      {/* ============ Alert strip SLA (Fase 3) ============ */}
+   545→      {slaBreaches > 0 ? (
+   546→        <div
+   547→          role="alert"
+   548→          aria-label="Peringatan SLA terlambat"
+   549→          className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+   550→        >
+   551→          <div className="flex items-start gap-3">
+   552→            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-rose-100" aria-hidden>
+   553→              <ShieldAlert className="h-4.5 w-4.5 text-rose-600" />
+   554→            </span>
+   555→            <div className="min-w-0">
+   556→              <p className="text-sm font-semibold text-rose-700">
+   557→                {slaBreaches} lead melewati SLA respons
+   558→              </p>
+   559→              <p className="text-xs text-rose-600">Prioritaskan follow-up hari ini sebelum klien hilang.</p>
+   560→            </div>
+   561→          </div>
+   562→          {canOpenInbox ? (
+   563→            <Button
+   564→              size="sm"
+   565→              variant="outline"
+   566→              className="shrink-0 border-rose-300 bg-white text-rose-600 hover:bg-rose-100 hover:text-rose-700"
+   567→              onClick={() => setActiveModule("inbox")}
+   568→              aria-label="Buka Lead Inbox"
+   569→            >
+   570→              Buka Lead Inbox
+   571→            </Button>
+   572→          ) : null}
+   573→        </div>
+   574→      ) : null}
+   575→
+   576→      {/* ============ KPI ============ */}
+   577→      <section aria-label="KPI utama" className="space-y-2">
+   578→        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Ringkasan Kinerja</h2>
+   579→        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   580→          {kpiCards.map((c) => (
+   581→            <KpiCard
+   582→              key={c.key}
+   583→              label={c.label}
+   584→              value={c.value}
+   585→              icon={c.icon}
+   586→              hint={c.hint}
+   587→              badge={c.badge}
+   588→              trend={trendNode(trends[c.key] ?? null, c.goodWhen)}
+   589→              accentColor={c.accent ? firstBrandColor : undefined}
+   590→            />
+   591→          ))}
+   592→          <KpiCard
+   593→            label="SLA Terlambat"
+   594→            value={String(slaBreaches)}
+   595→            icon={AlarmClockOff}
+   596→            hint={slaBreaches > 0 ? "lead melewati SLA respons" : "Semua lead dalam SLA"}
+   597→            tone={slaBreaches > 0 ? "danger" : "ok"}
+   598→          />
+   599→          <KpiCard
+   600→            label="CR Menunggu Klien"
+   601→            value={String(pendingCRs)}
+   602→            icon={GitPullRequestArrow}
+   603→            hint={pendingCRs > 0 ? "change request menunggu persetujuan klien" : "Tidak ada change request pending"}
+   604→            tone={pendingCRs > 0 ? "danger" : "ok"}
+   605→          />
+   606→        </div>
+   607→      </section>
+   608→
+   609→      {/* ============ Antrean Approval (Direktur & Super Admin) ============ */}
+   610→      {canDecide ? (
+   611→        <section aria-label="Antrean approval" className="space-y-2">
+   612→          <div className="flex flex-wrap items-end justify-between gap-2">
+   613→            <div>
+   614→              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Persetujuan</p>
+   615→              <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+   616→                <Stamp className="h-4 w-4 text-zinc-500" aria-hidden />
+   617→                Antrean Approval
+   618→              </h2>
+   619→            </div>
+   620→            {pendingApprovals.length > 0 ? (
+   621→              <Badge className="border-transparent bg-amber-100 text-amber-700 tabular-nums">
+   622→                {pendingApprovals.length} pending
+   623→              </Badge>
+   624→            ) : (
+   625→              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 tabular-nums">
+   626→                0 pending
+   627→              </Badge>
+   628→            )}
+   629→          </div>
+   630→          {pendingApprovals.length === 0 ? (
+   631→            <EmptyState text="Tidak ada pengajuan menunggu persetujuan" />
+   632→          ) : (
+   633→            <ul className="space-y-2">
+   634→              {pendingApprovals.map((a, i) => (
+   635→                <ApprovalRow key={a.id} item={a} priority={i === 0} busy={deciding} onDecide={openConfirm} />
+   636→              ))}
+   637→            </ul>
+   638→          )}
+   639→        </section>
+   640→      ) : null}
+   641→
+   642→      {/* ============ Funnel + Charts ============ */}
+   643→      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+   644→        <SectionCard
+   645→          ariaLabel="Funnel konversi"
+   646→          title="Funnel Konversi"
+   647→          subtitle="Jumlah opportunity per tahap pipeline"
+   648→          overline="Analisis Pipeline"
+   649→        >
+   650→          <div className="space-y-2">
+   651→            {PIPELINE_STAGES.map((stage) => {
+   652→              const entry = funnelMap.get(stage.key) ?? { stage: stage.key, count: 0, value: 0 };
+   653→              const pct = Math.round((entry.count / funnelMax) * 100);
+   654→              return (
+   655→                <div key={stage.key} className="flex items-center gap-3">
+   656→                  <div className="w-28 shrink-0 truncate text-xs text-zinc-600 sm:w-36" title={stageLabel(stage.key)}>
+   657→                    {stageLabel(stage.key)}
+   658→                  </div>
+   659→                  <div className="relative h-5 flex-1 overflow-hidden rounded-md bg-zinc-100">
+   660→                    <div
+   661→                      className="h-full rounded-md transition-all duration-500"
+   662→                      style={{ width: `${pct}%`, backgroundColor: stageColor(stage.key) }}
+   663→                      role="presentation"
+   664→                    />
+   665→                  </div>
+   666→                  <div className="w-20 shrink-0 text-right text-xs tabular-nums sm:w-28">
+   667→                    <div className="font-semibold text-zinc-900">{entry.count} deal</div>
+   668→                    <div className="text-zinc-500">{formatCurrency(entry.value)}</div>
+   669→                  </div>
+   670→                </div>
+   671→              );
+   672→            })}
+   673→          </div>
+   674→        </SectionCard>
+   675→
+   676→        <div className="flex flex-col gap-4">
+   677→          <SectionCard
+   678→            ariaLabel="Forecast weighted"
+   679→            title="Forecast Weighted 30/60/90"
+   680→            subtitle="Nilai pipeline tertimbang per bucket waktu"
+   681→            overline="Proyeksi Pendapatan"
+   682→            className="shrink-0"
+   683→          >
+   684→            <ResponsiveContainer width="100%" height={220}>
+   685→              <BarChart data={data.forecast} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+   686→                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+   687→                <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
+   688→                <YAxis
+   689→                  width={72}
+   690→                  tick={{ fontSize: 11, fill: "#71717a" }}
+   691→                  axisLine={false}
+   692→                  tickLine={false}
+   693→                  tickFormatter={(value: number) => formatCurrency(value)}
+   694→                />
+   695→                <Tooltip
+   696→                  cursor={{ fill: "rgba(5, 150, 105, 0.06)" }}
+   697→                  formatter={(value) => [formatCurrency(Number(value)), "Forecast"]}
+   698→                  contentStyle={TOOLTIP_STYLE}
+   699→                />
+   700→                <Bar dataKey="value" name="Forecast" fill="#059669" radius={[6, 6, 0, 0]} maxBarSize={56} />
+   701→              </BarChart>
+   702→            </ResponsiveContainer>
+   703→          </SectionCard>
+   704→
+   705→          <SectionCard
+   706→            ariaLabel="Tren pipeline"
+   707→            title="Tren Pipeline 6 Minggu"
+   708→            subtitle="Lead baru masuk vs deal won per minggu"
+   709→            overline="Tren Mingguan"
+   710→          >
+   711→            <ResponsiveContainer width="100%" height={200}>
+   712→              <AreaChart data={data.pipelineTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+   713→                <defs>
+   714→                  <linearGradient id="gradCreated" x1="0" y1="0" x2="0" y2="1">
+   715→                    <stop offset="5%" stopColor="#ea580c" stopOpacity={0.25} />
+   716→                    <stop offset="95%" stopColor="#ea580c" stopOpacity={0} />
+   717→                  </linearGradient>
+   718→                  <linearGradient id="gradWon" x1="0" y1="0" x2="0" y2="1">
+   719→                    <stop offset="5%" stopColor="#059669" stopOpacity={0.25} />
+   720→                    <stop offset="95%" stopColor="#059669" stopOpacity={0} />
+   721→                  </linearGradient>
+   722→                </defs>
+   723→                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+   724→                <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
+   725→                <YAxis
+   726→                  allowDecimals={false}
+   727→                  width={36}
+   728→                  tick={{ fontSize: 11, fill: "#71717a" }}
+   729→                  axisLine={false}
+   730→                  tickLine={false}
+   731→                />
+   732→                <Tooltip contentStyle={TOOLTIP_STYLE} />
+   733→                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: "#52525b" }} />
+   734→                <Area
+   735→                  type="monotone" dataKey="created" name="Lead dibuat"
+   736→                  stroke="#ea580c" strokeWidth={2} fill="url(#gradCreated)"
+   737→                />
+   738→                <Area
+   739→                  type="monotone" dataKey="won" name="Deal won"
+   740→                  stroke="#059669" strokeWidth={2} fill="url(#gradWon)"
+   741→                />
+   742→              </AreaChart>
+   743→            </ResponsiveContainer>
+   744→          </SectionCard>
+   745→        </div>
+   746→      </div>
+   747→
+   748→      {/* ============ Pipeline per Brand ============ */}
+   749→      <section aria-label="Pipeline per brand" className="space-y-3">
+   750→        <div>
+   751→          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Perbandingan Brand</p>
+   752→          <h2 className="text-sm font-semibold text-zinc-900">Pipeline per Brand</h2>
+   753→        </div>
+   754→        {data.byBrand.length === 0 ? (
+   755→          <EmptyState text="Belum ada data pipeline per brand." />
+   756→        ) : (
+   757→          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   758→            {data.byBrand.map((b) => {
+   759→              const pct = b.leads > 0 ? Math.round((b.won / b.leads) * 100) : 0;
+   760→              return (
+   761→                <div
+   762→                  key={b.brandId}
+   763→                  className="rounded-xl border bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+   764→                >
+   765→                  <div className="flex items-center gap-2">
+   766→                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+   767→                    <span className="truncate text-sm font-semibold text-zinc-900" title={b.name}>{b.name}</span>
+   768→                  </div>
+   769→                  <div className="mt-3 flex items-end justify-between gap-2">
+   770→                    <div>
+   771→                      <div className="text-2xl font-bold tabular-nums text-zinc-900">{b.leads}</div>
+   772→                      <div className="text-xs text-zinc-500">leads</div>
+   773→                    </div>
+   774→                    <div className="text-right">
+   775→                      <Badge className="border-transparent bg-emerald-100 text-emerald-700">{b.won} won</Badge>
+   776→                      <div className="mt-1 text-xs tabular-nums text-zinc-600">{formatCurrency(b.value)} open</div>
+   777→                    </div>
+   778→                  </div>
+   779→                  <div
+   780→                    className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100"
+   781→                    role="progressbar"
+   782→                    aria-label={`Progress won ${b.name}`}
+   783→                    aria-valuenow={pct}
+   784→                    aria-valuemin={0}
+   785→                    aria-valuemax={100}
+   786→                  >
+   787→                    <div
+   788→                      className="h-full rounded-full transition-all duration-500"
+   789→                      style={{ width: `${pct}%`, backgroundColor: b.color }}
+   790→                    />
+   791→                  </div>
+   792→                  <p className="mt-1.5 text-[11px] text-zinc-500">{b.won} dari {b.leads} leads berhasil ({pct}%)</p>
+   793→                </div>
+   794→              );
+   795→            })}
+   796→          </div>
+   797→        )}
+   798→      </section>
+   799→
+   800→      {/* ============ Lost Reasons + Marketing Perf ============ */}
+   801→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   802→        <SectionCard
+   803→          ariaLabel="Alasan lost"
+   804→          title="Alasan Lost"
+   805→          subtitle="Distribusi alasan kegagalan deal"
+   806→          overline="Evaluasi Deal"
+   807→        >
+   808→          {data.lostReasons.length === 0 ? (
+   809→            <EmptyState text="Tidak ada opportunity lost — bagus, pertahankan!" />
+   810→          ) : (
+   811→            <div className="space-y-3">
+   812→              {data.lostReasons.map((r) => {
+   813→                const pct = Math.round((r.count / lostMax) * 100);
+   814→                return (
+   815→                  <div key={r.reason} className="flex items-center gap-3">
+   816→                    <div className="w-32 shrink-0 truncate text-xs text-zinc-600 sm:w-44" title={r.reason}>{r.reason}</div>
+   817→                    <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
+   818→                      <div
+   819→                        className="h-full rounded transition-all duration-500"
+   820→                        style={{ width: `${pct}%`, backgroundColor: "#dc2626" }}
+   821→                      />
+   822→                    </div>
+   823→                    <div className="w-6 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">
+   824→                      {r.count}
+   825→                    </div>
+   826→                  </div>
+   827→                );
+   828→              })}
+   829→            </div>
+   830→          )}
+   831→        </SectionCard>
+   832→
+   833→        <SectionCard
+   834→          ariaLabel="Performa marketing"
+   835→          title="Performa Marketing"
+   836→          subtitle="Perbandingan hasil antar marketer"
+   837→          overline="Tim Sales"
+   838→        >
+   839→          {data.marketingPerf.length === 0 ? (
+   840→            <EmptyState text="Belum ada data performa marketing." />
+   841→          ) : (
+   842→            <Table>
+   843→              <TableHeader>
+   844→                <TableRow className="hover:bg-transparent">
+   845→                  <TableHead>Nama</TableHead>
+   846→                  <TableHead className="text-right">Leads</TableHead>
+   847→                  <TableHead className="text-right">Won</TableHead>
+   848→                  <TableHead className="text-right">Win Rate</TableHead>
+   849→                  <TableHead className="text-right">Avg Response</TableHead>
+   850→                </TableRow>
+   851→              </TableHeader>
+   852→              <TableBody>
+   853→                {data.marketingPerf.map((m, i) => {
+   854→                  const top = i === bestMarketerIdx;
+   855→                  const wr = m.leads > 0 ? Math.round((m.won / m.leads) * 100) : 0;
+   856→                  return (
+   857→                    <TableRow key={m.name} className={top ? "bg-amber-50/70" : undefined}>
+   858→                      <TableCell className="font-medium text-zinc-900">
+   859→                        <span className="flex items-center gap-2">
+   860→                          {m.name}
+   861→                          {top ? <Badge className="border-transparent bg-amber-100 text-amber-700">Top</Badge> : null}
+   862→                        </span>
+   863→                      </TableCell>
+   864→                      <TableCell className="text-right tabular-nums">{m.leads}</TableCell>
+   865→                      <TableCell className="text-right tabular-nums font-medium text-emerald-600">{m.won}</TableCell>
+   866→                      <TableCell className="text-right tabular-nums">{wr}%</TableCell>
+   867→                      <TableCell className="text-right tabular-nums text-zinc-600">{formatHours(m.avgResponseHours)}</TableCell>
+   868→                    </TableRow>
+   869→                  );
+   870→                })}
+   871→              </TableBody>
+   872→            </Table>
+   873→          )}
+   874→        </SectionCard>
+   875→      </div>
+   876→
+   877→      {/* ============ Distribusi + Produksi & Risiko ============ */}
+   878→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   879→        <SectionCard
+   880→          ariaLabel="Distribusi kanal dan negara"
+   881→          title="Distribusi Kanal & Negara"
+   882→          subtitle="Asal lead lintas kanal dan wilayah"
+   883→          overline="Sumber Lead"
+   884→        >
+   885→          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+   886→            <div>
+   887→              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Kanal Lead</h3>
+   888→              {data.byChannel.length === 0 ? (
+   889→                <p className="text-sm text-zinc-400">Tidak ada data kanal.</p>
+   890→              ) : (
+   891→                <ul className="divide-y divide-zinc-100">
+   892→                  {data.byChannel.map((c) => (
+   893→                    <li key={c.channel} className="flex items-center justify-between gap-2 py-1.5">
+   894→                      <span className="truncate text-sm text-zinc-700">{channelLabel(c.channel)}</span>
+   895→                      <Badge variant="secondary" className="tabular-nums">{c.count}</Badge>
+   896→                    </li>
+   897→                  ))}
+   898→                </ul>
+   899→              )}
+   900→            </div>
+   901→            <div>
+   902→              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Negara</h3>
+   903→              {data.byCountry.length === 0 ? (
+   904→                <p className="text-sm text-zinc-400">Tidak ada data negara.</p>
+   905→              ) : (
+   906→                <ul className="divide-y divide-zinc-100">
+   907→                  {data.byCountry.map((c) => (
+   908→                    <li key={c.country} className="flex items-center justify-between gap-2 py-1.5">
+   909→                      <span className="flex min-w-0 items-center gap-1.5 text-sm text-zinc-700">
+   910→                        <Globe className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+   911→                        <span className="truncate">{c.country}</span>
+   912→                      </span>
+   913→                      <Badge variant="secondary" className="tabular-nums">{c.count}</Badge>
+   914→                    </li>
+   915→                  ))}
+   916→                </ul>
+   917→              )}
+   918→            </div>
+   919→          </div>
+   920→        </SectionCard>
+   921→
+   922→        <SectionCard
+   923→          ariaLabel="Produksi dan risiko"
+   924→          title="Produksi & Risiko"
+   925→          subtitle="Kesehatan operasional dan aktivitas terbaru"
+   926→          overline="Operasional"
+   927→        >
+   928→          <div className="grid grid-cols-2 gap-4">
+   929→            <div className={`rounded-lg border p-3 ${data.projectsAtRisk > 0 ? "border-rose-200 bg-rose-50" : "bg-zinc-50"}`}>
+   930→              <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">
+   931→                <AlertTriangle className={`h-3.5 w-3.5 ${data.projectsAtRisk > 0 ? "text-rose-500" : "text-zinc-400"}`} aria-hidden />
+   932→                Project at Risk
+   933→              </div>
+   934→              <div className={`mt-1 text-2xl font-bold tabular-nums ${data.projectsAtRisk > 0 ? "text-rose-600" : "text-zinc-900"}`}>
+   935→                {data.projectsAtRisk}
+   936→              </div>
+   937→              <div className="text-xs text-zinc-500">{data.projectsAtRisk > 0 ? "perlu perhatian segera" : "semua aman"}</div>
+   938→            </div>
+   939→            <div className="rounded-lg border bg-zinc-50 p-3">
+   940→              <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">
+   941→                <Factory className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+   942→                Kapasitas Produksi
+   943→              </div>
+   944→              <div className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{data.productionCapacity}</div>
+   945→              <div className="text-xs text-zinc-500">project aktif berjalan</div>
+   946→            </div>
+   947→          </div>
+   948→
+   949→          <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">Audit Terbaru</h3>
+   950→          {data.recentAudit.length === 0 ? (
+   951→            <p className="py-2 text-sm text-zinc-400">Belum ada aktivitas tercatat.</p>
+   952→          ) : (
+   953→            <ul className="crm-scroll max-h-64 overflow-y-auto pr-1">
+   954→              {data.recentAudit.map((a) => (
+   955→                <li
+   956→                  key={a.id}
+   957→                  className="flex flex-col gap-1 border-b border-zinc-100 py-2 last:border-0 sm:flex-row sm:items-center sm:justify-between"
+   958→                >
+   959→                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+   960→                    <span className="text-sm font-medium text-zinc-900">{a.actorName}</span>
+   961→                    <Badge className={`border-transparent uppercase ${actionBadgeClass(a.action)}`}>
+   962→                      {a.action.replace(/_/g, " ")}
+   963→                    </Badge>
+   964→                    <span className="truncate text-xs text-zinc-600">{a.entityLabel ?? a.entity}</span>
+   965→                  </div>
+   966→                  <span className="shrink-0 text-xs text-zinc-400">{timeAgo(a.createdAt)}</span>
+   967→                </li>
+   968→              ))}
+   969→            </ul>
+   970→          )}
+   971→        </SectionCard>
+   972→      </div>
+   973→
+   974→      {/* ============ Footer ============ */}
+   975→      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 text-xs text-zinc-500">
+   976→        <span className="inline-flex items-center gap-1.5" aria-live="polite">
+   977→          <Clock3 className="h-3.5 w-3.5" aria-hidden />
+   978→          Data diperbarui {fetchTime ? timeAgo(fetchTime) : "-"}
+   979→        </span>
+   980→        <span>Auto-refresh setiap 60 detik</span>
+   981→      </footer>
+   982→
+   983→      {/* ============ Dialog konfirmasi keputusan approval ============ */}
+   984→      <Dialog open={confirmState !== null} onOpenChange={(open) => { if (!open) closeConfirm(); }}>
+   985→        <DialogContent className="sm:max-w-md" aria-label="Konfirmasi keputusan approval">
+   986→          <DialogHeader>
+   987→            <DialogTitle className="flex items-center gap-2">
+   988→              {confirmState?.decision === "approve" ? (
+   989→                <>
+   990→                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700" aria-hidden>
+   991→                    <Check className="h-4 w-4" />
+   992→                  </span>
+   993→                  Setujui Pengajuan
+   994→                </>
+   995→              ) : (
+   996→                <>
+   997→                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-100 text-rose-600" aria-hidden>
+   998→                    <X className="h-4 w-4" />
+   999→                  </span>
+  1000→                  Tolak Pengajuan
+  1001→                </>
+  1002→              )}
+  1003→            </DialogTitle>
+  1004→            <DialogDescription>
+  1005→              {confirmState?.approval.entityLabel ?? "Pengajuan"}
+  1006→              {confirmState?.approval.amount != null ? ` · ${formatCurrency(confirmState.approval.amount)}` : ""}
+  1007→              {confirmState ? ` · oleh ${confirmState.approval.requestedBy}` : ""}
+  1008→            </DialogDescription>
+  1009→          </DialogHeader>
+  1010→          <div className="space-y-2">
+  1011→            <label htmlFor="approval-decision-note" className="text-xs font-medium text-zinc-600">
+  1012→              Catatan keputusan{" "}
+  1013→              {confirmState?.decision === "reject" ? (
+  1014→                <span className="text-rose-600">*</span>
+  1015→              ) : (
+  1016→                <span className="text-zinc-400">(opsional)</span>
+  1017→              )}
+  1018→            </label>
+  1019→            <Textarea
+  1020→              id="approval-decision-note"
+  1021→              value={decisionNote}
+  1022→              onChange={(e) => setDecisionNote(e.target.value)}
+  1023→              rows={3}
+  1024→              disabled={deciding}
+  1025→              placeholder={
+  1026→                confirmState?.decision === "reject"
+  1027→                  ? "Wajib diisi — tulis alasan penolakan"
+  1028→                  : "Contoh: disetujui, lanjutkan ke quotation"
+  1029→              }
+  1030→              aria-required={confirmState?.decision === "reject"}
+  1031→            />
+  1032→            {confirmState?.decision === "reject" && !decisionNote.trim() ? (
+  1033→              <p className="text-[11px] text-rose-600">Catatan wajib diisi untuk menolak pengajuan.</p>
+  1034→            ) : null}
+  1035→          </div>
+  1036→          <DialogFooter>
+  1037→            <Button variant="outline" size="sm" onClick={closeConfirm} disabled={deciding}>
+  1038→              Batal
+  1039→            </Button>
+  1040→            <Button
+  1041→              size="sm"
+  1042→              onClick={() => void submitDecision()}
+  1043→              disabled={deciding || (confirmState?.decision === "reject" && !decisionNote.trim())}
+  1044→              className={
+  1045→                confirmState?.decision === "approve"
+  1046→                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+  1047→                  : "bg-rose-600 text-white hover:bg-rose-700"
+  1048→              }
+  1049→              aria-label={confirmState?.decision === "approve" ? "Konfirmasi setujui pengajuan" : "Konfirmasi tolak pengajuan"}
+  1050→            >
+  1051→              {confirmState?.decision === "approve" ? <Check className="h-3.5 w-3.5" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />}
+  1052→              {confirmState?.decision === "approve" ? "Setujui" : "Tolak Pengajuan"}
+  1053→            </Button>
+  1054→          </DialogFooter>
+  1055→        </DialogContent>
+  1056→      </Dialog>
+  1057→    </div>
+  1058→  );
+  1059→}
+  1060→

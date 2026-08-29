@@ -17,6 +17,7 @@ import {
   ArrowDownWideNarrow,
   ArrowUp,
   ArrowUpDown,
+  Download,
   Flame,
   Inbox,
   KanbanSquare,
@@ -68,6 +69,46 @@ const TERMINAL_STAGES = ["won", "lost", "nurture"];
 const UNASSIGNED = "__unassigned";
 
 type ViewMode = "kanban" | "table";
+
+// ---------- Ekspor CSV opportunity (Task 13): BOM + CRLF + separator titik-koma ----------
+
+const OPP_CSV_HEADERS = [
+  "judul", "brand", "perusahaan", "kontak", "kategori_layanan", "layanan",
+  "tahap", "temperatur", "prioritas", "skor", "nilai_estimasi", "mata_uang",
+  "probabilitas_pct", "owner", "target_close", "aksi_berikutnya", "dibuat",
+] as const;
+
+function escapeCsvField(value: string): string {
+  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function buildOpportunitiesCsv(opps: OpportunityDTO[]): string {
+  const lines: string[] = [OPP_CSV_HEADERS.join(";")];
+  for (const o of opps) {
+    const fields: string[] = [
+      o.title,
+      o.brand?.name ?? "",
+      o.company?.name ?? "",
+      o.contact?.fullName ?? "",
+      o.serviceCategory ?? "",
+      o.serviceName ?? "",
+      stageLabel(o.stage),
+      o.temperature,
+      o.priority,
+      String(o.score ?? ""),
+      o.estimatedValue != null ? String(o.estimatedValue) : "",
+      o.currency,
+      String(o.probability),
+      o.ownerName ?? "",
+      o.expectedCloseDate ? formatDate(o.expectedCloseDate) : "",
+      o.nextAction ?? "",
+      formatDate(o.createdAt),
+    ];
+    lines.push(fields.map(escapeCsvField).join(";"));
+  }
+  return "\uFEFF" + lines.join("\r\n");
+}
 type SortDir = "asc" | "desc" | null;
 
 interface LostExtra {
@@ -789,6 +830,34 @@ export default function PipelineModule() {
           <Badge variant="secondary" className="bg-zinc-200/60 text-zinc-700">
             {filtered.length} opportunity
           </Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Ekspor opportunity ke CSV"
+            title={`Ekspor ${view === "table" ? tableRows.length : filtered.length} opportunity ke CSV`}
+            onClick={() => {
+              const rows = view === "table" ? tableRows : filtered;
+              if (rows.length === 0) {
+                toast.error("Tidak ada opportunity untuk diekspor");
+                return;
+              }
+              const csv = buildOpportunitiesCsv(rows);
+              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              const ymd = new Date().toISOString().slice(0, 10);
+              a.href = url;
+              a.download = `opportunity-grupcrm-${ymd}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              toast.success(`Ekspor CSV selesai — ${rows.length} opportunity diunduh`);
+            }}
+          >
+            <Download className="size-4" aria-hidden="true" />
+            <span className="hidden sm:inline">Ekspor CSV</span>
+          </Button>
           <Button
             variant="outline"
             size="sm"

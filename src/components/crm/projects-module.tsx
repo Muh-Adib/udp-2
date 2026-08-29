@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
-  Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
+  Download, Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -57,6 +57,43 @@ const CR_STATUS: Record<string, { label: string; cls: string }> = {
 
 function statusMeta(s: string) {
   return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+}
+
+// ---------- Ekspor CSV project (Task 13): BOM + CRLF + separator titik-koma ----------
+
+const PROJECT_CSV_HEADERS = [
+  "kode", "nama", "brand", "klien", "kategori_layanan", "status", "progress_pct",
+  "pm", "mulai", "deadline", "nilai_kontrak", "budget_internal", "milestone_selesai", "milestone_total",
+] as const;
+
+function escapeCsvField(value: string): string {
+  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function buildProjectsCsv(projects: ProjectDTO[]): string {
+  const lines: string[] = [PROJECT_CSV_HEADERS.join(";")];
+  for (const p of projects) {
+    const ms = p.milestones ?? [];
+    const fields: string[] = [
+      p.code,
+      p.name,
+      p.brand?.name ?? "",
+      p.company?.name ?? "",
+      p.serviceCategory ?? "",
+      statusMeta(p.status).label,
+      String(p.progress),
+      p.pmName ?? "",
+      p.startDate ? formatDate(p.startDate) : "",
+      p.dueDate ? formatDate(p.dueDate) : "",
+      p.contractValue != null ? String(p.contractValue) : "",
+      p.budgetInternal != null ? String(p.budgetInternal) : "",
+      String(ms.filter((m) => m.status === "done").length),
+      String(ms.length),
+    ];
+    lines.push(fields.map(escapeCsvField).join(";"));
+  }
+  return "\uFEFF" + lines.join("\r\n");
 }
 
 function crMeta(s: string) {
@@ -829,9 +866,37 @@ export default function ProjectsModule() {
           <h1 className="text-xl font-bold tracking-tight text-zinc-900">Projects</h1>
           <p className="text-sm text-zinc-500">Produksi setelah deal berhasil — template workflow per layanan</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar project">
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const rows = projects ?? [];
+              if (rows.length === 0) {
+                toast.error("Tidak ada project untuk diekspor");
+                return;
+              }
+              const csv = buildProjectsCsv(rows);
+              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              const ymd = new Date().toISOString().slice(0, 10);
+              a.href = url;
+              a.download = `project-grupcrm-${ymd}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              toast.success(`Ekspor CSV selesai — ${rows.length} project diunduh`);
+            }}
+            aria-label="Ekspor project ke CSV"
+          >
+            <Download className="h-4 w-4" aria-hidden /> Ekspor CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar project">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+          </Button>
+        </div>
       </div>
 
       {/* Filter */}

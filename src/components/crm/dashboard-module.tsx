@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlarmClockOff, AlertTriangle, Check, CheckCircle2, Clock3, Factory, GitPullRequestArrow, Globe, Handshake, Minus, ReceiptText,
+  AlarmClockOff, AlertTriangle, ArrowRight, Bell, Check, CheckCircle2, Clock3, Factory, GitPullRequestArrow, Globe, Handshake, Minus, ReceiptText,
   RefreshCw, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
@@ -22,9 +22,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
-import { canAccess, useCrmStore } from "@/lib/crm/store";
-import type { ApprovalRequestDTO, DashboardData } from "@/lib/crm/types";
+import { applyNotifPrefs, useNotifPrefs } from "@/lib/crm/notif-prefs";
+import { canAccess, useCrmStore, type ModuleKey } from "@/lib/crm/store";
+import type { ApprovalRequestDTO, DashboardData, NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
 import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
+import { cn } from "@/lib/utils";
+import { OPEN_NOTIF_EVENT } from "@/components/crm/notification-center";
 
 // ============ Tipe lokal ============
 
@@ -312,6 +315,149 @@ function ApprovalRow({
         </div>
       </div>
     </li>
+  );
+}
+
+// ============ Widget Notifikasi Ringkas (Fase 3): 5 teratas di Command Center ============
+
+const NOTIF_SEVERITY_DOT: Record<NotificationSeverity, string> = {
+  danger: "bg-rose-600",
+  warning: "bg-amber-500",
+  info: "bg-zinc-400",
+};
+
+/** Modul tujuan navigasi valid dari notifikasi. */
+const NOTIF_NAV_MODULES = new Set<string>(["dashboard", "inbox", "pipeline", "followups", "finance", "projects"]);
+
+/** Baris ringkas notifikasi pada widget dashboard. */
+function NotifBriefRow({ n, onOpen }: { n: NotificationDTO; onOpen: (n: NotificationDTO) => void }) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(n)}
+        className="group flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-100/70 focus-visible:bg-zinc-100/70 focus-visible:outline-none"
+        aria-label={`${n.title} — buka modul tujuan`}
+      >
+        <span aria-hidden className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", NOTIF_SEVERITY_DOT[n.severity])} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className={cn("truncate text-[13px]", n.read ? "font-normal text-zinc-500" : "font-semibold text-zinc-900")}>
+              {n.title}
+            </span>
+            {!n.read ? <span className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[9px] font-bold uppercase text-rose-600">baru</span> : null}
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-zinc-400">
+            {n.brandColor ? <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: n.brandColor }} /> : null}
+            {n.brandName ? <span className="font-medium text-zinc-500">{n.brandName}</span> : null}
+            {n.entityLabel ? <span className="font-mono">{n.entityLabel}</span> : null}
+            <span>{timeAgo(n.at)}</span>
+          </span>
+        </span>
+        <ArrowRight className="mt-1 h-3.5 w-3.5 shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-600" aria-hidden />
+      </button>
+    </li>
+  );
+}
+
+/** Widget ringkas notifikasi (5 teratas) — respek preferensi mute per tipe. */
+function NotificationBriefWidget() {
+  const user = useCrmStore((s) => s.user);
+  const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  const { prefs } = useNotifPrefs(user?.email);
+  const [items, setItems] = useState<NotificationDTO[]>([]);
+  const [hidden, setHidden] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (silent = false) => {
+    if (!user) return;
+    if (!silent) setLoading(true);
+    try {
+      const res = await api.notifications(user.email, activeBrandFilter);
+      const applied = applyNotifPrefs(res.items, prefs);
+      // Urut: belum dibaca dulu, lalu terbaru
+      const sorted = [...applied.items].sort((a, b) => {
+        if (a.read !== b.read) return a.read ? 1 : -1;
+        return new Date(b.at).getTime() - new Date(a.at).getTime();
+      });
+      setHidden(sorted.length - Math.min(sorted.length, 5));
+      setItems(sorted.slice(0, 5));
+    } catch {
+      // Widget ringkas gagal muat tidak perlu toast — bell header tetap berfungsi
+    } finally {
+      setLoading(false);
+    }
+  }, [user, activeBrandFilter, prefs]);
+
+  useEffect(() => {
+    void load(false);
+    const id = setInterval(() => {
+      if (!document.hidden) void load(true);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  function openItem(n: NotificationDTO) {
+    if (!user) return;
+    if (!n.read) {
+      setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: true } : i)));
+      api.markNotifications({ user: user.email, action: "read", keys: [n.key] }).catch(() => {});
+    }
+    if (NOTIF_NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
+  }
+
+  if (!user) return null;
+
+  return (
+    <section aria-label="Notifikasi ringkas" className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600" aria-hidden>
+            <Bell className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-900">Notifikasi Ringkas</h2>
+            <p className="text-[11px] text-zinc-500">5 hal teratas yang butuh perhatian Anda</p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 rounded-lg text-xs"
+          onClick={() => window.dispatchEvent(new CustomEvent(OPEN_NOTIF_EVENT))}
+          aria-label="Buka pusat notifikasi lengkap"
+        >
+          Pusat Notifikasi
+          <ArrowRight className="h-3 w-3" aria-hidden />
+        </Button>
+      </div>
+      {loading && items.length === 0 ? (
+        <div className="space-y-2 px-1 py-1" aria-hidden>
+          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-9 w-full rounded-lg" />)}
+        </div>
+      ) : items.length === 0 ? (
+        <p className="flex items-center gap-2 rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          Semua notifikasi dalam kendali — tidak ada hal yang perlu perhatian.
+        </p>
+      ) : (
+        <>
+          <ul className="space-y-0.5">
+            {items.map((n) => <NotifBriefRow key={n.key} n={n} onOpen={openItem} />)}
+          </ul>
+          {hidden > 0 ? (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent(OPEN_NOTIF_EVENT))}
+              className="mt-1.5 w-full rounded-lg border border-dashed border-zinc-200 px-2.5 py-1.5 text-center text-[11px] text-zinc-500 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-700"
+            >
+              +{hidden} notifikasi lainnya di pusat notifikasi
+            </button>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -605,6 +751,9 @@ export default function DashboardModule() {
           />
         </div>
       </section>
+
+      {/* ============ Notifikasi Ringkas (Fase 3) ============ */}
+      <NotificationBriefWidget />
 
       {/* ============ Antrean Approval (Direktur & Super Admin) ============ */}
       {canDecide ? (

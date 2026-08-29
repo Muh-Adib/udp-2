@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BellRing, Building2, CalendarClock, CalendarDays, CheckCircle2, ClipboardList,
-  ListFilter, Plus, RefreshCw, Video, type LucideIcon,
+  FileText, ListFilter, Mail, MessageCircle, Phone, Plus, RefreshCw, Send,
+  Sparkles, Video, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,10 +21,11 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { PRIORITIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { TaskDTO } from "@/lib/crm/types";
+import type { FollowUpTemplateDTO, TaskDTO } from "@/lib/crm/types";
 import { formatDate, initials, timeAgo } from "@/lib/crm/utils";
 
 // ============ Meta tipe task & prioritas ============
@@ -101,10 +103,11 @@ function SectionHeading({ title, count }: { title: string; count: number }) {
   );
 }
 
-function TaskCard({ task, onToggle, busy }: {
+function TaskCard({ task, onToggle, busy, onSend }: {
   task: TaskDTO;
   onToggle: (t: TaskDTO) => void;
   busy: boolean;
+  onSend: (t: TaskDTO) => void;
 }) {
   const type = taskTypeMeta(task.type);
   const prio = priorityMeta(task.priority);
@@ -167,6 +170,20 @@ function TaskCard({ task, onToggle, busy }: {
               </span>
             ) : null}
           </div>
+          {!done && task.opportunityId && task.type === "follow_up" ? (
+            <div className="pt-0.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 rounded-lg border-zinc-300 text-xs text-zinc-700 hover:border-zinc-900 hover:bg-zinc-900 hover:text-white"
+                onClick={() => onSend(task)}
+                disabled={busy}
+                aria-label={`Kirim pesan follow-up untuk ${task.title}`}
+              >
+                <Send className="h-3 w-3" aria-hidden /> Kirim Pesan
+              </Button>
+            </div>
+          ) : null}
         </div>
         {task.assigneeName ? (
           <span
@@ -217,6 +234,331 @@ function EmptyGroup({ text }: { text: string }) {
   );
 }
 
+// ============ Outbound send (Fase 3): kirim & catat pesan follow-up ============
+
+const OUTBOUND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
+  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { key: "email", label: "Email", icon: Mail },
+  { key: "phone", label: "Telepon", icon: Phone },
+];
+
+/** Konteks opportunity yang dibutuhkan dialog kirim (subset detail API). */
+interface SendContext {
+  id: string;
+  title: string;
+  serviceName?: string | null;
+  brand?: { id: string; name: string; color: string } | null;
+  contact?: { id: string; fullName: string; email?: string | null; whatsapp?: string | null } | null;
+  company?: { id: string; name: string } | null;
+  ownerName?: string | null;
+}
+
+/** Ganti placeholder template dengan data opportunity yang diketahui. */
+function renderTemplate(body: string, ctx: SendContext, senderName: string): string {
+  const map: Record<string, string> = {
+    contact_name: ctx.contact?.fullName ?? "Bapak/Ibu",
+    company_name: ctx.company?.name ?? "perusahaan Bapak/Ibu",
+    brand_name: ctx.brand?.name ?? "tim kami",
+    service_name: ctx.serviceName ?? ctx.title,
+    marketing_name: senderName,
+  };
+  return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => map[key] ?? full);
+}
+
+function channelMeta(key: string) {
+  return OUTBOUND_CHANNELS.find((c) => c.key === key) ?? OUTBOUND_CHANNELS[0];
+}
+
+function SendOutboundDialog({ task, onClose, onSent }: {
+  task: TaskDTO | null;
+  onClose: () => void;
+  onSent: (task: TaskDTO, updated?: TaskDTO) => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [ctx, setCtx] = useState<SendContext | null>(null);
+  const [templates, setTemplates] = useState<FollowUpTemplateDTO[]>([]);
+  const [loadingCtx, setLoadingCtx] = useState(false);
+  const [channel, setChannel] = useState("whatsapp");
+  const [templateId, setTemplateId] = useState<string>("blank");
+  const [body, setBody] = useState("");
+  const [markDone, setMarkDone] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  // Muat konteks opportunity + template saat dialog dibuka
+  useEffect(() => {
+    if (!task?.opportunityId) return;
+    let alive = true;
+    setLoadingCtx(true);
+    setCtx(null);
+    setTemplates([]);
+    setTemplateId("blank");
+    setBody("");
+    setChannel("whatsapp");
+    setMarkDone(task.status !== "done");
+    (async () => {
+      try {
+        const [detail, tplRes] = await Promise.all([
+          api.opportunity(task.opportunityId as string),
+          api.followUpTemplates("all"),
+        ]);
+        if (!alive) return;
+        const o = detail.opportunity;
+        const nextCtx: SendContext = {
+          id: o.id,
+          title: o.title,
+          serviceName: o.serviceName,
+          brand: o.brand ? { id: o.brand.id, name: o.brand.name, color: o.brand.color } : null,
+          contact: o.contact
+            ? { id: o.contact.id, fullName: o.contact.fullName, email: o.contact.email, whatsapp: o.contact.whatsapp }
+            : null,
+          company: o.company ? { id: o.company.id, name: o.company.name } : null,
+          ownerName: o.ownerName,
+        };
+        setCtx(nextCtx);
+        // Template global + milik brand opportunity, urut delay
+        const relevant = tplRes.templates
+          .filter((t) => !t.brandId || t.brandId === o.brandId)
+          .sort((a, b) => a.delayDays - b.delayDays);
+        setTemplates(relevant);
+      } catch {
+        if (alive) toast.error("Gagal memuat konteks opportunity");
+      } finally {
+        if (alive) setLoadingCtx(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [task]);
+
+  const senderName = user?.name ?? ctx?.ownerName ?? "Tim Sales";
+
+  function pickTemplate(id: string) {
+    setTemplateId(id);
+    if (!ctx) return;
+    if (id === "blank") {
+      setBody("");
+      return;
+    }
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) return;
+    setChannel(tpl.channel);
+    setBody(renderTemplate(tpl.body, ctx, senderName));
+  }
+
+  const unknownPlaceholders = useMemo(() => {
+    if (!ctx) return [] as string[];
+    const found = body.match(/{{\s*(\w+)\s*}}/g) ?? [];
+    return Array.from(new Set(found));
+  }, [body, ctx]);
+
+  async function handleSend() {
+    if (!task || !ctx) return;
+    const content = body.trim();
+    if (!content) {
+      toast.error("Isi pesan tidak boleh kosong");
+      return;
+    }
+    const ch = channelMeta(channel);
+    if (ch.key === "email" && !ctx.contact?.email) {
+      toast.error("Kontak tidak memiliki alamat email");
+      return;
+    }
+    if (ch.key === "whatsapp" && !ctx.contact?.whatsapp) {
+      toast.error("Kontak tidak memiliki nomor WhatsApp");
+      return;
+    }
+    setSending(true);
+    try {
+      await api.createInteraction({
+        channel: ch.key,
+        direction: "outbound",
+        brandId: ctx.brand?.id,
+        senderName,
+        recipientName: ctx.contact?.fullName,
+        subject: ch.key === "email" ? `Follow-up: ${ctx.title}` : undefined,
+        content,
+        opportunityId: ctx.id,
+        contactId: ctx.contact?.id,
+        companyId: ctx.company?.id,
+        externalId: `task:${task.id}`,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      let updated: TaskDTO | undefined;
+      if (markDone && task.status !== "done") {
+        const res = await api.updateTask(task.id, { status: "done" });
+        updated = res.task;
+      }
+      toast.success(`Pesan ${ch.label} tercatat terkirim`, {
+        description: `Tercatat sebagai Interaction outbound pada timeline ${ctx.title}.`,
+      });
+      onSent(task, updated);
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mencatat pesan");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const ChIcon = channelMeta(channel).icon;
+
+  return (
+    <Dialog open={task !== null} onOpenChange={(open) => { if (!open && !sending) onClose(); }}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto crm-scroll sm:max-w-xl" aria-label="Kirim pesan follow-up">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden>
+              <Send className="h-3.5 w-3.5" />
+            </span>
+            Kirim &amp; Catat Follow-up
+          </DialogTitle>
+          <DialogDescription>
+            {task?.opportunity ? (
+              <>Pesan outbound untuk <span className="font-medium text-zinc-700">{task.opportunity.title}</span> — tercatat otomatis di timeline interaksi.</>
+            ) : (
+              <>Task ini belum tertaut ke opportunity — kirim pesan tersedia hanya untuk task dengan opportunity.</>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        {loadingCtx || !ctx ? (
+          <div className="space-y-3 py-2" aria-hidden>
+            <Skeleton className="h-16 w-full rounded-lg" />
+            <Skeleton className="h-20 w-full rounded-lg" />
+            <Skeleton className="h-28 w-full rounded-lg" />
+          </div>
+        ) : (
+          <div className="space-y-4 py-1">
+            {/* Penerima */}
+            <div className="rounded-lg border bg-zinc-50 p-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+                <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-[9px] font-bold text-white" aria-hidden>
+                    {initials(ctx.contact?.fullName ?? "?")}
+                  </span>
+                  {ctx.contact?.fullName ?? "Kontak tidak dikenal"}
+                </span>
+                {ctx.contact?.whatsapp ? (
+                  <span className="inline-flex items-center gap-1 text-zinc-600"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden /> {ctx.contact.whatsapp}</span>
+                ) : null}
+                {ctx.contact?.email ? (
+                  <span className="inline-flex items-center gap-1 text-zinc-600"><Mail className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> {ctx.contact.email}</span>
+                ) : null}
+                {ctx.brand ? (
+                  <span className="inline-flex items-center gap-1 text-zinc-600">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: ctx.brand.color }} aria-hidden />
+                    {ctx.brand.name}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Pilih template */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Template follow-up
+              </Label>
+              {templates.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-zinc-200 p-2.5 text-xs text-zinc-400">
+                  Belum ada template untuk brand ini — tulis pesan manual di bawah.
+                </p>
+              ) : (
+                <div className="crm-scroll max-h-40 space-y-1.5 overflow-y-auto pr-1">
+                  <label
+                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors ${templateId === "blank" ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"}`}
+                  >
+                    <span className="flex items-center gap-2 font-medium text-zinc-900">
+                      <Sparkles className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Tulis pesan sendiri
+                    </span>
+                    <input type="radio" className="sr-only" checked={templateId === "blank"} onChange={() => pickTemplate("blank")} aria-label="Tulis pesan sendiri" />
+                  </label>
+                  {templates.map((t) => {
+                    const TplIcon = channelMeta(t.channel).icon;
+                    return (
+                      <label
+                        key={t.id}
+                        className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors ${templateId === t.id ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+                            {t.name}
+                            {!t.approved ? <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1 text-[9px] text-amber-700">review</Badge> : null}
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+                            <span className="inline-flex items-center gap-1">
+                              <TplIcon className="h-3 w-3" aria-hidden />
+                              {channelMeta(t.channel).label}
+                            </span>
+                            <span aria-hidden>·</span>
+                            <span>H+{t.delayDays}</span>
+                          </span>
+                        </span>
+                        <input type="radio" className="sr-only" checked={templateId === t.id} onChange={() => pickTemplate(t.id)} aria-label={`Pakai template ${t.name}`} />
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Kanal + isi */}
+            <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
+              <div className="space-y-2">
+                <Label htmlFor="outbound-channel">Kanal</Label>
+                <Select value={channel} onValueChange={setChannel}>
+                  <SelectTrigger id="outbound-channel" className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OUTBOUND_CHANNELS.map((c) => (
+                      <SelectItem key={c.key} value={c.key} disabled={c.key === "email" && !ctx.contact?.email}>
+                        <span className="flex items-center gap-2"><c.icon className="h-3.5 w-3.5" aria-hidden /> {c.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="outbound-body">Isi pesan</Label>
+                <Textarea
+                  id="outbound-body"
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  rows={7}
+                  placeholder="Tulis pesan follow-up…"
+                  className="bg-white text-sm"
+                />
+                {unknownPlaceholders.length > 0 ? (
+                  <p className="text-[11px] text-amber-600">
+                    Placeholder belum terisi: {unknownPlaceholders.join(", ")} — lengkapi manual sebelum kirim.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border bg-zinc-50 p-3 text-sm text-zinc-700">
+              <Checkbox checked={markDone} onCheckedChange={(v) => setMarkDone(v === true)} aria-label="Tandai task selesai setelah kirim" />
+              Tandai task selesai setelah pesan tercatat
+            </label>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={sending}>Batal</Button>
+          <Button
+            onClick={() => void handleSend()}
+            disabled={sending || loadingCtx || !ctx || !body.trim()}
+            aria-label="Kirim dan catat pesan follow-up"
+          >
+            {sending ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden /> : <ChIcon className="h-4 w-4" aria-hidden />}
+            {sending ? "Mencatat…" : `Kirim via ${channelMeta(channel).label}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ============ Module utama ============
 
 export default function FollowupsModule() {
@@ -236,6 +578,8 @@ export default function FollowupsModule() {
   const [form, setForm] = useState({
     title: "", type: "follow_up", priority: "medium", assigneeName: "", dueDate: "", opportunityId: "",
   });
+  // Fase 3 — kirim & catat pesan outbound dari task follow-up
+  const [sendTarget, setSendTarget] = useState<TaskDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -327,6 +671,13 @@ export default function FollowupsModule() {
     }
   }
 
+  /** Callback setelah pesan outbound tercatat: perbarui status task di list. */
+  function handleSent(_task: TaskDTO, updated?: TaskDTO) {
+    if (updated) {
+      setTasks((prev) => (prev ?? []).map((x) => (x.id === updated.id ? updated : x)));
+    }
+  }
+
   if (loading && tasks === null) return <FollowupsSkeleton />;
 
   const sectionBody = (list: TaskDTO[], emptyText: string): ReactNode =>
@@ -335,7 +686,7 @@ export default function FollowupsModule() {
     ) : (
       <div className="space-y-3">
         {list.map((t) => (
-          <TaskCard key={t.id} task={t} onToggle={handleToggle} busy={busyId === t.id} />
+          <TaskCard key={t.id} task={t} onToggle={handleToggle} busy={busyId === t.id} onSend={setSendTarget} />
         ))}
       </div>
     );
@@ -508,6 +859,9 @@ export default function FollowupsModule() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Dialog kirim & catat pesan outbound (Fase 3) */}
+      <SendOutboundDialog task={sendTarget} onClose={() => setSendTarget(null)} onSent={handleSent} />
     </div>
   );
 }

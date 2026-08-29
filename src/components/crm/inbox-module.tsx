@@ -366,15 +366,21 @@ export default function InboxModule() {
   const [escalatedIds, setEscalatedIds] = useState<Set<string>>(new Set());
   const detailRef = useRef<HTMLDivElement | null>(null);
 
-  const loadLeads = useCallback(async () => {
-    setLoading(true);
+  const loadLeads = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter });
+      // sweep:1 → picu SLA auto-sweep server (throttle 5 menit di API)
+      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, sweep: true });
       setLeads(res.leads);
       setError(null);
+      if (res.autoEscalated && res.autoEscalated > 0) {
+        toast.warning(`${res.autoEscalated} lead dieskalasi otomatis`, {
+          description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan tak terduga");
-      toast.error("Gagal memuat lead inbox");
+      if (!silent) toast.error("Gagal memuat lead inbox");
     } finally {
       setLoading(false);
     }

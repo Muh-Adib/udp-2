@@ -1,18 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCrmStore, type ModuleKey } from "@/lib/crm/store";
 import { api } from "@/lib/crm/api-client";
+import {
+  applyNotifPrefs, NOTIF_TYPES, useNotifPrefs,
+} from "@/lib/crm/notif-prefs";
 import { timeAgo } from "@/lib/crm/utils";
 import type { NotificationDTO, NotificationSeverity, NotificationType } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
   Bell, BellOff, CheckCheck, X, Timer, FileCheck2, GitPullRequestArrow,
-  ListChecks, CalendarClock, ReceiptText,
+  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal,
 } from "lucide-react";
+
+/** Event global untuk membuka pusat notifikasi dari widget dashboard. */
+export const OPEN_NOTIF_EVENT = "crm:open-notifications";
 
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
   sla: Timer,
@@ -40,11 +47,13 @@ export default function NotificationCenter() {
   const setActiveModule = useCrmStore((s) => s.setActiveModule);
 
   const [open, setOpen] = useState(false);
+  // items = data mentah dari server; tampilan & unread diturunkan via useMemo (prefs + filter)
   const [items, setItems] = useState<NotificationDTO[]>([]);
-  const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [acting, setActing] = useState(false);
+  const [showPrefs, setShowPrefs] = useState(false);
+  const { prefs, update, toggleMuted } = useNotifPrefs(user?.email);
 
   // Ref terbaru agar polling tidak dobel & closure selalu segar
   const brandRef = useRef(activeBrandFilter);
@@ -65,7 +74,6 @@ export default function NotificationCenter() {
       if (!silent) setLoading(true);
       const res = await api.notifications(u.email, brandRef.current);
       setItems(res.items);
-      setUnread(res.unread);
       // Reset filter saat re-fetch — hanya saat popover tertutup agar tidak mengganggu yang sedang membaca
       if (!openRef.current) setFilter("all");
       firstLoadDoneRef.current = true;
@@ -76,6 +84,26 @@ export default function NotificationCenter() {
       setLoading(false);
     }
   }, [user]);
+
+  // Turunan tampilan: preferensi mute/hideRead + filter segmented + hitung unread
+  const { visible, unread, hasDangerUnread } = useMemo(() => {
+    const applied = applyNotifPrefs(items, prefs);
+    const shown = filter === "unread" ? applied.items.filter((i) => !i.read) : applied.items;
+    const danger = applied.unread > 0 && applied.items.some((i) => !i.read && i.severity === "danger");
+    return { visible: shown, unread: applied.unread, hasDangerUnread: danger };
+  }, [items, prefs, filter]);
+
+  // Event global: buka popover dari luar (widget dashboard)
+  useEffect(() => {
+    const onOpen = () => {
+      setOpen(true);
+      setFilter("all");
+      setShowPrefs(false);
+      void load();
+    };
+    window.addEventListener(OPEN_NOTIF_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_NOTIF_EVENT, onOpen);
+  }, [load]);
 
   // Fetch awal saat user login + refetch saat filter brand global berubah
   useEffect(() => {
@@ -106,7 +134,6 @@ export default function NotificationCenter() {
     if (!u) return;
     if (!n.read) {
       setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: true } : i)));
-      setUnread((c) => Math.max(0, c - 1));
       api.markNotifications({ user: u.email, action: "read", keys: [n.key] }).catch(() => {});
     }
     if (NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
@@ -118,7 +145,6 @@ export default function NotificationCenter() {
     const u = user;
     if (!u) return;
     setItems((prev) => prev.filter((i) => i.key !== n.key));
-    if (!n.read) setUnread((c) => Math.max(0, c - 1));
     api.markNotifications({ user: u.email, action: "dismiss", keys: [n.key] }).catch(() => {
       toast.error("Gagal menghapus notifikasi");
       void load(true);
@@ -132,7 +158,6 @@ export default function NotificationCenter() {
     if (keys.length === 0) return;
     setActing(true);
     setItems((prev) => prev.map((i) => ({ ...i, read: true })));
-    setUnread(0);
     try {
       await api.markNotifications({ user: u.email, action: "read", keys });
       void load(true);
@@ -146,8 +171,6 @@ export default function NotificationCenter() {
 
   if (!user) return null;
 
-  const visible = filter === "unread" ? items.filter((i) => !i.read) : items;
-  const hasDangerUnread = unread > 0 && items.some((i) => !i.read && i.severity === "danger");
   const showSkeleton = loading && items.length === 0;
 
   return (
@@ -189,6 +212,17 @@ export default function NotificationCenter() {
             variant="ghost"
             size="icon"
             className="h-7 w-7 shrink-0 text-zinc-500 hover:text-zinc-900"
+            onClick={() => setShowPrefs((v) => !v)}
+            aria-expanded={showPrefs}
+            aria-label="Preferensi notifikasi"
+            title="Preferensi notifikasi"
+          >
+            <SlidersHorizontal className={cn("h-4 w-4", showPrefs && "text-zinc-900")} aria-hidden />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 text-zinc-500 hover:text-zinc-900"
             disabled={unread === 0 || acting}
             onClick={handleMarkAll}
             aria-label="Tandai semua dibaca"
@@ -197,6 +231,45 @@ export default function NotificationCenter() {
             <CheckCheck className="h-4 w-4" aria-hidden />
           </Button>
         </div>
+
+        {/* Panel preferensi (mute per tipe) */}
+        {showPrefs ? (
+          <div className="border-b border-zinc-200 bg-zinc-50/60 px-4 py-3" role="region" aria-label="Preferensi notifikasi">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Tipe notifikasi</p>
+            <p className="mt-0.5 text-[10px] text-zinc-400">Tipe yang dimatikan tidak tampil & tidak dihitung sebagai belum dibaca. Tersimpan per pengguna di perangkat ini.</p>
+            <ul className="mt-2 space-y-1">
+              {NOTIF_TYPES.map((t) => {
+                const muted = prefs.muted.includes(t.key);
+                return (
+                  <li key={t.key} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5">
+                    <span className="min-w-0">
+                      <span className={cn("block text-xs font-medium", muted ? "text-zinc-400" : "text-zinc-900")}>{t.label}</span>
+                      <span className="block truncate text-[10px] text-zinc-400">{t.hint}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className={cn("text-[10px] font-medium", muted ? "text-rose-500" : "text-emerald-600")}>
+                        {muted ? "Mute" : "Aktif"}
+                      </span>
+                      <Switch
+                        checked={!muted}
+                        onCheckedChange={() => toggleMuted(t.key)}
+                        aria-label={`${muted ? "Aktifkan" : "Matikan"} notifikasi ${t.label}`}
+                      />
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5">
+              <span className="text-xs font-medium text-zinc-900">Sembunyikan yang sudah dibaca</span>
+              <Switch
+                checked={prefs.hideRead}
+                onCheckedChange={(v) => update({ hideRead: v })}
+                aria-label="Sembunyikan notifikasi yang sudah dibaca"
+              />
+            </label>
+          </div>
+        ) : null}
 
         {/* Filter segmented */}
         <div className="border-b border-zinc-200 px-4 py-2">

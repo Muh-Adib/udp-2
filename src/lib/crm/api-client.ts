@@ -109,11 +109,12 @@ export const api = {
     request<{ candidates: MatchCandidateDTO[] }>("/api/identify", { method: "POST", body: JSON.stringify(identity) }),
 
   // Inbox
-  inbox: (params?: { channel?: string; brandId?: string }) => {
+  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
-    return request<{ leads: (InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] })[] }>(`/api/inbox?${sp}`);
+    if (params?.sweep) sp.set("sweep", "1");
+    return request<{ leads: (InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] })[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
     request<{ opportunity: OpportunityDTO }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
