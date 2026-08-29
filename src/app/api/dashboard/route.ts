@@ -8,7 +8,7 @@ const DAY = 24 * HOUR;
 export async function GET() {
   const [
     opportunities, interactions, tasks, invoices, projects, recentAudit, brands, pendingApprovals,
-    unresolvedInbound,
+    unresolvedInbound, pendingChangeRequests,
   ] = await Promise.all([
     db.opportunity.findMany({ where: { deletedAt: null }, include: { brand: true, contact: true, company: true } }),
     db.interaction.findMany({ orderBy: { createdAt: "desc" }, take: 500 }),
@@ -28,6 +28,8 @@ export async function GET() {
       where: { direction: "inbound", opportunityId: null, respondedAt: null },
       select: { createdAt: true, brandId: true, brand: { select: { slaHours: true } } },
     }),
+    // CR menunggu persetujuan klien (Fase 2 — Produksi)
+    db.changeRequest.count({ where: { status: "pending" } }),
   ]);
 
   const open = opportunities.filter((o) => (OPEN_STAGES as string[]).includes(o.stage));
@@ -204,5 +206,6 @@ export async function GET() {
     projectsAtRisk: projects.filter((p) => p.dueDate && p.dueDate.getTime() < now + 7 * DAY && p.status !== "completed").length,
     productionCapacity: projects.filter((p) => p.status === "in_progress" || p.status === "planning").length,
     slaBreaches,
+    pendingChangeRequests,
   });
 }

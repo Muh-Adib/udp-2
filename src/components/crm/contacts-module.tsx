@@ -5,15 +5,18 @@
 // Identitas calon klien global — terhubung ke seluruh brand.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
   Banknote,
   Briefcase,
   Building2,
+  CheckCircle2,
+  ChevronDown,
   Clock,
   ExternalLink,
+  FileUp,
   GitMerge,
   Globe,
   Info,
@@ -30,9 +33,11 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Trash2,
+  Upload,
   UserPlus,
   Users,
   Video,
@@ -80,10 +85,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { CHANNELS } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { CompanyRef, ContactRef, MatchCandidateDTO } from "@/lib/crm/types";
+import type {
+  CompanyRef,
+  ContactRef,
+  ImportCommitResponseDTO,
+  ImportPreviewResponseDTO,
+  ImportPreviewRowDTO,
+  MatchCandidateDTO,
+} from "@/lib/crm/types";
 import { formatCurrency, initials, parseJsonArray } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
@@ -133,6 +146,18 @@ interface CompanyFormValues {
   size: string;
   defaultCurrency: string;
 }
+
+/** Satu baris hasil parse CSV — bentuk persis yang dikirim ke API impor massal. */
+type ImportRowValues = {
+  fullName: string;
+  email: string;
+  whatsapp: string;
+  phone: string;
+  company: string;
+  position: string;
+  country: string;
+  city: string;
+};
 
 // ---------- Konstanta & helper ----------
 
@@ -1404,6 +1429,599 @@ function CreateCompanyDialog({
   );
 }
 
+// ---------- Impor CSV (Task 11-a): parser murni & helper ----------
+
+const IMPORT_MAX_ROWS = 200;
+
+const IMPORT_TEMPLATE = [
+  "nama,email,whatsapp,perusahaan,jabatan,kota",
+  "Hendra Wijaya,hendra@nusantaranet.com,,PT Nusantara Digital Raya,Direktur Digital,Jakarta",
+  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Owner,Surabaya",
+  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Creative Director,Surabaya",
+  "Tanpa Kontak,,,PT Contoh Saja,,",
+].join("\n");
+
+const IMPORT_FIELD_ORDER: readonly (keyof ImportRowValues)[] = [
+  "fullName",
+  "email",
+  "whatsapp",
+  "phone",
+  "company",
+  "position",
+  "country",
+  "city",
+];
+
+const IMPORT_HEADER_SYNONYMS: Record<string, keyof ImportRowValues> = {
+  nama: "fullName",
+  name: "fullName",
+  fullname: "fullName",
+  email: "email",
+  whatsapp: "whatsapp",
+  wa: "whatsapp",
+  telepon: "phone",
+  telp: "phone",
+  phone: "phone",
+  perusahaan: "company",
+  company: "company",
+  jabatan: "position",
+  position: "position",
+  negara: "country",
+  country: "country",
+  kota: "city",
+  city: "city",
+};
+
+function emptyImportRow(): ImportRowValues {
+  return { fullName: "", email: "", whatsapp: "", phone: "", company: "", position: "", country: "", city: "" };
+}
+
+function isHeaderRow(cells: string[]): boolean {
+  return cells.some((c) => ["nama", "name", "email", "whatsapp"].includes(c.trim().toLowerCase()));
+}
+
+/** Deteksi separator dari baris pertama: titik koma (hasil ekspor Excel locale Indonesia) atau koma. */
+function detectCsvSeparator(firstLine: string): string {
+  const semis = (firstLine.match(/;/g) ?? []).length;
+  const commas = (firstLine.match(/,/g) ?? []).length;
+  return semis > commas ? ";" : ",";
+}
+
+/** Parser CSV murni (tanpa dep): quoted field dengan escape "", \r\n/\n, separator koma atau titik koma. */
+function parseCsv(text: string): string[][] {
+  const raw = text.replace(/^\uFEFF/, "").trim();
+  if (!raw) return [];
+  const firstNewline = raw.search(/\r?\n/);
+  const sep = detectCsvSeparator(firstNewline === -1 ? raw : raw.slice(0, firstNewline));
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (raw[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === sep) {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && raw[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.length > 1 || row[0] !== "") rows.push(row);
+
+  // Lewati baris yang seluruh selnya kosong.
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+
+/** Petakan baris hasil parse ke bentuk API: via header sinonim, atau posisi kolom bila tanpa header. */
+function mapCsvRows(rows: string[][]): ImportRowValues[] {
+  if (rows.length === 0) return [];
+  const header = isHeaderRow(rows[0]);
+  const cols = header
+    ? rows[0].map((c) => IMPORT_HEADER_SYNONYMS[c.trim().toLowerCase()] ?? null)
+    : IMPORT_FIELD_ORDER;
+  const body = header ? rows.slice(1) : rows;
+  return body.map((cells) => {
+    const out = emptyImportRow();
+    cols.forEach((key, colIdx) => {
+      if (key) out[key] = (cells[colIdx] ?? "").trim();
+    });
+    return out;
+  });
+}
+
+function importActionBorderClass(action: ImportPreviewRowDTO["action"]): string {
+  if (action === "auto_create") return "border-l-emerald-500";
+  if (action === "review") return "border-l-amber-500";
+  return "border-l-rose-500";
+}
+
+// ---------- Dialog: Impor CSV (3 langkah) ----------
+
+function ImportCsvDialog({
+  open,
+  onOpenChange,
+  onImported,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onImported: () => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [step, setStep] = useState<"input" | "review" | "done">("input");
+  const [csvText, setCsvText] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreviewResponseDTO | null>(null);
+  const [decisions, setDecisions] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [analyzing, setAnalyzing] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [commitResult, setCommitResult] = useState<ImportCommitResponseDTO | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setStep("input");
+      setCsvText("");
+      setFileName(null);
+      setPreview(null);
+      setDecisions({});
+      setExpanded({});
+      setAnalyzing(false);
+      setCommitting(false);
+      setCommitResult(null);
+    }
+  }, [open]);
+
+  const parsedRows = useMemo(() => mapCsvRows(parseCsv(csvText)), [csvText]);
+  const overLimit = parsedRows.length > IMPORT_MAX_ROWS;
+
+  function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCsvText(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => toast.error("Gagal membaca file CSV");
+    reader.readAsText(file);
+    e.target.value = ""; // agar file yang sama bisa diunggah ulang
+  }
+
+  async function analyze() {
+    if (parsedRows.length === 0) {
+      toast.error("Tidak ada baris untuk dianalisis — unggah file atau tempel data CSV");
+      return;
+    }
+    if (overLimit) {
+      toast.error(`Maksimal ${IMPORT_MAX_ROWS} baris per impor (terdeteksi ${parsedRows.length})`);
+      return;
+    }
+    setAnalyzing(true);
+    try {
+      const res = await api.importContacts({
+        rows: parsedRows,
+        commit: false,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      const data = res as ImportPreviewResponseDTO;
+      const nextDecisions: Record<string, string> = {};
+      const nextExpanded: Record<string, boolean> = {};
+      for (const row of data.preview) {
+        nextDecisions[String(row.index)] = row.status === "invalid" ? "skip" : row.suggested;
+        nextExpanded[String(row.index)] = row.action === "review";
+      }
+      setDecisions(nextDecisions);
+      setExpanded(nextExpanded);
+      setPreview(data);
+      setStep("review");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menganalisis data impor");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  function setDecision(index: number, value: string) {
+    setDecisions((d) => ({ ...d, [String(index)]: value }));
+  }
+
+  function toggleExpanded(index: number) {
+    setExpanded((e) => ({ ...e, [String(index)]: !e[String(index)] }));
+  }
+
+  const importCount = preview
+    ? preview.preview.filter((r) => (decisions[String(r.index)] ?? r.suggested) !== "skip").length
+    : 0;
+
+  async function commit() {
+    if (!preview) return;
+    setCommitting(true);
+    try {
+      const res = await api.importContacts({
+        rows: parsedRows,
+        decisions,
+        commit: true,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      const data = res as ImportCommitResponseDTO;
+      setCommitResult(data);
+      setStep("done");
+      if (data.summary.created + data.summary.linked > 0) {
+        toast.success(`Impor selesai — ${data.summary.created} baru, ${data.summary.linked} digabung`);
+      } else {
+        toast.info("Impor selesai — tidak ada kontak yang dibuat atau digabung");
+      }
+      onImported(); // segarkan daftar kontak di belakang dialog
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengimpor kontak");
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  function backToInput() {
+    setPreview(null);
+    setDecisions({});
+    setExpanded({});
+    setStep("input");
+  }
+
+  function importAgain() {
+    setStep("input");
+    setCsvText("");
+    setFileName(null);
+    setPreview(null);
+    setDecisions({});
+    setExpanded({});
+    setCommitResult(null);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+        {step === "input" && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileUp className="size-5 text-zinc-900" /> Impor CSV
+              </DialogTitle>
+              <DialogDescription>
+                Unggah atau tempel daftar kontak. Sistem mendeteksi duplikat (email, WhatsApp, telepon, nama) sebelum
+                menyimpan.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {/* 1a. Unggah file */}
+              <label
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/60 p-4 transition-colors hover:border-zinc-400 hover:bg-zinc-100",
+                  analyzing && "pointer-events-none opacity-60"
+                )}
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-zinc-200/70 text-zinc-500">
+                  <Upload className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-zinc-800">
+                    {fileName ?? "Pilih file CSV dari komputer"}
+                  </span>
+                  <span className="block text-xs text-zinc-500">
+                    Header kolom dipetakan otomatis · maksimal {IMPORT_MAX_ROWS} baris
+                  </span>
+                </span>
+                <span className="shrink-0 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700">
+                  Pilih File
+                </span>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={handleFile}
+                  aria-label="Unggah file CSV"
+                />
+              </label>
+
+              {/* 1b. Tempel data */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-zinc-600">atau tempel data CSV</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setCsvText(IMPORT_TEMPLATE);
+                      setFileName(null);
+                    }}
+                    aria-label="Isi area tempel dengan contoh data CSV"
+                  >
+                    Isi contoh
+                  </Button>
+                </div>
+                <Textarea
+                  value={csvText}
+                  onChange={(e) => setCsvText(e.target.value)}
+                  placeholder={IMPORT_TEMPLATE}
+                  aria-label="Tempel data CSV"
+                  disabled={analyzing}
+                  className="min-h-36 font-mono text-xs"
+                />
+              </div>
+
+              {/* Contoh format */}
+              <div className="rounded-xl border bg-white p-3 shadow-sm">
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Contoh format</p>
+                <pre className="overflow-x-auto rounded-lg bg-zinc-50 p-2.5 font-mono text-[11px] leading-relaxed text-zinc-600 crm-scroll">
+                  {IMPORT_TEMPLATE}
+                </pre>
+                <p className="mt-1.5 text-[11px] text-zinc-400">
+                  Kolom didukung: nama, email, whatsapp, telepon, perusahaan, jabatan, negara, kota. Tanpa header,
+                  urutan kolom mengikuti contoh di atas.
+                </p>
+              </div>
+
+              {/* Statistik hasil parse + analisis */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-white p-3 shadow-sm">
+                {parsedRows.length === 0 ? (
+                  <p className="text-sm text-zinc-400">Belum ada data untuk dianalisis.</p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        "border-transparent",
+                        overLimit ? "bg-rose-100 text-rose-700" : "bg-zinc-200/70 text-zinc-700"
+                      )}
+                    >
+                      {parsedRows.length} baris terdeteksi
+                    </Badge>
+                    {overLimit && (
+                      <Badge className="border-transparent bg-rose-100 text-rose-700">
+                        Melebihi batas {IMPORT_MAX_ROWS} baris
+                      </Badge>
+                    )}
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  className="bg-zinc-900 text-white hover:bg-zinc-800"
+                  onClick={() => void analyze()}
+                  disabled={analyzing || parsedRows.length === 0 || overLimit}
+                  aria-label="Analisis duplikat sebelum impor"
+                >
+                  {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                  {analyzing ? "Menganalisis…" : "Analisis Duplikat"}
+                </Button>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={analyzing}>
+                Batal
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {step === "review" && preview && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <GitMerge className="size-5 text-zinc-900" /> Tinjau &amp; Keputusan
+              </DialogTitle>
+              <DialogDescription>
+                Putuskan tiap baris: buat baru, gabungkan ke kontak existing, atau lewati. Baris invalid otomatis
+                dilewati.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Ringkasan */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge variant="secondary" className="border-transparent bg-zinc-200/70 text-zinc-700">
+                Total {preview.summary.total}
+              </Badge>
+              <Badge className="border-transparent bg-emerald-100 text-emerald-700">
+                {preview.summary.valid} valid
+              </Badge>
+              <Badge className="border-transparent bg-amber-100 text-amber-700">
+                {preview.summary.review} perlu keputusan
+              </Badge>
+              <Badge className="border-transparent bg-rose-100 text-rose-700">
+                {preview.summary.invalid} invalid
+              </Badge>
+            </div>
+
+            {/* Daftar baris */}
+            <div className="max-h-[420px] space-y-2 overflow-y-auto crm-scroll pr-1">
+              {preview.preview.map((row) => {
+                const decision = decisions[String(row.index)] ?? row.suggested;
+                const isInvalid = row.status === "invalid";
+                const hasCandidates = row.candidates.length > 0;
+                const isOpen = Boolean(expanded[String(row.index)]);
+                return (
+                  <div
+                    key={row.index}
+                    className={cn("rounded-lg border border-l-4 p-3", importActionBorderClass(row.action))}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono text-[11px] text-zinc-400">#{row.index + 1}</span>
+                          <span className="truncate text-sm font-semibold text-zinc-900">{row.fullName || "—"}</span>
+                          {isInvalid && <Badge className="border-transparent bg-rose-100 text-rose-700">Invalid</Badge>}
+                        </p>
+                        {row.company && <p className="mt-0.5 truncate text-xs text-zinc-500">{row.company}</p>}
+                        {row.intraBatch && (
+                          <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
+                            <AlertTriangle className="size-3.5 shrink-0" /> {row.intraBatch}
+                          </p>
+                        )}
+                        {row.errors.length > 0 && <p className="mt-1 text-xs text-rose-600">{row.errors.join(" · ")}</p>}
+                        {hasCandidates && (
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(row.index)}
+                            aria-label={`${isOpen ? "Sembunyikan" : "Lihat"} kandidat kecocokan baris ${row.index + 1}`}
+                            className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-800"
+                          >
+                            <ChevronDown className={cn("size-3.5 transition-transform", isOpen && "rotate-180")} />
+                            {row.candidates.length} kandidat kecocokan
+                          </button>
+                        )}
+                      </div>
+                      {!isInvalid && (
+                        <Select
+                          value={decision}
+                          onValueChange={(v) => setDecision(row.index, v)}
+                          disabled={committing}
+                        >
+                          <SelectTrigger
+                            className="w-[170px] shrink-0"
+                            aria-label={`Keputusan baris ${row.index + 1}`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="create">Buat baru</SelectItem>
+                            {row.candidates.map((c) => (
+                              <SelectItem key={c.contactId} value={`link:${c.contactId}`}>
+                                Gabung: {c.name ?? "Contact"} ({c.score}%)
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="skip">Lewati</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+
+                    {hasCandidates && isOpen && (
+                      <ul className="mt-2 space-y-1.5 border-t border-zinc-100 pt-2">
+                        {row.candidates.map((c) => (
+                          <li key={c.contactId} className="flex items-start gap-2">
+                            <Badge
+                              className={cn(
+                                "shrink-0 border-transparent",
+                                c.score >= 85 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                              )}
+                            >
+                              Skor {c.score}
+                            </Badge>
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium text-zinc-700">
+                                {c.name ?? "Contact"}
+                                {c.company ? ` · ${c.company}` : ""}
+                              </p>
+                              {c.reasons.length > 0 && (
+                                <p className="truncate text-[11px] text-zinc-400">
+                                  {c.reasons.slice(0, 2).join(" · ")}
+                                </p>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={backToInput} disabled={committing}>
+                Kembali
+              </Button>
+              <Button
+                type="button"
+                className="bg-zinc-900 text-white hover:bg-zinc-800"
+                onClick={() => void commit()}
+                disabled={committing || importCount === 0}
+                aria-label={`Impor ${importCount} kontak`}
+              >
+                {committing ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+                {committing ? "Mengimpor…" : `Impor ${importCount} kontak`}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {step === "done" && commitResult && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <CheckCircle2 className="size-5 text-emerald-600" /> Impor Selesai
+              </DialogTitle>
+              <DialogDescription>Ringkasan hasil impor kontak dari CSV.</DialogDescription>
+            </DialogHeader>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-xl border bg-white p-3 text-center shadow-sm">
+                <p className="text-xl font-bold tabular-nums text-emerald-600">{commitResult.summary.created}</p>
+                <p className="text-xs text-zinc-500">Baru</p>
+              </div>
+              <div className="rounded-xl border bg-white p-3 text-center shadow-sm">
+                <p className="text-xl font-bold tabular-nums text-violet-600">{commitResult.summary.linked}</p>
+                <p className="text-xs text-zinc-500">Digabung</p>
+              </div>
+              <div className="rounded-xl border bg-white p-3 text-center shadow-sm">
+                <p className="text-xl font-bold tabular-nums text-zinc-600">{commitResult.summary.skipped}</p>
+                <p className="text-xs text-zinc-500">Dilewati</p>
+              </div>
+              <div className="rounded-xl border bg-white p-3 text-center shadow-sm">
+                <p className="text-xl font-bold tabular-nums text-rose-600">{commitResult.summary.invalid}</p>
+                <p className="text-xs text-zinc-500">Invalid</p>
+              </div>
+            </div>
+
+            {commitResult.summary.companiesCreated > 0 && (
+              <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+                <Building2 className="size-4" /> ＋{commitResult.summary.companiesCreated} perusahaan baru dibuat
+              </p>
+            )}
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={importAgain}>
+                <RotateCcw className="size-4" /> Impor lagi
+              </Button>
+              <Button
+                type="button"
+                className="bg-zinc-900 text-white hover:bg-zinc-800"
+                onClick={() => onOpenChange(false)}
+              >
+                Selesai
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- Modul utama ----------
 
 export default function ContactsModule() {
@@ -1434,6 +2052,7 @@ export default function ContactsModule() {
   });
   const [createContactOpen, setCreateContactOpen] = useState(false);
   const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
+  const [importCsvOpen, setImportCsvOpen] = useState(false);
   const [mergeState, setMergeState] = useState<{ newContactId: string; candidates: MatchCandidateDTO[] } | null>(null);
   const [merging, setMerging] = useState(false);
 
@@ -1643,6 +2262,14 @@ export default function ContactsModule() {
               className="w-full pl-9 sm:w-72"
             />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportCsvOpen(true)}
+            aria-label="Impor kontak dari file CSV"
+          >
+            <FileUp className="size-4" /> Impor CSV
+          </Button>
           {tab === "contacts" ? (
             <Button
               onClick={() => setCreateContactOpen(true)}
@@ -1790,6 +2417,15 @@ export default function ContactsModule() {
         open={createCompanyOpen}
         onOpenChange={setCreateCompanyOpen}
         onCreated={handleCompanyCreated}
+      />
+
+      {/* Dialog impor CSV massal dengan dedupe */}
+      <ImportCsvDialog
+        open={importCsvOpen}
+        onOpenChange={setImportCsvOpen}
+        onImported={() => {
+          void refreshAll();
+        }}
       />
 
       {/* Dialog merge pasca-create */}

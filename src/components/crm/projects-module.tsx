@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CalendarClock, CalendarDays, Check, CheckCircle2, CircleDashed, CircleDotDashed,
-  Factory, FolderKanban, GitPullRequestArrow, Plus, ReceiptText, RefreshCw, User2, X,
+  CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, CircleDashed, CircleDotDashed,
+  Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -174,6 +174,207 @@ function ProjectCard({ project, onOpen, onMilestoneClick }: {
   );
 }
 
+// ============ Timeline (Gantt) view ============
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function shortDate(ts: number): string {
+  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(ts);
+}
+
+function TimelineRow({ project, pct, onOpen }: {
+  project: ProjectDTO;
+  pct: (ts: number) => number;
+  onOpen: (p: ProjectDTO) => void;
+}) {
+  const barCls =
+    project.status === "in_progress" ? "bg-zinc-900/90"
+    : project.status === "review" ? "bg-violet-500"
+    : project.status === "completed" ? "bg-emerald-500"
+    : "bg-zinc-400";
+  const startTs = project.startDate ? new Date(project.startDate).getTime() : NaN;
+  const endTs = project.dueDate ? new Date(project.dueDate).getTime() : NaN;
+  const hasStart = Number.isFinite(startTs);
+  const hasEnd = Number.isFinite(endTs);
+  const leftPct = hasStart ? pct(startTs) : null;
+  const widthPct = hasStart && hasEnd ? Math.max(pct(endTs) - pct(startTs), 2) : null;
+  const barWidth = widthPct !== null ? Math.min(widthPct, 100 - (leftPct ?? 0)) : null;
+  const barTitle = `${project.name} · ${formatDate(project.startDate)} → ${formatDate(project.dueDate)} · ${project.progress}%`;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(project)}
+      aria-label={`Buka detail project ${project.name}`}
+      className="flex h-11 w-full border-t border-zinc-100 text-left transition-colors hover:bg-zinc-50"
+    >
+      <div className="flex w-[200px] shrink-0 items-center gap-2 overflow-hidden pr-3">
+        <span
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: project.brand?.color ?? "#a1a1aa" }}
+          aria-hidden
+        />
+        <div className="min-w-0">
+          <p className="truncate font-mono text-[11px] leading-tight text-zinc-500">{project.code}</p>
+          <p className="truncate text-sm leading-tight text-zinc-800">{project.name}</p>
+        </div>
+      </div>
+      <div className="relative flex-1">
+        {leftPct !== null && barWidth !== null ? (
+          <div
+            className={`absolute top-1/2 h-5 -translate-y-1/2 rounded-full ${barCls}`}
+            style={{ left: `${leftPct}%`, width: `${barWidth}%` }}
+            title={barTitle}
+          >
+            {widthPct !== null && widthPct >= 14 ? (
+              <span className="absolute inset-y-0 right-1.5 flex items-center text-[10px] font-semibold text-white">
+                {project.progress}%
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {leftPct !== null && barWidth !== null && widthPct !== null && widthPct < 14 ? (
+          <span
+            className="absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-zinc-500"
+            style={{ left: `calc(${leftPct + barWidth}% + 6px)` }}
+          >
+            {project.progress}%
+          </span>
+        ) : null}
+        {leftPct !== null && barWidth === null ? (
+          <span
+            className={`absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full ${barCls}`}
+            style={{ left: `${leftPct}%` }}
+            title={barTitle}
+          />
+        ) : null}
+        {!hasStart && !hasEnd ? (
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-zinc-400">
+            Tanpa tanggal
+          </span>
+        ) : null}
+        {(project.milestones ?? []).map((m) => {
+          if (!m.dueDate) return null;
+          const ts = new Date(m.dueDate).getTime();
+          if (!Number.isFinite(ts)) return null;
+          const dCls =
+            m.status === "done" ? "bg-emerald-500"
+            : m.status === "in_progress" ? "bg-amber-500"
+            : "bg-zinc-300";
+          return (
+            <span
+              key={m.id}
+              className={`absolute h-2.5 w-2.5 rounded-[2px] ${dCls}`}
+              style={{
+                left: `${pct(ts)}%`,
+                top: "calc(50% - 10px)",
+                transform: "translate(-50%, -50%) rotate(45deg)",
+              }}
+              title={`${m.name} · ${msMeta(m.status).label}`}
+            />
+          );
+        })}
+      </div>
+    </button>
+  );
+}
+
+function TimelineView({ projects, onOpen }: { projects: ProjectDTO[]; onOpen: (p: ProjectDTO) => void }) {
+  const range = useMemo(() => {
+    const now = Date.now();
+    let min: number | null = null;
+    let max: number | null = null;
+    for (const p of projects) {
+      let contributed = false;
+      const track = (raw?: string | Date | number | null) => {
+        if (!raw) return;
+        const ts = new Date(raw).getTime();
+        if (!Number.isFinite(ts)) return;
+        min = min === null ? ts : Math.min(min, ts);
+        max = max === null ? ts : Math.max(max, ts);
+        contributed = true;
+      };
+      track(p.startDate);
+      track(p.dueDate);
+      for (const m of p.milestones ?? []) track(m.dueDate);
+      if (!contributed) track(now); // fallback: project tanpa tanggal → acuan hari ini
+    }
+    if (min === null || max === null) return { min: now - 15 * DAY_MS, max: now + 15 * DAY_MS };
+    const pad = 7 * DAY_MS;
+    return { min: min - pad, max: max + pad };
+  }, [projects]);
+
+  const span = Math.max(range.max - range.min, DAY_MS);
+  const pct = useCallback((ts: number) => Math.max(0, Math.min(100, ((ts - range.min) / span) * 100)), [range.min, span]);
+  const nowPct = pct(Date.now());
+
+  const gridlines = useMemo(() => {
+    const n = 6;
+    return Array.from({ length: n }, (_, i) => {
+      const ratio = i / (n - 1);
+      return { pct: ratio * 100, label: shortDate(range.min + ratio * span) };
+    });
+  }, [range.min, span]);
+
+  const todayTransform = nowPct <= 5 ? "translateX(0)" : nowPct >= 95 ? "translateX(-100%)" : "translateX(-50%)";
+
+  return (
+    <div className="overflow-x-auto crm-scroll rounded-xl border bg-white p-4 shadow-sm">
+      <div className="min-w-[760px]">
+        {/* Sumbu waktu (header) */}
+        <div className="flex">
+          <div className="w-[200px] shrink-0" />
+          <div className="relative h-7 flex-1">
+            {gridlines.map((g, i) => (
+              <span
+                key={i}
+                className="absolute top-0 whitespace-nowrap text-[10px] tabular-nums text-zinc-400"
+                style={{
+                  left: `${g.pct}%`,
+                  transform: i === 0 ? "translateX(0)" : i === gridlines.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+                }}
+              >
+                {g.label}
+              </span>
+            ))}
+            <span
+              className="absolute top-0 whitespace-nowrap text-[10px] font-semibold text-rose-500"
+              style={{ left: `${nowPct}%`, transform: todayTransform }}
+            >
+              Hari ini
+            </span>
+          </div>
+        </div>
+
+        {/* Baris project + gridline vertikal */}
+        <div className="relative">
+          <div className="pointer-events-none absolute inset-y-0 left-[200px] right-0" aria-hidden>
+            {gridlines.map((g, i) => (
+              <div key={i} className="absolute inset-y-0 border-l border-dashed border-zinc-200" style={{ left: `${g.pct}%` }} />
+            ))}
+            <div className="absolute inset-y-0 border-l-2 border-rose-400" style={{ left: `${nowPct}%` }} />
+          </div>
+          {projects.map((p) => (
+            <TimelineRow key={p.id} project={p} pct={pct} onOpen={onOpen} />
+          ))}
+        </div>
+
+        {/* Legenda */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-500">
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-400" aria-hidden /> Perencanaan</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-900/90" aria-hidden /> Berjalan</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-violet-500" aria-hidden /> Review</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-emerald-500" aria-hidden /> Selesai</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+          <span className="flex items-center gap-1.5"><span className="h-3.5 border-l-2 border-rose-400" aria-hidden /> Hari ini</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProjectsSkeleton() {
   return (
     <div className="space-y-6" aria-hidden>
@@ -203,6 +404,7 @@ export default function ProjectsModule() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const [brandFilter, setBrandFilter] = useState("all");
+  const [view, setView] = useState<"cards" | "timeline">("cards");
 
   const [detail, setDetail] = useState<ProjectDTO | null>(null);
   const [editStatus, setEditStatus] = useState("planning");
@@ -216,7 +418,7 @@ export default function ProjectsModule() {
   const [crCost, setCrCost] = useState("");
   const [crDays, setCrDays] = useState("");
   const [crSaving, setCrSaving] = useState(false);
-  const [decideTarget, setDecideTarget] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" } | null>(null);
+  const [decideTarget, setDecideTarget] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" | "cancel" } | null>(null);
   const [decideNote, setDecideNote] = useState("");
   const [deciding, setDeciding] = useState(false);
 
@@ -338,7 +540,7 @@ export default function ProjectsModule() {
     }
   }
 
-  function openDecide(cr: ChangeRequestDTO, decision: "approve" | "reject") {
+  function openDecide(cr: ChangeRequestDTO, decision: "approve" | "reject" | "cancel") {
     setDecideNote("");
     setDecideTarget({ cr, decision });
   }
@@ -358,6 +560,8 @@ export default function ProjectsModule() {
         toast.success(res.invoice
           ? `CR ${res.changeRequest.number} disetujui — invoice ${res.invoice.number} dibuat`
           : `CR ${res.changeRequest.number} disetujui`);
+      } else if (decideTarget.decision === "cancel") {
+        toast.info(`CR ${res.changeRequest.number} dibatalkan`);
       } else {
         toast.success(`CR ${res.changeRequest.number} ditolak`);
       }
@@ -426,32 +630,67 @@ export default function ProjectsModule() {
             {storeBrands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <span className="text-xs text-zinc-500 sm:ml-auto">
-          {stats.total} project · {stats.active} aktif · rata-rata progress {stats.avgProgress}%
-        </span>
+        <div className="flex flex-wrap items-center gap-3 sm:ml-auto">
+          <span className="text-xs text-zinc-500">
+            {stats.total} project · {stats.active} aktif · rata-rata progress {stats.avgProgress}%
+          </span>
+          <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5" role="group" aria-label="Mode tampilan project">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setView("cards")}
+              aria-pressed={view === "cards"}
+              aria-label="Tampilan kartu"
+              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "cards" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" aria-hidden /> Kartu
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setView("timeline")}
+              aria-pressed={view === "timeline"}
+              aria-label="Tampilan timeline"
+              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "timeline" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+            >
+              <ChartGantt className="h-3.5 w-3.5" aria-hidden /> Timeline
+            </Button>
+          </div>
+        </div>
       </div>
 
       {error ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
       ) : null}
 
-      {/* Grid kartu */}
-      {(projects ?? []).length === 0 ? (
+      {/* Tampilan kartu / timeline */}
+      {view === "cards" ? (
+        (projects ?? []).length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+            <FolderKanban className="h-8 w-8 text-zinc-300" aria-hidden />
+            <p className="text-sm text-zinc-400">Belum ada project untuk filter ini.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {(projects ?? []).map((p) => (
+              <ProjectCard
+                key={p.id}
+                project={p}
+                onOpen={() => openDetail(p)}
+                onMilestoneClick={(m) => confirmMilestone(p, m)}
+              />
+            ))}
+          </div>
+        )
+      ) : (projects ?? []).length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
-          <FolderKanban className="h-8 w-8 text-zinc-300" aria-hidden />
-          <p className="text-sm text-zinc-400">Belum ada project untuk filter ini.</p>
+          <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />
+          <p className="text-sm text-zinc-400">Tidak ada project untuk filter ini.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {(projects ?? []).map((p) => (
-            <ProjectCard
-              key={p.id}
-              project={p}
-              onOpen={() => openDetail(p)}
-              onMilestoneClick={(m) => confirmMilestone(p, m)}
-            />
-          ))}
-        </div>
+        <TimelineView projects={projects ?? []} onOpen={openDetail} />
       )}
 
       {/* Sheet detail */}
@@ -614,24 +853,37 @@ export default function ProjectsModule() {
                                 ) : null}
                               </div>
                             ) : null}
-                            {cr.status === "pending" && canDecideCr ? (
-                              <div className="mt-2.5 flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  className="bg-emerald-600 text-white hover:bg-emerald-700"
-                                  onClick={() => openDecide(cr, "approve")}
-                                  aria-label={`Setujui change request ${cr.number}`}
-                                >
-                                  <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
-                                </Button>
+                            {cr.status === "pending" ? (
+                              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                                {canDecideCr ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+                                      onClick={() => openDecide(cr, "approve")}
+                                      aria-label={`Setujui change request ${cr.number}`}
+                                    >
+                                      <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                      onClick={() => openDecide(cr, "reject")}
+                                      aria-label={`Tolak change request ${cr.number}`}
+                                    >
+                                      <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+                                    </Button>
+                                  </>
+                                ) : null}
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-                                  onClick={() => openDecide(cr, "reject")}
-                                  aria-label={`Tolak change request ${cr.number}`}
+                                  className="border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-800"
+                                  onClick={() => openDecide(cr, "cancel")}
+                                  aria-label={`Batalkan change request ${cr.number}`}
                                 >
-                                  <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+                                  <XCircle className="h-3.5 w-3.5" aria-hidden /> Batalkan
                                 </Button>
                               </div>
                             ) : null}
@@ -774,15 +1026,27 @@ export default function ProjectsModule() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {decideTarget?.decision === "approve" ? "Setujui change request?" : "Tolak change request?"}
+              {decideTarget?.decision === "approve"
+                ? "Setujui change request?"
+                : decideTarget?.decision === "cancel"
+                  ? "Batalkan change request?"
+                  : "Tolak change request?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {decideTarget
-                ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
-                : ""}
-              {decideTarget?.decision === "approve"
-                ? " Nilai kontrak &amp; deadline project akan diperbarui dan invoice tambahan diterbitkan otomatis."
-                : " Perubahan scope tidak akan diterapkan."}
+              {decideTarget?.decision === "cancel" ? (
+                decideTarget
+                  ? `${decideTarget.cr.number} akan dibatalkan dan tidak diproses lebih lanjut.`
+                  : ""
+              ) : (
+                <>
+                  {decideTarget
+                    ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
+                    : ""}
+                  {decideTarget?.decision === "approve"
+                    ? " Nilai kontrak &amp; deadline project akan diperbarui dan invoice tambahan diterbitkan otomatis."
+                    : " Perubahan scope tidak akan diterapkan."}
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid gap-1.5">
@@ -791,7 +1055,11 @@ export default function ProjectsModule() {
               id="cr-decision-note"
               value={decideNote}
               onChange={(e) => setDecideNote(e.target.value)}
-              placeholder={decideTarget?.decision === "approve" ? "Contoh: Disetujui sesuai diskusi dengan klien" : "Contoh: Scope di luar anggaran tahun ini"}
+              placeholder={
+                decideTarget?.decision === "approve" ? "Contoh: Disetujui sesuai diskusi dengan klien"
+                : decideTarget?.decision === "cancel" ? "Contoh: Change request diajukan keliru"
+                : "Contoh: Scope di luar anggaran tahun ini"
+              }
               rows={3}
               aria-label="Catatan keputusan change request"
             />
@@ -804,11 +1072,19 @@ export default function ProjectsModule() {
               className={
                 decideTarget?.decision === "approve"
                   ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                  : "bg-rose-600 text-white hover:bg-rose-700"
+                  : decideTarget?.decision === "cancel"
+                    ? "bg-zinc-900 text-white hover:bg-zinc-700"
+                    : "bg-rose-600 text-white hover:bg-rose-700"
               }
-              aria-label={decideTarget?.decision === "approve" ? "Konfirmasi setujui change request" : "Konfirmasi tolak change request"}
+              aria-label={`Konfirmasi ${decideTarget?.decision === "approve" ? "setujui" : decideTarget?.decision === "cancel" ? "batalkan" : "tolak"} change request`}
             >
-              {deciding ? "Memproses…" : decideTarget?.decision === "approve" ? "Ya, Setujui" : "Ya, Tolak"}
+              {deciding
+                ? "Memproses…"
+                : decideTarget?.decision === "approve"
+                  ? "Ya, Setujui"
+                  : decideTarget?.decision === "cancel"
+                    ? "Ya, Batalkan"
+                    : "Ya, Tolak"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

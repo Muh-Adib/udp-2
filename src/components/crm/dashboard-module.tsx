@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlarmClockOff, AlertTriangle, Check, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
+  AlarmClockOff, AlertTriangle, Check, CheckCircle2, Clock3, Factory, GitPullRequestArrow, Globe, Handshake, Minus, ReceiptText,
   RefreshCw, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
@@ -454,6 +454,8 @@ export default function DashboardModule() {
   const pendingApprovals = data.pendingApprovals ?? [];
   // Fase 3 — SLA monitoring
   const slaBreaches = data.slaBreaches ?? 0;
+  // Fase 2 Produksi — CR menunggu persetujuan klien
+  const pendingCRs = data.pendingChangeRequests ?? 0;
   const canOpenInbox = canAccess("inbox", user?.role);
   const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
   const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
@@ -593,6 +595,13 @@ export default function DashboardModule() {
             icon={AlarmClockOff}
             hint={slaBreaches > 0 ? "lead melewati SLA respons" : "Semua lead dalam SLA"}
             tone={slaBreaches > 0 ? "danger" : "ok"}
+          />
+          <KpiCard
+            label="CR Menunggu Klien"
+            value={String(pendingCRs)}
+            icon={GitPullRequestArrow}
+            hint={pendingCRs > 0 ? "change request menunggu persetujuan klien" : "Tidak ada change request pending"}
+            tone={pendingCRs > 0 ? "danger" : "ok"}
           />
         </div>
       </section>

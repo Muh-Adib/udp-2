@@ -330,6 +330,46 @@ export interface FollowUpTemplateDTO {
   approved: boolean;
 }
 
+// ============ IMPORT CSV (dedupe identity matching) ============
+
+export interface ImportCandidateDTO {
+  contactId: string;
+  score: number;
+  reasons: string[];
+  name?: string | null;
+  company?: string | null;
+}
+
+export interface ImportPreviewRowDTO {
+  index: number;
+  fullName: string;
+  company?: string | null;
+  status: "valid" | "invalid";
+  errors: string[];
+  action: "auto_create" | "review" | "invalid";
+  suggested: string; // "skip" | "create" | "link:<contactId>"
+  candidates: ImportCandidateDTO[];
+  intraBatch?: string;
+}
+
+export interface ImportPreviewResponseDTO {
+  preview: ImportPreviewRowDTO[];
+  summary: { total: number; valid: number; invalid: number; review: number };
+}
+
+export interface ImportCommitResultRowDTO {
+  index: number;
+  action: "create" | "link" | "skip" | "invalid";
+  contactId?: string;
+  label?: string;
+  error?: string;
+}
+
+export interface ImportCommitResponseDTO {
+  summary: { created: number; linked: number; skipped: number; invalid: number; companiesCreated: number };
+  results: ImportCommitResultRowDTO[];
+}
+
 export interface DashboardData {
   kpi: {
     totalLeads: number;
@@ -357,4 +397,6 @@ export interface DashboardData {
   pendingApprovals?: ApprovalRequestDTO[];
   /** Jumlah lead inbound belum direspons melewati SLA brand (Fase 3). */
   slaBreaches?: number;
+  /** Jumlah change request menunggu persetujuan klien (Fase 2 Produksi). */
+  pendingChangeRequests?: number;
 }

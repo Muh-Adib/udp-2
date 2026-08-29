@@ -100,6 +100,11 @@ export const api = {
     request<{ company: CompanyRef }>("/api/companies", { method: "POST", body: JSON.stringify(payload) }),
   mergeContacts: (primaryId: string, duplicateId: string, actorName: string) =>
     request<{ merged: boolean }>("/api/contacts/merge", { method: "POST", body: JSON.stringify({ primaryId, duplicateId, actorName }) }),
+  /** Import CSV massal: preview (commit=false) mengembalikan kandidat duplikat per baris; commit mengeksekusi keputusan. */
+  importContacts: (payload: { rows: Record<string, string>[]; decisions?: Record<string, string>; commit: boolean; actorName: string; actorRole: string }) =>
+    request<import("@/lib/crm/types").ImportPreviewResponseDTO | import("@/lib/crm/types").ImportCommitResponseDTO>(
+      "/api/contacts/import", { method: "POST", body: JSON.stringify(payload) }
+    ),
   identify: (identity: { email?: string; whatsapp?: string; fullName?: string; companyName?: string }) =>
     request<{ candidates: MatchCandidateDTO[] }>("/api/identify", { method: "POST", body: JSON.stringify(identity) }),
 

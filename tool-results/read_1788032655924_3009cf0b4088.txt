@@ -1,0 +1,702 @@
+   551→      </FormField>
+   552→      <FormField label="Jabatan">
+   553→        <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
+   554→      </FormField>
+   555→      <FormField label="Email">
+   556→        <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
+   557→      </FormField>
+   558→      <FormField label="WhatsApp">
+   559→        <Input value={values.whatsapp} onChange={(e) => setField("whatsapp")(e.target.value)} placeholder="+62…" disabled={disabled} />
+   560→      </FormField>
+   561→      <FormField label="Telepon">
+   562→        <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
+   563→      </FormField>
+   564→
+   565→      {mode === "create" ? (
+   566→        <FormField label="Perusahaan">
+   567→          <Input
+   568→            value={values.companyName}
+   569→            onChange={(e) => setField("companyName")(e.target.value)}
+   570→            placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
+   571→            disabled={disabled}
+   572→          />
+   573→        </FormField>
+   574→      ) : (
+   575→        <FormField label="Perusahaan">
+   576→          <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
+   577→            <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
+   578→              <SelectValue placeholder="Pilih perusahaan" />
+   579→            </SelectTrigger>
+   580→            <SelectContent>
+   581→              <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
+   582→              {companies.map((c) => (
+   583→                <SelectItem key={c.id} value={c.id}>
+   584→                  {c.name}
+   585→                </SelectItem>
+   586→              ))}
+   587→            </SelectContent>
+   588→          </Select>
+   589→        </FormField>
+   590→      )}
+   591→
+   592→      <FormField label="Kota">
+   593→        <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
+   594→      </FormField>
+   595→      <FormField label="Negara">
+   596→        <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={disabled} />
+   597→      </FormField>
+   598→      <FormField label="Kanal preferensi">
+   599→        <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
+   600→          <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
+   601→            <SelectValue placeholder="Pilih kanal" />
+   602→          </SelectTrigger>
+   603→          <SelectContent>
+   604→            {CHANNELS.map((c) => (
+   605→              <SelectItem key={c.key} value={c.key}>
+   606→                {c.label}
+   607→              </SelectItem>
+   608→            ))}
+   609→          </SelectContent>
+   610→        </Select>
+   611→      </FormField>
+   612→      <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
+   613→        <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
+   614→      </FormField>
+   615→    </div>
+   616→  );
+   617→}
+   618→
+   619→// ---------- Detail contact (Sheet) ----------
+   620→
+   621→function ContactDetailBody({
+   622→  contact,
+   623→  companies,
+   624→  onSaved,
+   625→  onDeleted,
+   626→  onOpenCompany,
+   627→}: {
+   628→  contact: ContactRecord;
+   629→  companies: CompanyRecord[];
+   630→  onSaved: (contact: ContactRef) => void;
+   631→  onDeleted: () => void;
+   632→  onOpenCompany: (company: CompanyRef) => void;
+   633→}) {
+   634→  const user = useCrmStore((s) => s.user);
+   635→  const [editing, setEditing] = useState(false);
+   636→  const [saving, setSaving] = useState(false);
+   637→  const [form, setForm] = useState<ContactFormValues>({
+   638→    firstName: contact.firstName ?? "",
+   639→    lastName: contact.lastName ?? "",
+   640→    position: contact.position ?? "",
+   641→    email: contact.email ?? "",
+   642→    whatsapp: contact.whatsapp ?? "",
+   643→    phone: contact.phone ?? "",
+   644→    companyName: contact.company?.name ?? "",
+   645→    companyId: contact.companyId || NO_VALUE,
+   646→    city: contact.city ?? "",
+   647→    country: contact.country ?? "",
+   648→    preferredChannel: contact.preferredChannel || "whatsapp",
+   649→    tagsText: "",
+   650→  });
+   651→  const [tags, setTags] = useState<string[]>(() => parseJsonArray(contact.tags));
+   652→  const [tagInput, setTagInput] = useState("");
+   653→  const [tagBusy, setTagBusy] = useState(false);
+   654→  const [deleting, setDeleting] = useState(false);
+   655→
+   656→  const PreferredIcon = CHANNEL_ICONS[contact.preferredChannel] ?? Globe;
+   657→  const company = contact.company ?? null;
+   658→  const oppCount = contact._count?.opportunities;
+   659→
+   660→  function patchForm(p: Partial<ContactFormValues>) {
+   661→    setForm((v) => ({ ...v, ...p }));
+   662→  }
+   663→
+   664→  async function handleSave(e: FormEvent<HTMLFormElement>) {
+   665→    e.preventDefault();
+   666→    if (!form.firstName.trim()) {
+   667→      toast.error("Nama depan wajib diisi");
+   668→      return;
+   669→    }
+   670→    setSaving(true);
+   671→    try {
+   672→      const res = await api.updateContact(contact.id, {
+   673→        firstName: form.firstName.trim(),
+   674→        lastName: form.lastName.trim() || null,
+   675→        position: form.position.trim() || null,
+   676→        email: form.email.trim() || null,
+   677→        whatsapp: form.whatsapp.trim() || null,
+   678→        phone: form.phone.trim() || null,
+   679→        city: form.city.trim() || null,
+   680→        country: form.country.trim() || null,
+   681→        preferredChannel: form.preferredChannel,
+   682→        companyId: form.companyId === NO_VALUE ? null : form.companyId,
+   683→        actorName: user?.name ?? "System",
+   684→        actorRole: user?.role ?? "system",
+   685→      });
+   686→      toast.success("Perubahan contact tersimpan");
+   687→      setEditing(false);
+   688→      onSaved(res.contact);
+   689→    } catch (err) {
+   690→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan perubahan");
+   691→    } finally {
+   692→      setSaving(false);
+   693→    }
+   694→  }
+   695→
+   696→  async function patchTags(next: string[]) {
+   697→    setTagBusy(true);
+   698→    try {
+   699→      const res = await api.updateContact(contact.id, {
+   700→        tags: next,
+   701→        actorName: user?.name ?? "System",
+   702→        actorRole: user?.role ?? "system",
+   703→      });
+   704→      setTags(next);
+   705→      onSaved(res.contact);
+   706→    } catch (err) {
+   707→      toast.error(err instanceof Error ? err.message : "Gagal memperbarui tag");
+   708→    } finally {
+   709→      setTagBusy(false);
+   710→    }
+   711→  }
+   712→
+   713→  function addTag() {
+   714→    const t = tagInput.trim();
+   715→    if (!t || tags.includes(t)) {
+   716→      setTagInput("");
+   717→      return;
+   718→    }
+   719→    setTagInput("");
+   720→    void patchTags([...tags, t]);
+   721→  }
+   722→
+   723→  function removeTag(t: string) {
+   724→    void patchTags(tags.filter((x) => x !== t));
+   725→  }
+   726→
+   727→  async function handleDelete() {
+   728→    setDeleting(true);
+   729→    try {
+   730→      const res = await fetch(`/api/contacts/${contact.id}`, {
+   731→        method: "DELETE",
+   732→        headers: { "Content-Type": "application/json" },
+   733→      });
+   734→      if (!res.ok) {
+   735→        const data = (await res.json().catch(() => ({}))) as { error?: string };
+   736→        throw new Error(data.error ?? `HTTP ${res.status}`);
+   737→      }
+   738→      toast.success(`Contact "${contact.fullName}" dihapus`);
+   739→      onDeleted();
+   740→    } catch (err) {
+   741→      toast.error(err instanceof Error ? err.message : "Gagal menghapus contact");
+   742→      setDeleting(false);
+   743→    }
+   744→  }
+   745→
+   746→  return (
+   747→    <div className="flex flex-1 flex-col">
+   748→      <SheetHeader className="border-b border-zinc-100">
+   749→        <div className="flex items-start gap-3 pr-8">
+   750→          <AvatarBubble name={contact.fullName} size="lg" />
+   751→          <div className="min-w-0 flex-1">
+   752→            <SheetTitle className="leading-tight">{contact.fullName}</SheetTitle>
+   753→            <SheetDescription className="truncate">
+   754→              {contact.position || "Tanpa jabatan"}
+   755→              {company ? ` · ${company.name}` : ""}
+   756→            </SheetDescription>
+   757→          </div>
+   758→          <Button
+   759→            size="sm"
+   760→            variant={editing ? "outline" : "secondary"}
+   761→            onClick={() => setEditing((v) => !v)}
+   762→            aria-label={editing ? "Batal edit contact" : "Edit contact"}
+   763→          >
+   764→            <Pencil className="size-3.5" /> {editing ? "Batal" : "Edit"}
+   765→          </Button>
+   766→        </div>
+   767→      </SheetHeader>
+   768→
+   769→      <div className="flex-1 space-y-5 p-4">
+   770→        {editing ? (
+   771→          <form onSubmit={handleSave} className="space-y-4 rounded-xl border bg-white p-4 shadow-sm">
+   772→            <p className="text-sm font-semibold text-zinc-900">Edit Contact</p>
+   773→            <ContactFormFields
+   774→              mode="edit"
+   775→              values={form}
+   776→              onChange={patchForm}
+   777→              disabled={saving}
+   778→              companies={companies}
+   779→            />
+   780→            <div className="flex justify-end gap-2">
+   781→              <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+   782→                Batal
+   783→              </Button>
+   784→              <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={saving}>
+   785→                {saving && <Loader2 className="size-4 animate-spin" />} Simpan Perubahan
+   786→              </Button>
+   787→            </div>
+   788→          </form>
+   789→        ) : (
+   790→          <section aria-label="Informasi contact">
+   791→            <SectionTitle>Informasi</SectionTitle>
+   792→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   793→              <InfoRow icon={Mail} label="Email" value={contact.email} />
+   794→              {contact.emailAlt ? <InfoRow icon={MailPlus} label="Email alternatif" value={contact.emailAlt} /> : null}
+   795→              <InfoRow icon={MessageCircle} label="WhatsApp" value={contact.whatsapp} />
+   796→              <InfoRow icon={Phone} label="Telepon" value={contact.phone} />
+   797→              <InfoRow icon={MapPin} label="Lokasi" value={locationText(contact.city, contact.country)} />
+   798→              <InfoRow icon={Clock} label="Zona waktu" value={contact.timezone} />
+   799→              <InfoRow icon={Languages} label="Bahasa" value={LANGUAGE_LABELS[contact.language] ?? contact.language} />
+   800→              <InfoRow icon={PreferredIcon} label="Kanal preferensi" value={channelLabel(contact.preferredChannel)} />
+   801→              {contact.linkedin ? <InfoRow icon={Linkedin} label="LinkedIn" value={contact.linkedin} /> : null}
+   802→              <div className="flex items-start gap-3">
+   803→                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+   804→                  <ShieldCheck className="size-4" />
+   805→                </span>
+   806→                <div>
+   807→                  <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Consent</p>
+   808→                  <div className="mt-0.5">
+   809→                    <ConsentBadge status={contact.consentStatus} />
+   810→                  </div>
+   811→                </div>
+   812→              </div>
+   813→            </div>
+   814→          </section>
+   815→        )}
+   816→
+   817→        <section aria-label="Tag contact">
+   818→          <SectionTitle>Tag</SectionTitle>
+   819→          <div className="rounded-xl border bg-white p-3 shadow-sm">
+   820→            <div className="flex flex-wrap gap-1.5">
+   821→              {tags.length === 0 && <p className="text-xs text-zinc-400">Belum ada tag — tambahkan untuk segmentasi.</p>}
+   822→              {tags.map((t) => (
+   823→                <Badge key={t} variant="secondary" className="gap-1 bg-zinc-100 text-zinc-700">
+   824→                  {t}
+   825→                  <button
+   826→                    type="button"
+   827→                    aria-label={`Hapus tag ${t}`}
+   828→                    disabled={tagBusy}
+   829→                    onClick={() => removeTag(t)}
+   830→                    className="rounded-full p-0.5 transition-colors hover:bg-zinc-200"
+   831→                  >
+   832→                    <X className="size-3" />
+   833→                  </button>
+   834→                </Badge>
+   835→              ))}
+   836→            </div>
+   837→            <form
+   838→              className="mt-2.5 flex gap-2"
+   839→              onSubmit={(e) => {
+   840→                e.preventDefault();
+   841→                addTag();
+   842→              }}
+   843→            >
+   844→              <Input
+   845→                value={tagInput}
+   846→                onChange={(e) => setTagInput(e.target.value)}
+   847→                placeholder="Tambah tag…"
+   848→                aria-label="Tag baru"
+   849→                className="h-8 text-xs"
+   850→                disabled={tagBusy}
+   851→              />
+   852→              <Button type="submit" size="sm" variant="outline" className="h-8" disabled={tagBusy || !tagInput.trim()}>
+   853→                <Plus className="size-3.5" /> Tambah
+   854→              </Button>
+   855→            </form>
+   856→          </div>
+   857→        </section>
+   858→
+   859→        {company && (
+   860→          <section aria-label="Perusahaan terkait">
+   861→            <SectionTitle>Perusahaan</SectionTitle>
+   862→            <button
+   863→              type="button"
+   864→              onClick={() => company && onOpenCompany(company)}
+   865→              aria-label={`Buka detail perusahaan ${company.name}`}
+   866→              className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+   867→            >
+   868→              <AvatarBubble name={company.name} icon={Building2} />
+   869→              <span className="min-w-0 flex-1">
+   870→                <span className="block truncate text-sm font-semibold text-zinc-900">{company.name}</span>
+   871→                <span className="block truncate text-xs text-zinc-500">
+   872→                  {company.industry || "Industri belum diisi"}
+   873→                  {company.website ? ` · ${company.website}` : ""}
+   874→                </span>
+   875→              </span>
+   876→              <ExternalLink className="size-4 shrink-0 text-zinc-400" />
+   877→            </button>
+   878→          </section>
+   879→        )}
+   880→      </div>
+   881→
+   882→      <div className="mt-auto space-y-3 border-t border-zinc-100 bg-zinc-50/70 p-4">
+   883→        <div className="flex items-center justify-between gap-3">
+   884→          {typeof oppCount === "number" ? (
+   885→            <p className="flex items-center gap-2 text-sm text-zinc-600">
+   886→              <Briefcase className="size-4 text-zinc-400" />
+   887→              Total <span className="font-semibold text-zinc-900">{oppCount}</span> opportunity
+   888→            </p>
+   889→          ) : (
+   890→            <span />
+   891→          )}
+   892→          <AlertDialog>
+   893→            <AlertDialogTrigger asChild>
+   894→              <Button
+   895→                variant="outline"
+   896→                disabled={deleting}
+   897→                className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+   898→                aria-label="Hapus contact"
+   899→              >
+   900→                <Trash2 className="size-4" /> Hapus Contact
+   901→              </Button>
+   902→            </AlertDialogTrigger>
+   903→            <AlertDialogContent>
+   904→              <AlertDialogHeader>
+   905→                <AlertDialogTitle>Hapus contact ini?</AlertDialogTitle>
+   906→                <AlertDialogDescription>
+   907→                  &ldquo;{contact.fullName}&rdquo; akan dihapus (soft delete) dan tidak lagi muncul di daftar. Riwayat opportunity dan interaksi tetap tersimpan di database.
+   908→                </AlertDialogDescription>
+   909→              </AlertDialogHeader>
+   910→              <AlertDialogFooter>
+   911→                <AlertDialogCancel>Batal</AlertDialogCancel>
+   912→                <AlertDialogAction
+   913→                  onClick={() => void handleDelete()}
+   914→                  disabled={deleting}
+   915→                  className="bg-red-600 text-white hover:bg-red-700"
+   916→                >
+   917→                  {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />} Ya, hapus
+   918→                </AlertDialogAction>
+   919→              </AlertDialogFooter>
+   920→            </AlertDialogContent>
+   921→          </AlertDialog>
+   922→        </div>
+   923→      </div>
+   924→    </div>
+   925→  );
+   926→}
+   927→
+   928→function ContactDetailSheet({
+   929→  contact,
+   930→  open,
+   931→  onOpenChange,
+   932→  companies,
+   933→  onSaved,
+   934→  onDeleted,
+   935→  onOpenCompany,
+   936→}: {
+   937→  contact: ContactRecord | null;
+   938→  open: boolean;
+   939→  onOpenChange: (open: boolean) => void;
+   940→  companies: CompanyRecord[];
+   941→  onSaved: (contact: ContactRef) => void;
+   942→  onDeleted: () => void;
+   943→  onOpenCompany: (company: CompanyRef) => void;
+   944→}) {
+   945→  return (
+   946→    <Sheet open={open} onOpenChange={onOpenChange}>
+   947→      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+   948→        {contact && (
+   949→          <ContactDetailBody
+   950→            key={contact.id}
+   951→            contact={contact}
+   952→            companies={companies}
+   953→            onSaved={onSaved}
+   954→            onDeleted={onDeleted}
+   955→            onOpenCompany={onOpenCompany}
+   956→          />
+   957→        )}
+   958→      </SheetContent>
+   959→    </Sheet>
+   960→  );
+   961→}
+   962→
+   963→// ---------- Detail perusahaan (Sheet, read-only) ----------
+   964→
+   965→function CompanyDetailBody({
+   966→  company,
+   967→  contacts,
+   968→  onOpenContact,
+   969→}: {
+   970→  company: CompanyRecord;
+   971→  contacts: ContactRecord[];
+   972→  onOpenContact: (contact: ContactRecord) => void;
+   973→}) {
+   974→  const tags = parseJsonArray(company.tags);
+   975→  const websiteHref = company.website
+   976→    ? company.website.startsWith("http")
+   977→      ? company.website
+   978→      : `https://${company.website}`
+   979→    : null;
+   980→
+   981→  return (
+   982→    <div className="flex flex-1 flex-col">
+   983→      <SheetHeader className="border-b border-zinc-100">
+   984→        <div className="flex items-start gap-3 pr-8">
+   985→          <AvatarBubble name={company.name} size="lg" icon={Building2} />
+   986→          <div className="min-w-0 flex-1">
+   987→            <SheetTitle className="leading-tight">{company.name}</SheetTitle>
+   988→            <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+   989→              <span>{company.industry || "Industri belum diisi"}</span>
+   990→              {websiteHref && (
+   991→                <a
+   992→                  href={websiteHref}
+   993→                  target="_blank"
+   994→                  rel="noreferrer"
+   995→                  className="inline-flex items-center gap-1 text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+   996→                  aria-label={`Buka website ${company.name}`}
+   997→                >
+   998→                  {company.website} <ExternalLink className="size-3" />
+   999→                </a>
+  1000→              )}
+  1001→            </SheetDescription>
+  1002→          </div>
+  1003→        </div>
+  1004→      </SheetHeader>
+  1005→
+  1006→      <div className="flex-1 space-y-5 p-4">
+  1007→        <section aria-label="Informasi perusahaan">
+  1008→          <SectionTitle>Informasi</SectionTitle>
+  1009→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1010→            <InfoRow icon={Globe} label="Website" value={company.website} />
+  1011→            <InfoRow icon={Building2} label="Industri" value={company.industry} />
+  1012→            <InfoRow icon={MapPin} label="Lokasi" value={locationText(company.city, company.country)} />
+  1013→            <div className="flex items-start gap-3">
+  1014→              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+  1015→                <Users className="size-4" />
+  1016→              </span>
+  1017→              <div>
+  1018→                <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Ukuran</p>
+  1019→                <div className="mt-0.5">
+  1020→                  <SizeBadge size={company.size} />
+  1021→                </div>
+  1022→              </div>
+  1023→            </div>
+  1024→            <InfoRow icon={Banknote} label="Mata uang default" value={company.defaultCurrency} />
+  1025→            <InfoRow
+  1026→              icon={Banknote}
+  1027→              label="Lifetime value"
+  1028→              value={formatCurrency(company.lifetimeValue, company.defaultCurrency)}
+  1029→            />
+  1030→          </div>
+  1031→        </section>
+  1032→
+  1033→        <section aria-label="Tag perusahaan">
+  1034→          <SectionTitle>Tag</SectionTitle>
+  1035→          <div className="rounded-xl border bg-white p-3 shadow-sm">
+  1036→            <TagList tags={tags} />
+  1037→          </div>
+  1038→        </section>
+  1039→
+  1040→        <section aria-label="Contact perusahaan">
+  1041→          <SectionTitle>
+  1042→            Kontak ({contacts.length}
+  1043→            {contacts.length === 5 ? "+" : ""})
+  1044→          </SectionTitle>
+  1045→          {contacts.length === 0 ? (
+  1046→            <p className="rounded-xl border bg-white p-3 text-xs text-zinc-400 shadow-sm">
+  1047→              Belum ada contact yang terhubung ke perusahaan ini.
+  1048→            </p>
+  1049→          ) : (
+  1050→            <ul className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+  1051→              {contacts.map((c) => (
+  1052→                <li key={c.id}>
+  1053→                  <button
+  1054→                    type="button"
+  1055→                    onClick={() => onOpenContact(c)}
+  1056→                    aria-label={`Buka detail contact ${c.fullName}`}
+  1057→                    className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+  1058→                  >
+  1059→                    <AvatarBubble name={c.fullName} size="sm" />
+  1060→                    <span className="min-w-0 flex-1">
+  1061→                      <span className="block truncate text-sm font-medium text-zinc-900">{c.fullName}</span>
+  1062→                      <span className="block truncate text-xs text-zinc-500">{c.position || c.email || "-"}</span>
+  1063→                    </span>
+  1064→                    <ChannelBadge channel={c.preferredChannel} />
+  1065→                  </button>
+  1066→                </li>
+  1067→              ))}
+  1068→            </ul>
+  1069→          )}
+  1070→        </section>
+  1071→      </div>
+  1072→
+  1073→      <div className="mt-auto space-y-2 border-t border-zinc-100 bg-zinc-50/70 p-4">
+  1074→        <div className="flex flex-wrap gap-1.5">
+  1075→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1076→            {company._count?.opportunities ?? 0} opportunity
+  1077→          </Badge>
+  1078→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1079→            {company._count?.projects ?? 0} project
+  1080→          </Badge>
+  1081→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1082→            {company._count?.invoices ?? 0} invoice
+  1083→          </Badge>
+  1084→        </div>
+  1085→        <p className="flex items-center gap-1.5 text-xs text-zinc-400">
+  1086→          <Info className="size-3.5" /> Data perusahaan bersifat read-only di UI — perubahan dilakukan via API.
+  1087→        </p>
+  1088→      </div>
+  1089→    </div>
+  1090→  );
+  1091→}
+  1092→
+  1093→function CompanyDetailSheet({
+  1094→  company,
+  1095→  open,
+  1096→  onOpenChange,
+  1097→  contacts,
+  1098→  onOpenContact,
+  1099→}: {
+  1100→  company: CompanyRecord | null;
+  1101→  open: boolean;
+  1102→  onOpenChange: (open: boolean) => void;
+  1103→  contacts: ContactRecord[];
+  1104→  onOpenContact: (contact: ContactRecord) => void;
+  1105→}) {
+  1106→  return (
+  1107→    <Sheet open={open} onOpenChange={onOpenChange}>
+  1108→      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+  1109→        {company && <CompanyDetailBody key={company.id} company={company} contacts={contacts} onOpenContact={onOpenContact} />}
+  1110→      </SheetContent>
+  1111→    </Sheet>
+  1112→  );
+  1113→}
+  1114→
+  1115→// ---------- Dialog: Contact baru ----------
+  1116→
+  1117→function CreateContactDialog({
+  1118→  open,
+  1119→  onOpenChange,
+  1120→  onCreated,
+  1121→}: {
+  1122→  open: boolean;
+  1123→  onOpenChange: (open: boolean) => void;
+  1124→  onCreated: (contact: ContactRef, duplicates: MatchCandidateDTO[]) => void;
+  1125→}) {
+  1126→  const user = useCrmStore((s) => s.user);
+  1127→  const [values, setValues] = useState<ContactFormValues>(EMPTY_CONTACT_FORM);
+  1128→  const [candidates, setCandidates] = useState<MatchCandidateDTO[] | null>(null);
+  1129→  const [checking, setChecking] = useState(false);
+  1130→  const [creating, setCreating] = useState(false);
+  1131→
+  1132→  useEffect(() => {
+  1133→    if (open) {
+  1134→      setValues(EMPTY_CONTACT_FORM);
+  1135→      setCandidates(null);
+  1136→    }
+  1137→  }, [open]);
+  1138→
+  1139→  function patchForm(p: Partial<ContactFormValues>) {
+  1140→    setValues((v) => ({ ...v, ...p }));
+  1141→  }
+  1142→
+  1143→  async function createNow() {
+  1144→    if (!values.firstName.trim()) {
+  1145→      toast.error("Nama depan wajib diisi");
+  1146→      return;
+  1147→    }
+  1148→    setCreating(true);
+  1149→    try {
+  1150→      const res = await api.createContact({
+  1151→        firstName: values.firstName.trim(),
+  1152→        lastName: values.lastName.trim() || undefined,
+  1153→        position: values.position.trim() || undefined,
+  1154→        email: values.email.trim() || undefined,
+  1155→        whatsapp: values.whatsapp.trim() || undefined,
+  1156→        phone: values.phone.trim() || undefined,
+  1157→        companyName: values.companyName.trim() || undefined,
+  1158→        city: values.city.trim() || undefined,
+  1159→        country: values.country.trim() || undefined,
+  1160→        preferredChannel: values.preferredChannel,
+  1161→        tags: parseTagsText(values.tagsText),
+  1162→        actorName: user?.name ?? "System",
+  1163→        actorRole: user?.role ?? "system",
+  1164→      });
+  1165→      toast.success(`Contact "${res.contact.fullName}" berhasil dibuat`);
+  1166→      onCreated(res.contact, res.duplicateCandidates ?? []);
+  1167→    } catch (err) {
+  1168→      toast.error(err instanceof Error ? err.message : "Gagal membuat contact");
+  1169→    } finally {
+  1170→      setCreating(false);
+  1171→    }
+  1172→  }
+  1173→
+  1174→  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  1175→    e.preventDefault();
+  1176→    if (!values.firstName.trim()) {
+  1177→      toast.error("Nama depan wajib diisi");
+  1178→      return;
+  1179→    }
+  1180→    setChecking(true);
+  1181→    try {
+  1182→      const res = await api.identify({
+  1183→        email: values.email.trim() || undefined,
+  1184→        whatsapp: values.whatsapp.trim() || undefined,
+  1185→        fullName: `${values.firstName.trim()} ${values.lastName.trim()}`.trim(),
+  1186→        companyName: values.companyName.trim() || undefined,
+  1187→      });
+  1188→      if (res.candidates.length > 0) {
+  1189→        setCandidates(res.candidates);
+  1190→        return;
+  1191→      }
+  1192→      await createNow();
+  1193→    } catch (err) {
+  1194→      toast.error(err instanceof Error ? err.message : "Gagal memeriksa duplikat");
+  1195→    } finally {
+  1196→      setChecking(false);
+  1197→    }
+  1198→  }
+  1199→
+  1200→  function pickExisting() {
+  1201→    toast.info("Menggunakan contact existing");
+  1202→    onOpenChange(false);
+  1203→  }
+  1204→
+  1205→  const busy = checking || creating;
+  1206→
+  1207→  return (
+  1208→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1209→      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+  1210→        <DialogHeader>
+  1211→          <DialogTitle>Contact Baru</DialogTitle>
+  1212→          <DialogDescription>
+  1213→            Tambah identitas calon klien. Sistem otomatis memeriksa kemungkinan duplikat sebelum menyimpan.
+  1214→          </DialogDescription>
+  1215→        </DialogHeader>
+  1216→        <form onSubmit={handleSubmit} className="space-y-4">
+  1217→          <ContactFormFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
+  1218→
+  1219→          {candidates && candidates.length > 0 && (
+  1220→            <Alert className="border-amber-200 bg-amber-50">
+  1221→              <AlertTriangle className="size-4 text-amber-600" />
+  1222→              <AlertTitle className="text-amber-800">Kemungkinan duplikat</AlertTitle>
+  1223→              <AlertDescription className="text-amber-700">
+  1224→                <span className="block text-xs">
+  1225→                  Contact berikut mirip dengan data yang Anda masukkan. Gunakan data existing, atau tetap buat baru.
+  1226→                </span>
+  1227→                <ul className="mt-2 max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+  1228→                  {candidates.map((c) => (
+  1229→                    <li
+  1230→                      key={c.contactId}
+  1231→                      className="flex items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white p-2.5"
+  1232→                    >
+  1233→                      <div className="min-w-0">
+  1234→                        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-zinc-900">
+  1235→                          <span className="truncate">{c.contact?.fullName ?? "Contact tanpa nama"}</span>
+  1236→                          <Badge className={cn("border-transparent", scoreBadgeClass(c.score))}>{c.score}% mirip</Badge>
+  1237→                        </p>
+  1238→                        <p className="truncate text-xs text-zinc-500">
+  1239→                          {c.contact?.email || "-"}
+  1240→                          {c.contact?.company?.name ? ` · ${c.contact.company.name}` : ""}
+  1241→                        </p>
+  1242→                        {c.reasons.length > 0 && (
+  1243→                          <p className="mt-0.5 text-[11px] text-amber-700">Alasan: {c.reasons.join(" · ")}</p>
+  1244→                        )}
+  1245→                      </div>
+  1246→                      <Button
+  1247→                        type="button"
+  1248→                        size="sm"
+  1249→                        variant="outline"
+  1250→                        className="h-7 shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100"
+
+[showing lines 551-1250 of 1854; use offset=1251 with limit to continue reading]
