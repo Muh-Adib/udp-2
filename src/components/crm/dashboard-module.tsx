@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlertTriangle, Check, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
-  RefreshCw, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
+  AlarmClockOff, AlertTriangle, Check, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
+  RefreshCw, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -22,7 +22,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
-import { useCrmStore } from "@/lib/crm/store";
+import { canAccess, useCrmStore } from "@/lib/crm/store";
 import type { ApprovalRequestDTO, DashboardData } from "@/lib/crm/types";
 import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
 
@@ -163,7 +163,7 @@ function actionBadgeClass(action: string): string {
 // ============ Sub-komponen ============
 
 function KpiCard({
-  label, value, icon: Icon, hint, trend, badge, accentColor,
+  label, value, icon: Icon, hint, trend, badge, accentColor, tone = "default",
 }: {
   label: string;
   value: string;
@@ -172,7 +172,11 @@ function KpiCard({
   trend?: ReactNode;
   badge?: ReactNode;
   accentColor?: string;
+  /** Fase 3 — tone semantik: danger (rose/red), ok (emerald), default (zinc). */
+  tone?: "default" | "danger" | "ok";
 }) {
+  const valueClass = tone === "danger" ? "text-red-600" : tone === "ok" ? "text-emerald-600" : "text-zinc-900";
+  const chipClass = tone === "danger" ? "bg-rose-100 text-rose-600" : tone === "ok" ? "bg-emerald-100 text-emerald-600" : "bg-zinc-100 text-zinc-600";
   return (
     <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
       {accentColor ? (
@@ -181,9 +185,9 @@ function KpiCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{value}</p>
+          <p className={`mt-1 text-2xl font-bold tabular-nums ${valueClass}`}>{value}</p>
         </div>
-        <span className="shrink-0 rounded-lg bg-zinc-100 p-2 text-zinc-600">
+        <span className={`shrink-0 rounded-lg p-2 ${chipClass}`}>
           <Icon className="h-4 w-4" aria-hidden />
         </span>
       </div>
@@ -351,6 +355,7 @@ function DashboardSkeleton() {
 export default function DashboardModule() {
   const brands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
 
   const [data, setData] = useState<DashboardFullData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -447,6 +452,9 @@ export default function DashboardModule() {
   const kpi = data.kpi;
   const canDecide = user?.role === "director" || user?.role === "super_admin";
   const pendingApprovals = data.pendingApprovals ?? [];
+  // Fase 3 — SLA monitoring
+  const slaBreaches = data.slaBreaches ?? 0;
+  const canOpenInbox = canAccess("inbox", user?.role);
   const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
   const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
   const funnelMap = new Map(data.funnel.map((f) => [f.stage, f] as const));
@@ -531,6 +539,38 @@ export default function DashboardModule() {
         </div>
       </header>
 
+      {/* ============ Alert strip SLA (Fase 3) ============ */}
+      {slaBreaches > 0 ? (
+        <div
+          role="alert"
+          aria-label="Peringatan SLA terlambat"
+          className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex items-start gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-rose-100" aria-hidden>
+              <ShieldAlert className="h-4.5 w-4.5 text-rose-600" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-rose-700">
+                {slaBreaches} lead melewati SLA respons
+              </p>
+              <p className="text-xs text-rose-600">Prioritaskan follow-up hari ini sebelum klien hilang.</p>
+            </div>
+          </div>
+          {canOpenInbox ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0 border-rose-300 bg-white text-rose-600 hover:bg-rose-100 hover:text-rose-700"
+              onClick={() => setActiveModule("inbox")}
+              aria-label="Buka Lead Inbox"
+            >
+              Buka Lead Inbox
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* ============ KPI ============ */}
       <section aria-label="KPI utama" className="space-y-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Ringkasan Kinerja</h2>
@@ -547,6 +587,13 @@ export default function DashboardModule() {
               accentColor={c.accent ? firstBrandColor : undefined}
             />
           ))}
+          <KpiCard
+            label="SLA Terlambat"
+            value={String(slaBreaches)}
+            icon={AlarmClockOff}
+            hint={slaBreaches > 0 ? "lead melewati SLA respons" : "Semua lead dalam SLA"}
+            tone={slaBreaches > 0 ? "danger" : "ok"}
+          />
         </div>
       </section>
 

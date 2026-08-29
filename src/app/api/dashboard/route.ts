@@ -8,6 +8,7 @@ const DAY = 24 * HOUR;
 export async function GET() {
   const [
     opportunities, interactions, tasks, invoices, projects, recentAudit, brands, pendingApprovals,
+    unresolvedInbound,
   ] = await Promise.all([
     db.opportunity.findMany({ where: { deletedAt: null }, include: { brand: true, contact: true, company: true } }),
     db.interaction.findMany({ orderBy: { createdAt: "desc" }, take: 500 }),
@@ -21,6 +22,11 @@ export async function GET() {
       include: { opportunity: { include: { brand: true } } },
       orderBy: { createdAt: "asc" },
       take: 10,
+    }),
+    // Fase 3 — SLA monitoring: lead inbound belum direspons (satu query, dihitung di memori)
+    db.interaction.findMany({
+      where: { direction: "inbound", opportunityId: null, respondedAt: null },
+      select: { createdAt: true, brandId: true, brand: { select: { slaHours: true } } },
     }),
   ]);
 
@@ -55,6 +61,13 @@ export async function GET() {
     }
   });
   const avgResponseHours = respCount > 0 ? Math.round((totalResp / respCount) * 10) / 10 : 0;
+
+  const nowMs = Date.now();
+  const slaBreaches = unresolvedInbound.filter((i) => {
+    const slaHours = i.brand?.slaHours ?? 0;
+    if (slaHours <= 0) return false;
+    return (nowMs - i.createdAt.getTime()) / HOUR > slaHours;
+  }).length;
 
   const overdueTasks = tasks.filter((t) => t.dueDate && t.dueDate.getTime() < Date.now()).length;
   const unassignedLeads = opportunities.filter((o) => o.stage === "new" && !o.ownerName).length;
@@ -190,5 +203,6 @@ export async function GET() {
     recentAudit, pipelineTrend, pendingApprovals,
     projectsAtRisk: projects.filter((p) => p.dueDate && p.dueDate.getTime() < now + 7 * DAY && p.status !== "completed").length,
     productionCapacity: projects.filter((p) => p.status === "in_progress" || p.status === "planning").length,
+    slaBreaches,
   });
 }

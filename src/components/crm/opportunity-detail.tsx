@@ -62,6 +62,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -83,6 +84,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
 import type { EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
@@ -221,6 +223,91 @@ function TemperatureBadge({ temperature }: { temperature: string }) {
       <span className={cn("size-1.5 rounded-full", dot)} />
       {label}
     </span>
+  );
+}
+
+// ---------- Fase 4: badge skor lead (ring SVG + popover rincian) ----------
+
+function ScoreRing({ score, ring }: { score: number; ring: string }) {
+  const radius = 16;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.min(100, Math.max(0, score));
+  const offset = circumference - (clamped / 100) * circumference;
+  return (
+    <svg
+      width="40"
+      height="40"
+      viewBox="0 0 40 40"
+      className="shrink-0"
+      role="img"
+      aria-hidden="true"
+    >
+      <circle cx="20" cy="20" r={radius} fill="none" stroke="#e4e4e7" strokeWidth="3.5" />
+      <circle
+        cx="20"
+        cy="20"
+        r={radius}
+        fill="none"
+        stroke={ring}
+        strokeWidth="3.5"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        transform="rotate(-90 20 20)"
+        className="transition-[stroke-dashoffset] duration-500"
+      />
+      <text
+        x="20"
+        y="24"
+        textAnchor="middle"
+        className="fill-zinc-900"
+        style={{ fontSize: "12px", fontWeight: 700 }}
+      >
+        {score}
+      </text>
+    </svg>
+  );
+}
+
+function ScoreBadge({ score, reasons }: { score: number; reasons: string[] }) {
+  const tier = scoreTier(score);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-left outline-none transition-colors hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-zinc-900/20"
+          aria-label={`Skor lead ${score}: ${tier.label}. Lihat rincian skor`}
+        >
+          <ScoreRing score={score} ring={tier.ring} />
+          <span className="flex flex-col items-start gap-0.5 leading-tight">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+              Skor Lead
+            </span>
+            <span className={cn("rounded px-1.5 text-[11px] font-semibold", tier.cls)}>
+              {tier.label}
+            </span>
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 p-3">
+        <p className="mb-1.5 text-xs font-semibold text-zinc-900">
+          Rincian skor: {score}/100
+        </p>
+        {reasons.length === 0 ? (
+          <p className="text-xs text-zinc-500">Belum ada faktor tambahan (skor dasar 30).</p>
+        ) : (
+          <ul className="crm-scroll max-h-40 space-y-1 overflow-y-auto pr-1 text-xs text-zinc-600">
+            {reasons.map((reason) => (
+              <li key={reason} className="flex items-start gap-1.5">
+                <span className="mt-1.5 size-1 shrink-0 rounded-full bg-zinc-300" />
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1454,6 +1541,15 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     [brands]
   );
 
+  // Fase 4: skor lead dihitung ulang di klien dari data detail + counts (fallback panjang array)
+  const leadScore = useMemo(() => {
+    if (!data) return null;
+    return computeLeadScore(data, {
+      interactions: data._count?.interactions ?? data.interactions.length,
+      tasks: data._count?.tasks ?? data.tasks.length,
+    });
+  }, [data]);
+
   // ---------- Aksi ----------
 
   async function runAi() {
@@ -1706,6 +1802,9 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                 <div className="flex flex-wrap items-center gap-1.5">
                   <BrandBadge brand={data.brand} />
                   <StageBadge stage={data.stage} />
+                  {data.stage !== "won" && data.stage !== "lost" && leadScore ? (
+                    <ScoreBadge score={leadScore.score} reasons={leadScore.reasons} />
+                  ) : null}
                 </div>
                 <SheetTitle className="text-base leading-snug">{data.title}</SheetTitle>
                 <SheetDescription>

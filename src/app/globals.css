@@ -126,3 +126,18 @@
 .crm-scroll::-webkit-scrollbar-track { background: transparent; }
 .crm-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 9999px; }
 .crm-scroll::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+
+/* ===== Print quotation (Task 9-a): area #print-area hanya tampil saat print ===== */
+#print-area { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  #print-area, #print-area * { visibility: visible; }
+  #print-area {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    padding: 24px;
+    background: white;
+  }
+}

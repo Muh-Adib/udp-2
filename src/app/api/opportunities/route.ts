@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { computeLeadScore } from "@/lib/crm/scoring";
 import { normalizeEmail, normalizePhone } from "@/lib/crm/utils";
 
 export async function GET(req: NextRequest) {
@@ -30,12 +31,31 @@ export async function GET(req: NextRequest) {
       brand: true,
       contact: { include: { company: true } },
       company: true,
+      _count: { select: { interactions: true, tasks: true } },
     },
     orderBy: { updatedAt: "desc" },
     take: 300,
   });
 
-  return ok({ opportunities });
+  // Lead scoring (Fase 4): hitung skor + alasan dari rule-based scoring lib.
+  const enriched = opportunities.map((row) => {
+    const result = computeLeadScore(
+      {
+        stage: row.stage,
+        temperature: row.temperature,
+        priority: row.priority,
+        estimatedValue: row.estimatedValue,
+        expectedCloseDate: row.expectedCloseDate ? row.expectedCloseDate.toISOString() : null,
+        nextAction: row.nextAction,
+        updatedAt: row.updatedAt.toISOString(),
+        createdAt: row.createdAt.toISOString(),
+      },
+      { interactions: row._count.interactions, tasks: row._count.tasks }
+    );
+    return { ...row, score: result.score, scoreReasons: result.reasons, _count: row._count };
+  });
+
+  return ok({ opportunities: enriched });
 }
 
 export async function POST(req: NextRequest) {

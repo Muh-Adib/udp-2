@@ -62,5 +62,51 @@ export async function POST(req: NextRequest) {
     });
     return ok({ invoice: updated });
   }
+  // Kirim invoice (draft → sent)
+  if (body.action === "send_invoice") {
+    const invoiceId = String(body.invoiceId ?? "");
+    const invoice = await db.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
+    if (!invoice) return ok({ error: "Invoice tidak ditemukan" }, 404);
+    if (invoice.status !== "draft") {
+      return ok({ error: "Hanya invoice draft yang bisa dikirim" }, 400);
+    }
+    const now = new Date();
+    const dueDate =
+      invoice.dueDate ?? new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const updated = await db.invoice.update({
+      where: { id: invoiceId },
+      data: { status: "sent", issueDate: now, dueDate },
+      include: { payments: true },
+    });
+    await logAudit({
+      actorName: String(body.actorName ?? "finance"), actorRole: body.actorRole ? String(body.actorRole) : null,
+      action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
+      field: "status", oldValue: "draft", newValue: "sent", req,
+    });
+    return ok({ invoice: updated });
+  }
+  // Batalkan invoice
+  if (body.action === "cancel_invoice") {
+    const invoiceId = String(body.invoiceId ?? "");
+    const invoice = await db.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
+    if (!invoice) return ok({ error: "Invoice tidak ditemukan" }, 404);
+    if (invoice.status === "paid" || invoice.status === "partial") {
+      return ok({ error: "Invoice yang sudah dibayar tidak bisa dibatalkan" }, 400);
+    }
+    if (invoice.status === "cancelled") {
+      return ok({ error: "Invoice sudah dibatalkan" }, 400);
+    }
+    const updated = await db.invoice.update({
+      where: { id: invoiceId },
+      data: { status: "cancelled" },
+      include: { payments: true },
+    });
+    await logAudit({
+      actorName: String(body.actorName ?? "finance"), actorRole: body.actorRole ? String(body.actorRole) : null,
+      action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
+      field: "status", oldValue: invoice.status, newValue: "cancelled", req,
+    });
+    return ok({ invoice: updated });
+  }
   return ok({ error: "Unknown action" }, 400);
 }

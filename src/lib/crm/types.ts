@@ -92,6 +92,11 @@ export interface OpportunityDTO {
   followUpDate?: string | null;
   nurtureSegment?: string | null;
   crossSellOfId?: string | null;
+  /** Lead score hasil rule-based scoring (dihitung server, Fase 4). */
+  score?: number;
+  /** Alasan/faktor penambah & pengurang skor. */
+  scoreReasons?: string[];
+  _count?: { interactions: number; tasks: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -328,4 +333,6 @@ export interface DashboardData {
   projectsAtRisk?: number;
   productionCapacity?: number;
   pendingApprovals?: ApprovalRequestDTO[];
+  /** Jumlah lead inbound belum direspons melewati SLA brand (Fase 3). */
+  slaBreaches?: number;
 }

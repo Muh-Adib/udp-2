@@ -1,6 +1,37 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, handleWonTransition } from "@/lib/crm/server";
+import { computeLeadScore } from "@/lib/crm/scoring";
+
+/** Hitung skor lead + sisipkan score/scoreReasons/_count ke row opportunity Prisma. */
+function enrichScore<
+  T extends {
+    stage: string;
+    temperature: string;
+    priority: string;
+    estimatedValue: number | null;
+    expectedCloseDate: Date | null;
+    nextAction: string | null;
+    updatedAt: Date;
+    createdAt: Date;
+    _count: { interactions: number; tasks: number };
+  }
+>(row: T) {
+  const result = computeLeadScore(
+    {
+      stage: row.stage,
+      temperature: row.temperature,
+      priority: row.priority,
+      estimatedValue: row.estimatedValue,
+      expectedCloseDate: row.expectedCloseDate ? row.expectedCloseDate.toISOString() : null,
+      nextAction: row.nextAction,
+      updatedAt: row.updatedAt.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+    },
+    { interactions: row._count.interactions, tasks: row._count.tasks }
+  );
+  return { ...row, score: result.score, scoreReasons: result.reasons };
+}
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -17,6 +48,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       invoices: { include: { payments: true } },
       estimation: true,
       quotations: { orderBy: { createdAt: "desc" } },
+      _count: { select: { interactions: true, tasks: true } },
     },
   });
   if (!opportunity) return fail("Opportunity tidak ditemukan", 404);
@@ -24,15 +56,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   // Related opportunities (same company, other brands)
   let related: unknown[] = [];
   if (opportunity.companyId) {
-    related = await db.opportunity.findMany({
+    const relatedRows = await db.opportunity.findMany({
       where: { companyId: opportunity.companyId, id: { not: id }, deletedAt: null },
-      include: { brand: true },
+      include: { brand: true, _count: { select: { interactions: true, tasks: true } } },
       orderBy: { updatedAt: "desc" },
       take: 10,
     });
+    related = relatedRows.map((row) => enrichScore(row));
   }
 
-  return ok({ opportunity, related });
+  const enrichedOpportunity = enrichScore(opportunity);
+
+  return ok({ opportunity: enrichedOpportunity, related });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

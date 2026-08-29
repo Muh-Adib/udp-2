@@ -14,8 +14,10 @@ import { CSS } from "@dnd-kit/utilities";
 import { toast } from "sonner";
 import {
   ArrowDown,
+  ArrowDownWideNarrow,
   ArrowUp,
   ArrowUpDown,
+  Flame,
   Inbox,
   KanbanSquare,
   Search,
@@ -53,6 +55,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import OpportunityDetail from "@/components/crm/opportunity-detail";
 import { api } from "@/lib/crm/api-client";
 import { LOST_REASONS, OPEN_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+import { scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
 import type { OpportunityDTO } from "@/lib/crm/types";
 import { formatCurrency, formatDate, initials, timeAgo } from "@/lib/crm/utils";
@@ -102,6 +105,54 @@ function companyOf(opp: OpportunityDTO): string {
   return opp.company?.name ?? opp.contact?.company?.name ?? "Tanpa perusahaan";
 }
 
+function scoreOf(opp: OpportunityDTO): number {
+  return opp.score ?? 0;
+}
+
+function isScoreVisible(opp: OpportunityDTO): boolean {
+  return opp.stage !== "won" && opp.stage !== "lost";
+}
+
+/** Chip skor kecil untuk kartu kanban (ikon Flame + angka, warna tier). */
+function ScoreChip({ opp }: { opp: OpportunityDTO }) {
+  const score = scoreOf(opp);
+  const tier = scoreTier(score);
+  const tip = (opp.scoreReasons ?? []).slice(0, 3).join(" · ");
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+        tier.cls
+      )}
+      title={tip || `Skor lead ${score}`}
+      aria-label={`Skor lead ${score}: ${tier.label}`}
+    >
+      <Flame className="size-3" aria-hidden="true" />
+      {score}
+    </span>
+  );
+}
+
+/** Chip tier + angka skor untuk tabel (tabular-nums). */
+function ScoreTierCell({ opp }: { opp: OpportunityDTO }) {
+  const score = scoreOf(opp);
+  const tier = scoreTier(score);
+  const tip = (opp.scoreReasons ?? []).slice(0, 3).join(" · ");
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums",
+        tier.cls
+      )}
+      title={tip || `Skor lead ${score}`}
+      aria-label={`Skor lead ${score}: ${tier.label}`}
+    >
+      <Flame className="size-3" aria-hidden="true" />
+      {score} · {tier.label}
+    </span>
+  );
+}
+
 // ---------- Kartu opportunity (draggable) ----------
 
 function OppCard({ opp, onOpen }: { opp: OpportunityDTO; onOpen: (id: string) => void }) {
@@ -131,6 +182,7 @@ function OppCard({ opp, onOpen }: { opp: OpportunityDTO; onOpen: (id: string) =>
     >
       <div className="flex items-start gap-2">
         <p className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{companyOf(opp)}</p>
+        {isScoreVisible(opp) ? <ScoreChip opp={opp} /> : null}
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
@@ -232,11 +284,15 @@ function OpportunityTable({
   rows,
   sortDir,
   onToggleSort,
+  scoreSortDir,
+  onToggleScoreSort,
   onOpen,
 }: {
   rows: OpportunityDTO[];
   sortDir: SortDir;
   onToggleSort: () => void;
+  scoreSortDir: SortDir;
+  onToggleScoreSort: () => void;
   onOpen: (id: string) => void;
 }) {
   const color = stageColor;
@@ -249,6 +305,24 @@ function OpportunityTable({
             <TableHead>Brand</TableHead>
             <TableHead>Layanan</TableHead>
             <TableHead>Stage</TableHead>
+            <TableHead>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="-ml-2 h-7 font-medium"
+                onClick={onToggleScoreSort}
+                aria-label="Urutkan berdasarkan skor"
+              >
+                Skor
+                {scoreSortDir === "asc" ? (
+                  <ArrowUp className="size-3.5" aria-hidden="true" />
+                ) : scoreSortDir === "desc" ? (
+                  <ArrowDown className="size-3.5" aria-hidden="true" />
+                ) : (
+                  <ArrowUpDown className="size-3.5" aria-hidden="true" />
+                )}
+              </Button>
+            </TableHead>
             <TableHead>
               <Button
                 variant="ghost"
@@ -317,6 +391,13 @@ function OpportunityTable({
                     <span className="size-1.5 rounded-full" style={{ backgroundColor: color(opp.stage) }} />
                     {stageLabel(opp.stage)}
                   </span>
+                </TableCell>
+                <TableCell>
+                  {isScoreVisible(opp) ? (
+                    <ScoreTierCell opp={opp} />
+                  ) : (
+                    <span className="text-xs text-zinc-400">-</span>
+                  )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-sm font-medium text-zinc-800">
                   {formatCurrency(opp.estimatedValue, opp.currency)}
@@ -465,6 +546,9 @@ export default function PipelineModule() {
   const [view, setView] = useState<ViewMode>("kanban");
   const [tempFilter, setTempFilter] = useState<string>("all");
   const [sortDir, setSortDir] = useState<SortDir>(null);
+  const [scoreSortDir, setScoreSortDir] = useState<SortDir>(null);
+  const [sortByScore, setSortByScore] = useState(false);
+  const [skorMin, setSkorMin] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pendingLost, setPendingLost] = useState<OpportunityDTO | null>(null);
@@ -519,14 +603,23 @@ export default function PipelineModule() {
   }, [opps, owner]);
 
   const tableRows = useMemo(() => {
-    const base = tempFilter === "all" ? filtered : filtered.filter((o) => o.temperature === tempFilter);
+    let base = tempFilter === "all" ? filtered : filtered.filter((o) => o.temperature === tempFilter);
+    if (skorMin !== "all") {
+      const min = Number(skorMin);
+      base = base.filter((o) => scoreOf(o) >= min);
+    }
+    if (scoreSortDir) {
+      base = [...base].sort((a, b) =>
+        scoreSortDir === "asc" ? scoreOf(a) - scoreOf(b) : scoreOf(b) - scoreOf(a)
+      );
+    }
     if (!sortDir) return base;
     return [...base].sort((a, b) => {
       const av = a.estimatedValue ?? 0;
       const bv = b.estimatedValue ?? 0;
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [filtered, tempFilter, sortDir]);
+  }, [filtered, tempFilter, skorMin, scoreSortDir, sortDir]);
 
   const grouped = useMemo(() => {
     const map: Record<string, OpportunityDTO[]> = {};
@@ -535,8 +628,13 @@ export default function PipelineModule() {
       const target = KANBAN_KEYS.includes(o.stage) ? o.stage : null;
       if (target) map[target].push(o);
     }
+    if (sortByScore) {
+      for (const key of KANBAN_KEYS) {
+        map[key].sort((a, b) => scoreOf(b) - scoreOf(a));
+      }
+    }
     return map;
-  }, [filtered]);
+  }, [filtered, sortByScore]);
 
   function openDetail(id: string) {
     setSelectedId(id);
@@ -545,6 +643,10 @@ export default function PipelineModule() {
 
   function toggleSort() {
     setSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
+  }
+
+  function toggleScoreSort() {
+    setScoreSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
   }
 
   async function moveOpportunity(opp: OpportunityDTO, stage: string, extra?: LostExtra) {
@@ -658,23 +760,49 @@ export default function PipelineModule() {
         </Select>
 
         {view === "table" ? (
-          <Select value={tempFilter} onValueChange={setTempFilter}>
-            <SelectTrigger className="w-full bg-white sm:w-40" aria-label="Filter temperatur">
-              <SelectValue placeholder="Semua Temperatur" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Semua Temperatur</SelectItem>
-              <SelectItem value="hot">Hot</SelectItem>
-              <SelectItem value="warm">Warm</SelectItem>
-              <SelectItem value="cold">Cold</SelectItem>
-            </SelectContent>
-          </Select>
+          <>
+            <Select value={tempFilter} onValueChange={setTempFilter}>
+              <SelectTrigger className="w-full bg-white sm:w-40" aria-label="Filter temperatur">
+                <SelectValue placeholder="Semua Temperatur" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Temperatur</SelectItem>
+                <SelectItem value="hot">Hot</SelectItem>
+                <SelectItem value="warm">Warm</SelectItem>
+                <SelectItem value="cold">Cold</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={skorMin} onValueChange={setSkorMin}>
+              <SelectTrigger className="w-full bg-white sm:w-40" aria-label="Filter skor minimum">
+                <SelectValue placeholder="Skor Min" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Skor Min: Semua</SelectItem>
+                <SelectItem value="45">≥ 45 (Warm+)</SelectItem>
+                <SelectItem value="70">≥ 70 (Hot)</SelectItem>
+              </SelectContent>
+            </Select>
+          </>
         ) : null}
 
         <div className="ml-auto flex items-center gap-2">
           <Badge variant="secondary" className="bg-zinc-200/60 text-zinc-700">
             {filtered.length} opportunity
           </Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-pressed={sortByScore}
+            aria-label="Urutkan kartu berdasarkan skor"
+            onClick={() => setSortByScore((v) => !v)}
+            className={cn(
+              sortByScore &&
+                "bg-zinc-900 text-white hover:bg-zinc-800 hover:text-white"
+            )}
+          >
+            <ArrowDownWideNarrow className="size-4" aria-hidden="true" />
+            Urut Skor
+          </Button>
           <ToggleGroup
             type="single"
             variant="outline"
@@ -750,6 +878,8 @@ export default function PipelineModule() {
           rows={tableRows}
           sortDir={sortDir}
           onToggleSort={toggleSort}
+          scoreSortDir={scoreSortDir}
+          onToggleScoreSort={toggleScoreSort}
           onOpen={(id) => {
             if (draggedRecentlyRef.current) return;
             openDetail(id);

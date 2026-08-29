@@ -158,6 +158,13 @@ export const api = {
   },
   addPayment: (payload: { invoiceId: string; amount: number; method?: string; reference?: string; actorName?: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "add_payment", ...payload }) }),
+  /** Kirim (draft→sent) atau batalkan invoice — Fase 2/3 lifecycle. */
+  invoiceAction: (payload: { invoiceId: string; action: "send_invoice" | "cancel_invoice"; actorName?: string; actorRole?: string }) =>
+    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify(payload) }),
+
+  // SLA escalation (Fase 3)
+  escalateLead: (payload: { interactionId: string; note?: string; actorName: string; actorRole: string }) =>
+    request<{ task: TaskDTO }>("/api/inbox/escalate", { method: "POST", body: JSON.stringify(payload) }),
 
   // Audit
   auditLogs: (params?: { limit?: number; entity?: string; action?: string }) => {

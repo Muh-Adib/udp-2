@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  AlarmClock, AlertTriangle, Building2, Check, Fingerprint, Globe, Inbox,
-  Instagram, LayoutDashboard, Loader2, Mail, MessageCircle, Phone, RefreshCw,
-  User, UserPlus, Video, X,
+  AlarmClock, AlertTriangle, Building2, Check, CheckCircle2, Fingerprint, Globe, Inbox,
+  Instagram, LayoutDashboard, Loader2, Mail, MessageCircle, Phone, RefreshCw, ShieldAlert,
+  Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/crm/api-client";
@@ -20,6 +20,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 // ============ Tipe lokal ============
 
@@ -58,10 +62,63 @@ function channelMeta(channel: string) {
 function channelLabel(channel: string): string {
   return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
 }
-function slaBadge(slaHours: number): { label: string; className: string } {
-  if (slaHours <= 4) return { label: "SLA OK", className: "border-emerald-200 bg-emerald-50 text-emerald-700" };
-  if (slaHours <= 24) return { label: "Perlu respons", className: "border-amber-200 bg-amber-50 text-amber-700" };
-  return { label: `Terlambat ${slaHours} jam`, className: "border-rose-200 bg-rose-50 text-rose-700" };
+type SlaTone = "ok" | "warning" | "breach";
+
+/** Fase 3 — SLA countdown per brand: sisa = SLA brand − jam tunggu (slaHours dari API). */
+function slaBadgeInfo(brandSlaHours: number, waitHours: number): {
+  label: string; className: string; tone: SlaTone;
+} {
+  const split = (hours: number) => {
+    let h = Math.floor(hours);
+    let m = Math.round((hours - h) * 60);
+    if (m >= 60) { h += 1; m = 0; }
+    return { h, m };
+  };
+  const fmt = (hours: number, prefix: string) => {
+    const { h, m } = split(hours);
+    if (h < 1) return `${prefix}${m}m`;
+    if (m === 0) return `${prefix}${h}j`;
+    return `${prefix}${h}j ${m}m`;
+  };
+
+  const remaining = brandSlaHours - waitHours;
+  if (remaining <= 0) {
+    return {
+      label: fmt(Math.abs(remaining), "Terlambat "),
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      tone: "breach" as const,
+    };
+  }
+  if (remaining <= brandSlaHours * 0.5) {
+    return {
+      label: fmt(remaining, "Segera: "),
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      tone: "warning" as const,
+    };
+  }
+  return {
+    label: fmt(remaining, "Sisa "),
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    tone: "ok" as const,
+  };
+}
+
+const SLA_TONE_ICON: Record<SlaTone, LucideIcon> = {
+  ok: Timer,
+  warning: AlarmClock,
+  breach: TimerOff,
+};
+
+/** Badge SLA dengan ikon + countdown, dipakai di kartu lead & panel detail. */
+function SlaBadge({ brandSlaHours, waitHours }: { brandSlaHours: number; waitHours: number }) {
+  const sla = slaBadgeInfo(brandSlaHours, waitHours);
+  const Icon = SLA_TONE_ICON[sla.tone];
+  return (
+    <Badge variant="outline" className={cn("border", sla.className)} aria-label={`Status SLA: ${sla.label}`}>
+      <Icon aria-hidden="true" />
+      {sla.label}
+    </Badge>
+  );
 }
 function scoreTone(score: number): { bar: string; text: string } {
   if (score >= 75) return { bar: "bg-emerald-500", text: "text-emerald-600" };
@@ -122,21 +179,36 @@ function StatCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label:
   );
 }
 
-function LeadCard({ lead, selected, onSelect }: { lead: InboxLead; selected: boolean; onSelect: (lead: InboxLead) => void }) {
+function LeadCard({
+  lead, escalated, selected, onSelect, onEscalate,
+}: {
+  lead: InboxLead;
+  escalated: boolean;
+  selected: boolean;
+  onSelect: (lead: InboxLead) => void;
+  onEscalate: (lead: InboxLead) => void;
+}) {
   const sender = (lead.senderName ?? "").trim() || "Tanpa nama";
-  const sla = slaBadge(lead.slaHours);
-  const isLate = lead.slaHours > 24;
+  const sla = slaBadgeInfo(lead.brand?.slaHours ?? 24, lead.slaHours);
+  const breached = sla.tone === "breach";
   const meta = channelMeta(lead.channel);
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(lead)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(lead);
+        }
+      }}
       aria-label={`Buka detail lead dari ${sender}`}
       className={cn(
-        "w-full rounded-xl border bg-white p-4 text-left shadow-sm transition-colors hover:bg-zinc-50",
-        isLate ? "border-l-4 border-l-rose-500" : "hover:border-zinc-300",
-        selected && !isLate && "border-zinc-900 ring-1 ring-zinc-900",
-        selected && isLate && "ring-1 ring-rose-500"
+        "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+        breached ? "border-l-4 border-l-rose-500" : "hover:border-zinc-300",
+        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
+        selected && breached && "ring-1 ring-rose-500"
       )}
     >
       <div className="flex items-start gap-3">
@@ -153,17 +225,45 @@ function LeadCard({ lead, selected, onSelect }: { lead: InboxLead; selected: boo
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Badge variant="outline" className={cn("border", meta.badge)}>{channelLabel(lead.channel)}</Badge>
             {lead.brand ? <BrandChip name={lead.brand.name} color={lead.brand.color} /> : null}
-            <Badge variant="outline" className={cn("border", sla.className)}>{sla.label}</Badge>
+            <SlaBadge brandSlaHours={lead.brand?.slaHours ?? 24} waitHours={lead.slaHours} />
             {lead.candidates.length > 0 ? (
               <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
                 <AlertTriangle aria-hidden="true" />
                 {`Duplikat? ${lead.candidates.length} kandidat`}
               </Badge>
             ) : null}
+            {escalated ? (
+              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
+                <CheckCircle2 aria-hidden="true" />
+                Sudah dieskalasi
+              </Badge>
+            ) : null}
+          </div>
+          <div className="mt-3 flex items-center justify-end">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={escalated}
+              className={cn(
+                "h-7 px-2.5 text-xs",
+                breached && !escalated
+                  ? "border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                  : "text-zinc-600"
+              )}
+              onClick={(e) => {
+                e.stopPropagation();
+                onEscalate(lead);
+              }}
+              aria-label={`Eskalasi lead dari ${sender}`}
+            >
+              <ShieldAlert className="size-3.5" aria-hidden="true" />
+              Eskalasi
+            </Button>
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -252,12 +352,18 @@ export default function InboxModule() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [channelFilter, setChannelFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<"newest" | "late">("newest");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [showNewContact, setShowNewContact] = useState(false);
   const [linkedContactId, setLinkedContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactFormState>(EMPTY_CONTACT_FORM);
   const [oppForm, setOppForm] = useState<OpportunityFormState>(EMPTY_OPP_FORM);
+  // Fase 3 — eskalasi SLA
+  const [escalateTarget, setEscalateTarget] = useState<InboxLead | null>(null);
+  const [escalateNote, setEscalateNote] = useState("");
+  const [escalating, setEscalating] = useState(false);
+  const [escalatedIds, setEscalatedIds] = useState<Set<string>>(new Set());
   const detailRef = useRef<HTMLDivElement | null>(null);
 
   const loadLeads = useCallback(async () => {
@@ -282,10 +388,21 @@ export default function InboxModule() {
     const list = leads ?? [];
     return {
       total: list.length,
-      late: list.filter((l) => l.slaHours > 24).length,
+      // Breach baru (Fase 3): waktu tunggu melewati SLA brand masing-masing
+      late: list.filter((l) => (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
       duplicate: list.filter((l) => l.candidates.length > 0).length,
     };
   }, [leads]);
+
+  const sortedLeads = useMemo(() => {
+    const list = [...(leads ?? [])];
+    if (sortBy === "late") {
+      list.sort((a, b) => b.slaHours - a.slaHours);
+    } else {
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+    return list;
+  }, [leads, sortBy]);
 
   const selectedLead = useMemo(
     () => leads?.find((l) => l.id === selectedId) ?? null,
@@ -400,7 +517,41 @@ export default function InboxModule() {
     }
   }
 
+  /** Fase 3 — buka dialog eskalasi untuk sebuah lead. */
+  function openEscalateDialog(lead: InboxLead) {
+    setEscalateTarget(lead);
+    setEscalateNote("");
+  }
+
+  async function handleEscalate() {
+    if (!escalateTarget || !user || escalating) return;
+    setEscalating(true);
+    try {
+      await api.escalateLead({
+        interactionId: escalateTarget.id,
+        ...(escalateNote.trim() ? { note: escalateNote.trim() } : {}),
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      toast.success("Eskalasi dibuat — task urgent untuk Direktur");
+      setEscalatedIds((prev) => {
+        const next = new Set(prev);
+        next.add(escalateTarget.id);
+        return next;
+      });
+      setEscalateTarget(null);
+      setEscalateNote("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat eskalasi.");
+    } finally {
+      setEscalating(false);
+    }
+  }
+
   const firstLoad = loading && leads === null;
+  const escalateSla = escalateTarget
+    ? slaBadgeInfo(escalateTarget.brand?.slaHours ?? 24, escalateTarget.slaHours)
+    : null;
 
   return (
     <div className="space-y-4">
@@ -418,9 +569,9 @@ export default function InboxModule() {
             </div>
             <p className="mt-1 text-sm text-zinc-500">Semua lead baru lintas kanal — Instagram, WhatsApp, Email, Website</p>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500" aria-label="Legenda SLA">
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />SLA OK ≤ 4 jam</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />Perlu respons ≤ 24 jam</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-500" aria-hidden="true" />Terlambat &gt; 24 jam</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />SLA Aman</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />Segera Jatuh Tempo</span>
+              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-500" aria-hidden="true" />Terlambat</span>
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -450,6 +601,15 @@ export default function InboxModule() {
                 {brands.map((b) => (
                   <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v === "late" ? "late" : "newest")}>
+              <SelectTrigger className="w-full sm:w-[160px]" aria-label="Urutkan lead">
+                <SelectValue placeholder="Urutkan" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">Terbaru</SelectItem>
+                <SelectItem value="late">Paling Terlambat</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -499,12 +659,14 @@ export default function InboxModule() {
             </div>
           ) : leads ? (
             <div className="max-h-96 space-y-3 overflow-y-auto pr-1 crm-scroll">
-              {leads.map((lead) => (
+              {sortedLeads.map((lead) => (
                 <LeadCard
                   key={lead.id}
                   lead={lead}
+                  escalated={escalatedIds.has(lead.id)}
                   selected={lead.id === selectedId}
                   onSelect={handleSelectLead}
+                  onEscalate={openEscalateDialog}
                 />
               ))}
             </div>
@@ -545,9 +707,7 @@ export default function InboxModule() {
                         {selectedLead.brand ? (
                           <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
                         ) : null}
-                        <Badge variant="outline" className={cn("border", slaBadge(selectedLead.slaHours).className)}>
-                          {slaBadge(selectedLead.slaHours).label}
-                        </Badge>
+                        <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} />
                       </div>
                     </div>
                   </div>
@@ -826,6 +986,96 @@ export default function InboxModule() {
           </div>
         </section>
       </div>
+
+      {/* ===== Dialog eskalasi SLA (Fase 3) ===== */}
+      <Dialog
+        open={escalateTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !escalating) {
+            setEscalateTarget(null);
+            setEscalateNote("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="size-4.5 text-rose-600" aria-hidden="true" />
+              Eskalasi Lead ke Direktur
+            </DialogTitle>
+            <DialogDescription>
+              Membuat task urgent (deadline 2 jam) yang ditugaskan ke Direktur untuk follow-up segera.
+            </DialogDescription>
+          </DialogHeader>
+
+          {escalateTarget ? (
+            <div className="space-y-3">
+              <dl className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs sm:grid-cols-2">
+                <div>
+                  <dt className="text-zinc-400">Pengirim</dt>
+                  <dd className="truncate font-medium text-zinc-800">
+                    {(escalateTarget.senderName ?? "").trim() || "Tanpa nama"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-400">Kanal</dt>
+                  <dd className="text-zinc-800">{channelLabel(escalateTarget.channel)}</dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-400">Brand</dt>
+                  <dd className="text-zinc-800">{escalateTarget.brand?.name ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-400">Waktu Tunggu</dt>
+                  <dd className={cn(
+                    "font-semibold tabular-nums",
+                    escalateSla?.tone === "breach" ? "text-rose-600" : "text-amber-600"
+                  )}>
+                    {escalateSla?.label ?? "-"}
+                  </dd>
+                </div>
+              </dl>
+              <p className="line-clamp-3 rounded-lg border border-zinc-200 bg-white p-3 text-sm leading-relaxed text-zinc-600">
+                {escalateTarget.content}
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="escalate-note" className="text-xs">Catatan (opsional)</Label>
+                <Textarea
+                  id="escalate-note"
+                  value={escalateNote}
+                  onChange={(e) => setEscalateNote(e.target.value)}
+                  placeholder="cth. Klien menunggu penawaran segera, mohon prioritas."
+                  rows={3}
+                  disabled={escalating}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={escalating}
+              onClick={() => { setEscalateTarget(null); setEscalateNote(""); }}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              disabled={escalating}
+              onClick={() => void handleEscalate()}
+            >
+              {escalating ? (
+                <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengirim…</>
+              ) : (
+                <><ShieldAlert className="size-4" aria-hidden="true" /> Buat Task Eskalasi</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
