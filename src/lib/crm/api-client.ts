@@ -51,6 +51,43 @@ export const api = {
   aiSummary: (id: string) =>
     request<{ summary: string }>(`/api/opportunities/${id}/summary`, { method: "POST" }),
 
+  // Estimation (Fase 2)
+  getEstimation: (id: string) =>
+    request<{ estimation: import("@/lib/crm/types").EstimationDTO }>(`/api/opportunities/${id}/estimation`),
+  saveEstimation: (id: string, payload: Record<string, unknown>) =>
+    request<{ estimation: import("@/lib/crm/types").EstimationDTO; approval?: import("@/lib/crm/types").ApprovalRequestDTO }>(
+      `/api/opportunities/${id}/estimation`, { method: "PUT", body: JSON.stringify(payload) }
+    ),
+
+  // Quotations (Fase 2)
+  quotations: (params?: { status?: string; brandId?: string; opportunityId?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.status && params.status !== "all") sp.set("status", params.status);
+    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+    if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+    return request<{ quotations: import("@/lib/crm/types").QuotationDTO[] }>(`/api/quotations?${sp}`);
+  },
+  createQuotation: (payload: Record<string, unknown>) =>
+    request<{ quotation: import("@/lib/crm/types").QuotationDTO }>("/api/quotations", { method: "POST", body: JSON.stringify(payload) }),
+  quotationAction: (id: string, payload: Record<string, unknown>) =>
+    request<{ quotation?: import("@/lib/crm/types").QuotationDTO; invoice?: { number: string } }>(`/api/quotations/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+
+  // Approvals (Fase 2)
+  approvals: (status?: string) =>
+    request<{ approvals: import("@/lib/crm/types").ApprovalRequestDTO[]; pendingCount: number }>(
+      `/api/approvals${status && status !== "all" ? `?status=${status}` : ""}`
+    ),
+  decideApproval: (payload: { id: string; decision: "approve" | "reject"; decisionNote?: string; actorName: string; actorRole: string }) =>
+    request<{ approval: import("@/lib/crm/types").ApprovalRequestDTO }>("/api/approvals", { method: "PATCH", body: JSON.stringify(payload) }),
+
+  // Brands & templates
+  createBrand: (payload: Record<string, unknown>) =>
+    request<{ brand: import("@/lib/crm/types").Brand }>("/api/brands", { method: "POST", body: JSON.stringify(payload) }),
+  followUpTemplates: (brandId?: string) =>
+    request<{ templates: import("@/lib/crm/types").FollowUpTemplateDTO[] }>(
+      `/api/followup-templates${brandId && brandId !== "all" ? `?brandId=${brandId}` : ""}`
+    ),
+
   // Contacts & companies
   contacts: (q?: string) => request<{ contacts: (ContactRef & { company?: CompanyRef | null; _count?: { opportunities: number; interactions: number } })[] }>(`/api/contacts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   companies: (q?: string) => request<{ companies: (CompanyRef & { contacts?: ContactRef[]; _count?: { opportunities: number; projects: number; invoices: number } })[] }>(`/api/companies${q ? `?q=${encodeURIComponent(q)}` : ""}`),

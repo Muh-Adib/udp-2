@@ -226,6 +226,83 @@ export interface AuditLogDTO {
   createdAt: string;
 }
 
+export interface EstimationDTO {
+  id: string;
+  opportunityId: string;
+  laborInternal: number; vendorFreelance: number; equipment: number; transport: number;
+  accommodation: number; talent: number; locationFee: number; softwareLicense: number; hostingDomain: number;
+  contingencyPct: number; managementFeePct: number; discountPct: number; taxPct: number; targetMarginPct: number;
+  totalCost: number; contingency: number; managementFee: number;
+  revenue: number; discountAmount: number; netRevenue: number; taxAmount: number; grandTotal: number;
+  margin: number; marginPct: number;
+  notes?: string | null;
+  status: string;
+  createdBy?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuotationItemDTO { description: string; qty: number; unitPrice: number; subtotal: number }
+
+export interface QuotationDTO {
+  id: string;
+  number: string;
+  brandId: string;
+  brand?: Brand;
+  opportunityId: string;
+  opportunity?: { id: string; title: string; stage: string };
+  companyId: string;
+  company?: CompanyRef;
+  items: string | QuotationItemDTO[];
+  subtotal: number;
+  discountPct: number;
+  discountAmount: number;
+  taxPct: number;
+  taxAmount: number;
+  total: number;
+  currency: string;
+  status: string;
+  validUntil?: string | null;
+  notes?: string | null;
+  sentAt?: string | null;
+  respondedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApprovalRequestDTO {
+  id: string;
+  entityType: string;
+  entityId: string;
+  entityLabel?: string | null;
+  opportunityId?: string | null;
+  opportunity?: OpportunityDTO | null;
+  requestedBy: string;
+  amount?: number | null;
+  discountPct?: number | null;
+  note?: string | null;
+  status: string;
+  decidedBy?: string | null;
+  decidedAt?: string | null;
+  decisionNote?: string | null;
+  createdAt: string;
+}
+
+export interface FollowUpTemplateDTO {
+  id: string;
+  name: string;
+  brandId?: string | null;
+  channel: string;
+  language: string;
+  stage?: string | null;
+  delayDays: number;
+  body: string;
+  version: number;
+  approved: boolean;
+}
+
 export interface DashboardData {
   kpi: {
     totalLeads: number;
@@ -250,4 +327,5 @@ export interface DashboardData {
   pipelineTrend: { label: string; created: number; won: number }[];
   projectsAtRisk?: number;
   productionCapacity?: number;
+  pendingApprovals?: ApprovalRequestDTO[];
 }

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlertTriangle, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
-  RefreshCw, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, type LucideIcon,
+  AlertTriangle, Check, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
+  RefreshCw, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -12,14 +12,18 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { DashboardData } from "@/lib/crm/types";
+import type { ApprovalRequestDTO, DashboardData } from "@/lib/crm/types";
 import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
 
 // ============ Tipe lokal ============
@@ -33,6 +37,22 @@ type KpiTrendMap = Partial<Record<KpiTrendKey, number | null>>;
 interface DashboardFullData extends DashboardData {
   projectsAtRisk: number;
   productionCapacity: number;
+}
+
+/** State dialog konfirmasi keputusan approval (Direktur). */
+interface ApprovalConfirmState {
+  approval: ApprovalRequestDTO;
+  decision: "approve" | "reject";
+}
+
+const APPROVAL_ENTITY_LABEL: Record<string, string> = {
+  estimation: "Estimasi",
+  discount: "Diskon",
+  budget: "Budget",
+};
+
+function approvalEntityLabel(type: string): string {
+  return APPROVAL_ENTITY_LABEL[type] ?? type;
 }
 
 /** Normalisasi defensif field produksi/risko tanpa mengubah tipe bersama milik main agent. */
@@ -154,7 +174,7 @@ function KpiCard({
   accentColor?: string;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-colors hover:border-zinc-300">
+    <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
       {accentColor ? (
         <span aria-hidden className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accentColor }} />
       ) : null}
@@ -177,10 +197,11 @@ function KpiCard({
 }
 
 function SectionCard({
-  title, subtitle, children, ariaLabel, className = "",
+  title, subtitle, overline, children, ariaLabel, className = "",
 }: {
   title: string;
   subtitle?: string;
+  overline?: string;
   children: ReactNode;
   ariaLabel: string;
   className?: string;
@@ -188,6 +209,9 @@ function SectionCard({
   return (
     <section aria-label={ariaLabel} className={`rounded-xl border bg-white p-4 shadow-sm sm:p-6 ${className}`}>
       <div className="mb-4">
+        {overline ? (
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{overline}</p>
+        ) : null}
         <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
         {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
       </div>
@@ -202,6 +226,88 @@ function EmptyState({ text }: { text: string }) {
       <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
       {text}
     </div>
+  );
+}
+
+/** Baris pengajuan approval: kartu kecil dengan aksi Setujui/Tolak. */
+function ApprovalRow({
+  item, priority, busy, onDecide,
+}: {
+  item: ApprovalRequestDTO;
+  priority: boolean;
+  busy: boolean;
+  onDecide: (approval: ApprovalRequestDTO, decision: "approve" | "reject") => void;
+}) {
+  const brand = item.opportunity?.brand ?? null;
+  const label = item.entityLabel ?? item.entityId;
+  return (
+    <li className={`rounded-xl border bg-white p-3 shadow-sm transition-all hover:border-zinc-300 sm:p-4 ${priority ? "ring-1 ring-amber-300" : ""}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="truncate text-sm font-semibold text-zinc-900" title={label}>{label}</span>
+            {priority ? (
+              <Badge className="border-transparent bg-amber-100 text-amber-700">Prioritas</Badge>
+            ) : null}
+            {item.discountPct ? (
+              <Badge className="border-transparent bg-amber-100 text-amber-700">Diskon {item.discountPct}%</Badge>
+            ) : null}
+            <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-zinc-500">
+              {approvalEntityLabel(item.entityType)}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+            <span
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-bold text-zinc-700"
+              title={item.requestedBy}
+              aria-hidden
+            >
+              {initials(item.requestedBy)}
+            </span>
+            <span className="font-medium text-zinc-700">{item.requestedBy}</span>
+            <span aria-hidden>·</span>
+            <span>diajukan {timeAgo(item.createdAt)}</span>
+            {brand ? (
+              <span className="inline-flex items-center gap-1 text-zinc-600">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
+                {brand.name}
+              </span>
+            ) : null}
+          </div>
+          {item.note ? (
+            <p className="line-clamp-1 text-xs italic text-zinc-500" title={item.note}>{item.note}</p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center justify-between gap-2 sm:flex-col sm:items-end">
+          <span className="text-sm font-bold tabular-nums text-zinc-900">
+            {item.amount != null ? formatCurrency(item.amount) : "-"}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="h-8 bg-emerald-600 text-white hover:bg-emerald-700"
+              disabled={busy}
+              onClick={() => onDecide(item, "approve")}
+              aria-label={`Setujui pengajuan ${label}`}
+            >
+              <Check className="h-3.5 w-3.5" aria-hidden />
+              Setujui
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              disabled={busy}
+              onClick={() => onDecide(item, "reject")}
+              aria-label={`Tolak pengajuan ${label}`}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+              Tolak
+            </Button>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -251,6 +357,9 @@ export default function DashboardModule() {
   const [fetchTime, setFetchTime] = useState<Date | null>(null);
   const [trends, setTrends] = useState<KpiTrendMap>({});
   const prevKpiRef = useRef<DashboardData["kpi"] | null>(null);
+  const [confirmState, setConfirmState] = useState<ApprovalConfirmState | null>(null);
+  const [decisionNote, setDecisionNote] = useState("");
+  const [deciding, setDeciding] = useState(false);
 
   const load = useCallback(async (silent: boolean) => {
     if (!silent) setLoading(true);
@@ -275,6 +384,52 @@ export default function DashboardModule() {
     return () => clearInterval(id);
   }, [load]);
 
+  const openConfirm = useCallback((approval: ApprovalRequestDTO, decision: "approve" | "reject") => {
+    setDecisionNote("");
+    setConfirmState({ approval, decision });
+  }, []);
+
+  const closeConfirm = useCallback(() => {
+    if (deciding) return;
+    setConfirmState(null);
+    setDecisionNote("");
+  }, [deciding]);
+
+  const submitDecision = useCallback(async () => {
+    if (!confirmState || !user || deciding) return;
+    const isReject = confirmState.decision === "reject";
+    const note = decisionNote.trim();
+    if (isReject && !note) {
+      toast.error("Catatan keputusan wajib diisi saat menolak pengajuan.");
+      return;
+    }
+    setDeciding(true);
+    try {
+      await api.decideApproval({
+        id: confirmState.approval.id,
+        decision: confirmState.decision,
+        decisionNote: note || undefined,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      toast.success(isReject ? "Pengajuan ditolak" : "Pengajuan disetujui", {
+        description: `${confirmState.approval.entityLabel ?? "Pengajuan"} — keputusan tercatat sebagai ${user.name}.`,
+      });
+      setConfirmState(null);
+      setDecisionNote("");
+      await load(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Silakan coba lagi.";
+      if (/403|direktur|akses|izin/i.test(msg)) {
+        toast.error("Akses ditolak", { description: msg });
+      } else {
+        toast.error("Gagal memutus pengajuan", { description: msg });
+      }
+    } finally {
+      setDeciding(false);
+    }
+  }, [confirmState, deciding, decisionNote, load, user]);
+
   if (!data) {
     if (loading) return <DashboardSkeleton />;
     return (
@@ -290,6 +445,8 @@ export default function DashboardModule() {
   }
 
   const kpi = data.kpi;
+  const canDecide = user?.role === "director" || user?.role === "super_admin";
+  const pendingApprovals = data.pendingApprovals ?? [];
   const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
   const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
   const funnelMap = new Map(data.funnel.map((f) => [f.stage, f] as const));
@@ -375,20 +532,56 @@ export default function DashboardModule() {
       </header>
 
       {/* ============ KPI ============ */}
-      <section aria-label="KPI utama" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {kpiCards.map((c) => (
-          <KpiCard
-            key={c.key}
-            label={c.label}
-            value={c.value}
-            icon={c.icon}
-            hint={c.hint}
-            badge={c.badge}
-            trend={trendNode(trends[c.key] ?? null, c.goodWhen)}
-            accentColor={c.accent ? firstBrandColor : undefined}
-          />
-        ))}
+      <section aria-label="KPI utama" className="space-y-2">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Ringkasan Kinerja</h2>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {kpiCards.map((c) => (
+            <KpiCard
+              key={c.key}
+              label={c.label}
+              value={c.value}
+              icon={c.icon}
+              hint={c.hint}
+              badge={c.badge}
+              trend={trendNode(trends[c.key] ?? null, c.goodWhen)}
+              accentColor={c.accent ? firstBrandColor : undefined}
+            />
+          ))}
+        </div>
       </section>
+
+      {/* ============ Antrean Approval (Direktur & Super Admin) ============ */}
+      {canDecide ? (
+        <section aria-label="Antrean approval" className="space-y-2">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Persetujuan</p>
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+                <Stamp className="h-4 w-4 text-zinc-500" aria-hidden />
+                Antrean Approval
+              </h2>
+            </div>
+            {pendingApprovals.length > 0 ? (
+              <Badge className="border-transparent bg-amber-100 text-amber-700 tabular-nums">
+                {pendingApprovals.length} pending
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 tabular-nums">
+                0 pending
+              </Badge>
+            )}
+          </div>
+          {pendingApprovals.length === 0 ? (
+            <EmptyState text="Tidak ada pengajuan menunggu persetujuan" />
+          ) : (
+            <ul className="space-y-2">
+              {pendingApprovals.map((a, i) => (
+                <ApprovalRow key={a.id} item={a} priority={i === 0} busy={deciding} onDecide={openConfirm} />
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
       {/* ============ Funnel + Charts ============ */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -396,6 +589,7 @@ export default function DashboardModule() {
           ariaLabel="Funnel konversi"
           title="Funnel Konversi"
           subtitle="Jumlah opportunity per tahap pipeline"
+          overline="Analisis Pipeline"
         >
           <div className="space-y-2">
             {PIPELINE_STAGES.map((stage) => {
@@ -428,6 +622,7 @@ export default function DashboardModule() {
             ariaLabel="Forecast weighted"
             title="Forecast Weighted 30/60/90"
             subtitle="Nilai pipeline tertimbang per bucket waktu"
+            overline="Proyeksi Pendapatan"
             className="shrink-0"
           >
             <ResponsiveContainer width="100%" height={220}>
@@ -455,6 +650,7 @@ export default function DashboardModule() {
             ariaLabel="Tren pipeline"
             title="Tren Pipeline 6 Minggu"
             subtitle="Lead baru masuk vs deal won per minggu"
+            overline="Tren Mingguan"
           >
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={data.pipelineTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -495,7 +691,10 @@ export default function DashboardModule() {
 
       {/* ============ Pipeline per Brand ============ */}
       <section aria-label="Pipeline per brand" className="space-y-3">
-        <h2 className="text-sm font-semibold text-zinc-900">Pipeline per Brand</h2>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Perbandingan Brand</p>
+          <h2 className="text-sm font-semibold text-zinc-900">Pipeline per Brand</h2>
+        </div>
         {data.byBrand.length === 0 ? (
           <EmptyState text="Belum ada data pipeline per brand." />
         ) : (
@@ -548,6 +747,7 @@ export default function DashboardModule() {
           ariaLabel="Alasan lost"
           title="Alasan Lost"
           subtitle="Distribusi alasan kegagalan deal"
+          overline="Evaluasi Deal"
         >
           {data.lostReasons.length === 0 ? (
             <EmptyState text="Tidak ada opportunity lost — bagus, pertahankan!" />
@@ -578,6 +778,7 @@ export default function DashboardModule() {
           ariaLabel="Performa marketing"
           title="Performa Marketing"
           subtitle="Perbandingan hasil antar marketer"
+          overline="Tim Sales"
         >
           {data.marketingPerf.length === 0 ? (
             <EmptyState text="Belum ada data performa marketing." />
@@ -623,6 +824,7 @@ export default function DashboardModule() {
           ariaLabel="Distribusi kanal dan negara"
           title="Distribusi Kanal & Negara"
           subtitle="Asal lead lintas kanal dan wilayah"
+          overline="Sumber Lead"
         >
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div>
@@ -665,6 +867,7 @@ export default function DashboardModule() {
           ariaLabel="Produksi dan risiko"
           title="Produksi & Risiko"
           subtitle="Kesehatan operasional dan aktivitas terbaru"
+          overline="Operasional"
         >
           <div className="grid grid-cols-2 gap-4">
             <div className={`rounded-lg border p-3 ${data.projectsAtRisk > 0 ? "border-rose-200 bg-rose-50" : "bg-zinc-50"}`}>
@@ -720,6 +923,81 @@ export default function DashboardModule() {
         </span>
         <span>Auto-refresh setiap 60 detik</span>
       </footer>
+
+      {/* ============ Dialog konfirmasi keputusan approval ============ */}
+      <Dialog open={confirmState !== null} onOpenChange={(open) => { if (!open) closeConfirm(); }}>
+        <DialogContent className="sm:max-w-md" aria-label="Konfirmasi keputusan approval">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {confirmState?.decision === "approve" ? (
+                <>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700" aria-hidden>
+                    <Check className="h-4 w-4" />
+                  </span>
+                  Setujui Pengajuan
+                </>
+              ) : (
+                <>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-100 text-rose-600" aria-hidden>
+                    <X className="h-4 w-4" />
+                  </span>
+                  Tolak Pengajuan
+                </>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {confirmState?.approval.entityLabel ?? "Pengajuan"}
+              {confirmState?.approval.amount != null ? ` · ${formatCurrency(confirmState.approval.amount)}` : ""}
+              {confirmState ? ` · oleh ${confirmState.approval.requestedBy}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="approval-decision-note" className="text-xs font-medium text-zinc-600">
+              Catatan keputusan{" "}
+              {confirmState?.decision === "reject" ? (
+                <span className="text-rose-600">*</span>
+              ) : (
+                <span className="text-zinc-400">(opsional)</span>
+              )}
+            </label>
+            <Textarea
+              id="approval-decision-note"
+              value={decisionNote}
+              onChange={(e) => setDecisionNote(e.target.value)}
+              rows={3}
+              disabled={deciding}
+              placeholder={
+                confirmState?.decision === "reject"
+                  ? "Wajib diisi — tulis alasan penolakan"
+                  : "Contoh: disetujui, lanjutkan ke quotation"
+              }
+              aria-required={confirmState?.decision === "reject"}
+            />
+            {confirmState?.decision === "reject" && !decisionNote.trim() ? (
+              <p className="text-[11px] text-rose-600">Catatan wajib diisi untuk menolak pengajuan.</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={closeConfirm} disabled={deciding}>
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void submitDecision()}
+              disabled={deciding || (confirmState?.decision === "reject" && !decisionNote.trim())}
+              className={
+                confirmState?.decision === "approve"
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-rose-600 text-white hover:bg-rose-700"
+              }
+              aria-label={confirmState?.decision === "approve" ? "Konfirmasi setujui pengajuan" : "Konfirmasi tolak pengajuan"}
+            >
+              {confirmState?.decision === "approve" ? <Check className="h-3.5 w-3.5" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />}
+              {confirmState?.decision === "approve" ? "Setujui" : "Tolak Pengajuan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

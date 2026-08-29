@@ -159,3 +159,100 @@ Stage Summary:
 - MVP Fase 1 selesai & terverifikasi browser: auth+role, multi-brand, contact/company, lead inbox + identity matching + merge, pipeline kanban/table/drag, timeline, tasks, lost reason wajib, nurture, dashboard eksekutif, audit log, AI summary.
 - Catatan lingkungan: CDP click agent-browser kadang tidak terkirim (headless quirk) — fallback `agent-browser eval el.click()`; refs stale cepat karena HMR/auto-refresh → selalu snapshot ulang.
 - Saran fase berikutnya: POST /api/brands (form sudah tersedia di brands-module), brief builder, estimation/budgeting, quotation PDF, WhatsApp/email webhook integration, lead scoring.
+
+---
+Task ID: 7-backend
+Agent: main (Z.ai Code)
+Task: Fase 2 backend — Estimation & Budgeting, Quotation, Approval Workflow
+
+Work Log:
+- Schema baru + db push: Estimation (9 kategori biaya: tenaga internal, vendor, equipment, transport, akomodasi, talent, location, software, hosting + contingency/management fee/discount/tax/target margin + hasil kalkulasi margin), Quotation (number per brand quotePrefix, items JSON, status draft/sent/accepted/rejected/expired, validUntil), ApprovalRequest (entityType estimation/discount/budget, status pending/approved/rejected, decidedBy/At/Note).
+- API: GET/PUT /api/opportunities/[id]/estimation (auto-create draft, kalkulasi server: totalCost→contingency→mgmtFee→discount→tax→margin/marginPct; submit=true membuat ApprovalRequest; sync revenue ke opportunity; tolak edit jika status pending_approval/approved), GET/POST /api/quotations (auto number brand.quotePrefix-YYYY-NNNN, items validator, totals server), PATCH /api/quotations/[id] (action: send→status sent+interaction timeline+opp stage estimation→proposal_sent; accept→verbal_agreement; convert_invoice→invoice draft baru + audit; update draft), GET/PATCH /api/approvals (RBAC: hanya director/super_admin boleh memutuskan → 403; approve mengubah estimation.status→approved+approvedBy).
+- /api/brands kini support POST (slug auto, prefix, audit log). /api/followup-templates GET baru (dari seed). Dashboard API + pendingApprovals[]. Detail opportunity include estimation & quotations.
+- api-client + types: EstimationDTO, QuotationDTO, ApprovalRequestDTO, FollowUpTemplateDTO, method getEstimation/saveEstimation/quotations/createQuotation/quotationAction/approvals/decideApproval/createBrand/followUpTemplates.
+- Seed: estimasi draft virtual tour (margin 55%), estimasi pending approval live streaming (diskon 8%, margin di bawah target → approval request oleh Dewi), quotation UCS-2026-0001 (sent), quotation EFM-2026-0001 (accepted).
+- Verifikasi curl: estimation PUT compute benar (margin 70.8% utk input tes), quotation convert_invoice → EFM-2026-INV-006, approvals marketing=403 director=200 approved, dashboard pendingApprovals=1. Reseed bersih.
+
+Stage Summary:
+- Backend Fase 2 lengkap & teruji. UI dikembangkan subagent Task 7-a (tab Estimasi+Quotation di opportunity-detail), 7-b (Antrean Approval dashboard), 7-c (wire POST brands + template follow-up).
+
+---
+
+Task ID: 7-b
+Agent: frontend-styling-expert
+Task: UI Antrean Approval (Dashboard) + styling polish dashboard-module.tsx
+
+Work Log:
+- Membaca worklog entri 7-backend + struktur penuh src/components/crm/dashboard-module.tsx (928 baris, milik agent 2-b) sebelum edit. Satu file diubah: dashboard-module.tsx.
+- FITUR Antrean Approval (khusus role director/super_admin dari useCrmStore, seksi tidak dirender utk role lain):
+  * Seksi kartu grid penuh tepat setelah baris KPI: header icon Stamp + "Antrean Approval" + badge count pending (amber jika >0, outline emerald "0 pending"). Kosong → empty state hijau "Tidak ada pengajuan menunggu persetujuan" (reuse EmptyState).
+  * Komponen baru ApprovalRow: kartu kecil rounded-xl border bg-white shadow-sm berisi entityLabel (semibold, fallback entityId), chip jenis pengajuan (estimation→Estimasi, discount→Diskon, budget→Budget), badge amber "Prioritas" di baris pertama + ring-1 ring-amber-300, badge amber "Diskon {discountPct}%" jika ada, requestedBy dengan avatar initials h-5 + "diajukan {timeAgo}", brand dot (opportunity.brand.color/name), note line-clamp-1 italic, amount formatCurrency tabular-nums.
+  * Tombol per baris: "Setujui" (Check, bg-emerald-600) & "Tolak" (X, outline rose) → buka Dialog konfirmasi (sm:max-w-md) dengan Textarea catatan keputusan: opsional utk approve, WAJIB utk reject (guard toast + tombol disabled + pesan inline rose + aria-required).
+  * Submit → api.decideApproval({ id, decision, decisionNote, actorName: user.name, actorRole: user.role }) → toast sukses sonner + refetch dashboard via load(true) (silent, struktur fetch tidak diubah). Error 403 (regex /403|direktur|akses|izin/ pada message API "Hanya Direktur atau Super Admin yang dapat memutuskan approval") → toast error "Akses ditolak". Semua tombol ber-aria-label.
+- pendingApprovals diakses opsional (data.pendingApprovals ?? []) — aman utk cache lama; tidak ada perubahan pemanggilan api.dashboard.
+- STYLING POLISH: KpiCard hover lift (transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md) + angka tabular-nums (sudah ada); heading eyebrow kecil uppercase tracking-wider text-zinc-500 konsisten sebelum tiap seksi — SectionCard dapat prop overline baru ("Analisis Pipeline", "Proyeksi Pendapatan", "Tren Mingguan", "Evaluasi Deal", "Tim Sales", "Sumber Lead", "Operasional") + eyebrow manual utk KPI ("Ringkasan Kinerja"), Pipeline per Brand ("Perbandingan Brand"), Antrean Approval ("Persetujuan"); funnel bars sudah transition-all duration-500 (tumbuh halus saat refresh); audit aria-label semua tombol ikon.
+- Verifikasi: bun run lint = bersih; bunx tsc --noEmit (exclude examples/skills) = 0 error; curl /api/dashboard → pendingApprovals len = 1 (>= 1), payload lengkap (estimation live streaming oleh Dewi Lestari, diskon 8%, brand Erfo Multimedia #e11d48); GET / = 200 (SSR compile OK).
+
+Stage Summary:
+- Antrean Approval dashboard selesai: RBAC UI director/super_admin, dialog keputusan (note wajib saat reject), refetch + toast, baris pertama highlight Prioritas. Polish: hover lift KPI, eyebrow uppercase per seksi, aria-label lengkap. Siap dipakai Task 7-a/7-c tanpa perubahan kontrak API.
+
+---
+Task ID: 7-c
+Agent: frontend-styling-expert
+Task: Wire POST /api/brands + seksi Template Follow-up di brands-module.tsx
+
+Work Log:
+- File diubah: SATU file `src/components/crm/brands-module.tsx` (file lain tidak disentuh, tidak menjalankan dev server, tidak membuat route).
+- A. Form "Tambah Brand" kini live: submit → `api.createBrand({ name, slug, color, logoEmoji, description, website:"", primaryCurrency, invoicePrefix, quotePrefix (turunan dari prefix invoice), slaHours, portalDomain:"", actorName: user.name, actorRole: user.role })` (user dari `useCrmStore`). Validasi: nama & slug wajib, SLA wajib angka 1–72 jam. Sukses → `toast.success("Brand {name} dikonfigurasi")` + reset draft + tutup dialog + refetch daftar brand (`load(true)` silent). Error (termasuk slug duplikat dari server) → `toast.error` dengan pesan server. Tombol submit punya state `submitting` (Loader2 + "Menyimpan…", disabled), dialog tidak bisa ditutup saat submit. Pratinjau brand lokal + state `preview` dihapus (sudah tidak relevan karena penyimpanan aktif).
+- B. Seksi baru "Template Follow-up" ditambahkan SETELAH section pipeline standar (pipeline TIDAK dihapus): fetch `api.followUpTemplates()` saat mount dengan skeleton kecil (TemplatesSkeleton 3 kartu). Per template (TemplateCard): nama + atribusi brand ("Semua brand" jika brandId null) + stage via `stageLabel`, badge kanal dengan ikon lucide sesuai channel (whatsapp MessageCircle, email Mail, instagram Instagram, website Globe, phone Phone, meeting Video, portal LayoutDashboard — fallback BellRing), badge jeda "H+{delayDays}", badge bahasa (uppercase font-mono), badge versi "v{version}", badge approval (approved → emerald "Disetujui" + CheckCircle2 / else amber "Review"), potongan body `line-clamp-2 whitespace-pre-line` dalam blockquote `bg-zinc-50 rounded-lg p-3 text-sm`. Filter kanal (Select "Semua Kanal" + kanal unik dari data) + counter "N template". Empty state (dashed card) untuk data kosong maupun hasil filter kosong; error state dengan tombol "Coba lagi". List dibungkus `max-h-96 overflow-y-auto crm-scroll` sesuai konvensi.
+- C. Polish: (1) BrandCard hover lift `transition-all hover:-translate-y-0.5 hover:shadow-md` + strip warna brand 4px (`absolute inset-y-0 left-0 w-1` sesuai brand.color, overflow-hidden menjaga rounded-xl); TemplateCard juga diberi hover lift. (2) Semua tombol/ikon punya aria-label (termasuk retry template, submit, SLA input). (3) Heading seksi konsisten pola eyebrow: `text-xs font-semibold uppercase tracking-wider text-zinc-500` + ikon kecil (Wand2 "Standar Tim Sales", FileText "Template Pesan") + h2 title di bawahnya; label "Layanan {brand}" di kartu ikut dinormalisasi. Bahasa UI di-Indonesiakan ("Brand Configuration" → "Konfigurasi Brand", "Currency" → "Mata Uang").
+- Verifikasi: `bun run lint` bersih; `bunx tsc --noEmit` (filter examples/skills) bersih; curl `/api/followup-templates` mengembalikan 5 template seed (whatsapp/email, H+1 s.d. H+30).
+
+Stage Summary:
+- Brands module siap produksi: pembuatan brand tersimpan ke DB (audit log dicatat backend), seksi Template Follow-up menampilkan 5 template seed dengan filter kanal. Tidak ada perubahan file lain; endpoint & kontrak API tidak diubah.
+
+---
+Task ID: 7-a
+Agent: frontend-styling-expert
+Task: Tab Estimasi & Quotation di drawer opportunity-detail (Fase 2)
+
+Work Log:
+- Baca worklog (7-backend + 2-c) lalu audit kontrak dari source: GET/PUT /api/opportunities/[id]/estimation (auto-create draft, rumus server totalCost→contingency→mgmtFee→discount→netRevenue→tax→margin/marginPct, submit=true → status pending_approval + ApprovalRequest), GET/POST /api/quotations, PATCH /api/quotations/[id] (send/accept/reject/convert_invoice + update umum draft-only), detail opportunity kini include estimation & quotations (verifikasi curl: detail mengembalikan kedua field; estimasi draft virtual tour 210jt margin 57%, pending approval live streaming margin -17.1%, quotation EFM-2026-0001 accepted, UCS-2026-0001 sent).
+- File diubah: SATU file `src/components/crm/opportunity-detail.tsx` (1030 → 2195 baris). File lain TIDAK disentuh — pipeline-module.tsx tidak perlu diubah karena sudah meneruskan `onChanged` → silent refetch list (dipanggil dari handleEstimationSaved/handleQuotationChanged setelah refetch detail). Tidak ada route baru, dev server tidak dijalankan.
+- DetailData diperluas lokal (intersection type) dengan `estimation?: EstimationDTO | null; quotations?: QuotationDTO[]` sesuai respons server aktual (kontrak api-client tidak diubah).
+- TAB BARU "Estimasi" (Calculator) & "Quotation" (FileText) disisipkan di Tabs existing (Timeline, Tugas, Estimasi, Quotation, Catatan, Terkait). Semua fitur existing dipertahankan.
+- EstimationTab (self-contained, lazy load): pakai `data.estimation` dari detail jika ada; jika null → fetch `api.getEstimation` saat tab pertama dibuka (auto-create draft di server, revenue awal = estimatedValue); loading skeleton, error state + "Coba lagi" (reloadKey). Banner status non-draft: pending_approval = amber "Menunggu Approval Direktur", approved = emerald "Disetujui oleh {approvedBy}" (+tanggal), rejected = rose "Ditolak — silakan revisi & ajukan ulang"; field disabled saat pending_approval/approved.
+- Form cost breakdown: grid 2 kolom sm untuk 9 kategori (Tenaga Internal Users, Vendor/Freelancer Handshake, Equipment Camera, Transportasi Truck, Akomodasi BedDouble, Talent Mic, Lokasi MapPin, Software/Lisensi Monitor, Hosting/Domain Globe) dengan prefix Rp + prefill dari estimation; parameter row 4 input % kecil (Contingency, Management Fee, Discount, PPN) + Harga Penawaran (revenue) menonjol font-semibold.
+- CalcPanel (kartu bg-zinc-50): kalkulasi LIVE via useMemo dengan rumus identik server (computeEstimation) — Total Biaya, Contingency, Management Fee, Total + Fee, Diskon, Net Revenue, PPN, Grand Total; blok MARGIN besar (nilai + %) dengan badge emerald "Di atas target" / amber "Mendekati target" (≥ target-10) / rose "Di bawah target" + Progress bar margin vs target (value clamp 0–100) + fallback zinc "Belum ada revenue" saat netRevenue ≤ 0.
+- Aksi: Textarea Catatan; "Simpan Draft" (outline emerald, submit:false) & "Ajukan Approval Direktur" (amber, submit:true, disabled jika revenue ≤ 0, konfirmasi AlertDialog) → api.saveEstimation + actorName/actorRole dari store; toast sukses, toast.info "Approval dikirim ke Direktur" jika response.approval ada; setelah simpan → update data.estimation optimistic + refetch detail (load) + onChanged?.() agar kanban/table ikut segar (server sync revenue ke opportunity).
+- QuotationTab: daftar kartu dari opportunity.quotations — brand dot (warna dari store brands karena detail API tidak include brand di quotations), number font-mono, badge status (draft zinc, sent violet "Terkirim", accepted emerald "Diterima", rejected rose "Ditolak", expired slate "Kedaluwarsa"), total formatCurrencyFull, jumlah item, tanggal kirim, validUntil merah jika lewat & masih sent; toggle expand (ChevronDown rotate, aria-expanded) menampilkan tabel items (deskripsi/qty/harga/subtotal, overflow-x-auto min-w) + ringkasan subtotal/diskon/PPN/total. Aksi per status via api.quotationAction + toast (busy state per kartu): draft → "Kirim ke Klien" (Send) + "Edit" (Pencil); sent → "Tandai Diterima" (CheckCheck emerald) + "Ditolak Klien" (XCircle rose outline); accepted → "Konversi ke Invoice" (ReceiptText) dengan toast.success `Invoice {number} dibuat`.
+- QuotationFormDialog (buat + edit draft lewat jalur sama): item rows dinamis (ItemRow: deskripsi Input, qty number min 1, harga satuan number, subtotal live formatCurrency, tombol hapus Trash2 disabled saat 1 baris, tombol "Tambah Item"), header kolom pada sm+, Discount %, PPN % default 11, Notes, ValidUntil date default +14 hari, panel ringkasan live subtotal/diskon/PPN/total; prefill tiap kali dialog dibuka (mode create/edit). Buat → api.createQuotation; edit → api.quotationAction(id, {action:"update", items, ...}) (server menerima update umum draft); validasi minimal 1 item berdeskripsi; sukses → toast + tutup + onChanged.
+- Kualitas: TS strict tanpa any, sub-komponen internal kecil (EstimationTab, CalcPanel, CalcRow, QuotationTab, QuotationCard, QuotationDetail, QuotationFormDialog, ItemRow), helper toNum/formFromEstimation/marginTone/parseQuotationItems/defaultValidUntil, konstanta COST_CATEGORIES/PCT_PARAMETERS/QUOTATION_STATUS; tanpa indigo/blue (zinc/emerald/amber/rose/violet/slate), kartu rounded-xl border bg-white shadow-sm, aria-label pada semua input & tombol ikon, role="status" untuk banner, responsive (grid sm:, dialog scrollable max-h-[60vh] crm-scroll), disabled state saat loading/saving/locked.
+- Verifikasi: `bun run lint` bersih; `bunx tsc --noEmit` (filter examples/skills) 0 error; curl /api/opportunities → 200; curl detail opportunity → estimation & quotations tersedia sesuai kontrak (tanpa mutasi seed).
+
+Stage Summary:
+- Fase 2 UI selesai di drawer detail opportunity: tab Estimasi (form 9 kategori biaya + parameter + kalkulasi margin live + draft/submit approval dengan banner status & locking) dan tab Quotation (daftar + detail expandable + aksi send/accept/reject/convert_invoice + dialog buat/edit draft dengan item dinamis & ringkasan live). Semua aksi terhubung ke API Fase 2 via api-client, refetch detail + onChanged menjaga kanban/table sinkron. pipeline-module tidak diubah.
+
+---
+Task ID: 7 (Fase 2 round 2 — cron webDevReview)
+Agent: main (Z.ai Code) + 3 subagent frontend-styling-expert (7-a, 7-b, 7-c)
+Task: QA browser, fitur Fase 2 UI (Estimasi, Quotation, Approval), polish styling, fix a11y
+
+Work Log:
+- QA smoke: 11 endpoint API → semua 200; browser login Direktur → dashboard OK. Aplikasi stabil dari round sebelumnya.
+- UI Fase 2 oleh subagent:
+  - 7-a opportunity-detail.tsx (+1165 baris): Tab "Estimasi" — form 9 kategori biaya berikon, 4 parameter %, harga penawaran; kalkulasi LIVE (useMemo, rumus identik server): Total Biaya→Contingency→Mgmt Fee→Diskon→Net Revenue→PPN→Grand Total→MARGIN dengan badge (Di atas/Mendekati/Di bawah target) + progress bar vs target margin; tombol Simpan Draft & Ajukan Approval (AlertDialog konfirmasi); banner status (pending amber/approved emerald/rejected rose) + field lock. Tab "Quotation" — kartu quotation (badge status, total, validUntil merah), aksi Kirim ke Klien / Tandai Diterima / Ditolak Klien / Konversi ke Invoice (toast nomor invoice), Dialog Quotation Baru/Edit dengan item rows dinamis (qty × harga, subtotal live) + ringkasan; setelah aksi refetch detail+list.
+  - 7-b dashboard-module.tsx (+278): seksi "Antrean Approval" (gated director/super_admin saja) setelah KPI: baris approval (entityLabel, requester+timeAgo, amount, badge Diskon %, brand dot, note) + baris pertama ring amber "Prioritas"; dialog keputusan (catatan wajib saat reject) → api.decideApproval → refetch. Polish: KPI hover lift + tabular-nums, eyebrow uppercase konsisten 7+ seksi, funnel bar transition-500.
+  - 7-c brands-module.tsx: form Tambah Brand kini live POST /api/brands (validasi, error slug duplikat via toast, refetch); seksi baru "Template Follow-up" dari /api/followup-templates (badge kanal berikon, H+{delay}, bahasa, versi, Disetujui/Review, body quote, filter kanal); polish strip warna brand + hover lift.
+- Fix bug/a11y oleh main:
+  - Tab Estimasi/Quotation tidak aktif via CDP click — RADIX TABS mengaktifkan via mousedown; fallback eval: dispatchEvent mousedown+click (dicatat untuk agent berikutnya).
+  - Console error "DialogContent requires DialogTitle" → penyebab: skeleton/error branch pada SheetContent drawer opportunity merender tanpa SheetTitle saat loading; fix: SheetTitle sr-only di kedua branch. Terverifikasi console bersih setelah reload.
+  - Klik kartu kanban via eval memakai selector aria-label="[aria-label=Buka detail ...]" (dnd-kit tidak set attr draggable).
+- Verifikasi browser (crm-review session): approve flow via UI (dialog → server approved, decidedBy Sari) → empty state; tab Estimasi tampil (kategori form, Net Revenue, Grand Total, MARGIN Rp 89,8jt 49,9% "Di atas target" saat revenue diubah 210jt→180jt live); tab Quotation tampil EFM-2026-0001 accepted + tombol Konversi; Tambah Brand "Nusantara Motion" tersimpan (DB 5 brands) lalu reseed bersih; Template Follow-up tampil (H+1..H+30, Disetujui/Review).
+- Verifikasi API Fase 2 (curl): estimation PUT compute margin benar; quotation send/accept/convert_invoice → EFM-2026-INV-006 dibuat; approvals RBAC marketing=403, director=200; dashboard pendingApprovals.
+- Lint & tsc bersih. Reseed akhir: 4 brand, 21 opp, 2 quotation (sent+accepted), 1 estimation pending approval, 5 invoice.
+
+Stage Summary:
+- Fase 2 (komersial) berjalan: Estimation & budgeting dengan margin gating + approval Direktur; Quotation lifecycle draft→sent→accepted→invoice; Antrean approval di Command Center; brand creation tanpa ubah source code; template follow-up tampil.
+- Risiko/catatan: (1) console warning "Missing Description" sisa transient sheet lain (kosmetik, non-blocking); (2) kalkulasi margin estimasi tidak mengubah estimatedValue otomatis saat stage lanjut — sync hanya saat save; (3) dnd-kit drag via CDP belum teruji — gunakan Select stage di footer drawer sebagai alternatif.
+- Rekomendasi ronde berikutnya: halaman/list Quotation & Invoice terpusat di modul Finance (saat ini quotation hanya di level opportunity), nomor telepon normalization check di inbox convert, PDF quotation, SLA escalation timer, lead scoring sederhana (Fase 4 awal).

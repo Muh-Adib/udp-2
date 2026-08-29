@@ -1,0 +1,726 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+     4→import {
+     5→  AlertTriangle, CheckCircle2, Clock3, Factory, Globe, Handshake, Minus, ReceiptText,
+     6→  RefreshCw, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, type LucideIcon,
+     7→} from "lucide-react";
+     8→import {
+     9→  Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
+    10→} from "recharts";
+    11→import { toast } from "sonner";
+    12→
+    13→import { Badge } from "@/components/ui/badge";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Skeleton } from "@/components/ui/skeleton";
+    16→import {
+    17→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    18→} from "@/components/ui/table";
+    19→import { api } from "@/lib/crm/api-client";
+    20→import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
+    21→import { useCrmStore } from "@/lib/crm/store";
+    22→import type { DashboardData } from "@/lib/crm/types";
+    23→import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
+    24→
+    25→// ============ Tipe lokal ============
+    26→
+    27→type KpiTrendKey =
+    28→  | "pipelineValue" | "weightedPipeline" | "winRate"
+    29→  | "wonValue" | "avgResponseHours" | "outstandingInvoices";
+    30→type KpiTrendMap = Partial<Record<KpiTrendKey, number | null>>;
+    31→
+    32→/** DashboardData + field produksi/risko (sudah dikirim API, belum ada di tipe bersama). */
+    33→interface DashboardFullData extends DashboardData {
+    34→  projectsAtRisk: number;
+    35→  productionCapacity: number;
+    36→}
+    37→
+    38→/** Normalisasi defensif field produksi/risko tanpa mengubah tipe bersama milik main agent. */
+    39→function normalizeDashboard(res: DashboardData): DashboardFullData {
+    40→  const raw = res as Partial<DashboardFullData>;
+    41→  return {
+    42→    ...res,
+    43→    projectsAtRisk: typeof raw.projectsAtRisk === "number" ? raw.projectsAtRisk : 0,
+    44→    productionCapacity: typeof raw.productionCapacity === "number" ? raw.productionCapacity : 0,
+    45→  };
+    46→}
+    47→
+    48→interface KpiDef {
+    49→  key: KpiTrendKey;
+    50→  label: string;
+    51→  value: string;
+    52→  icon: LucideIcon;
+    53→  hint: string;
+    54→  accent: boolean;
+    55→  goodWhen: "up" | "down";
+    56→  badge?: ReactNode;
+    57→}
+    58→
+    59→const TOOLTIP_STYLE: CSSProperties = {
+    60→  borderRadius: 10,
+    61→  border: "1px solid #e4e4e7",
+    62→  background: "#ffffff",
+    63→  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+    64→  fontSize: 12,
+    65→  color: "#18181b",
+    66→};
+    67→
+    68→const TREND_KEYS: KpiTrendKey[] = [
+    69→  "pipelineValue", "weightedPipeline", "winRate", "wonValue", "avgResponseHours", "outstandingInvoices",
+    70→];
+    71→
+    72→const ACTION_BADGE_CLASS: Record<string, string> = {
+    73→  create: "bg-emerald-100 text-emerald-700",
+    74→  update: "bg-amber-100 text-amber-700",
+    75→  delete: "bg-rose-100 text-rose-700",
+    76→  convert: "bg-violet-100 text-violet-700",
+    77→  stage_change: "bg-cyan-100 text-cyan-700",
+    78→  payment: "bg-emerald-100 text-emerald-700",
+    79→  login: "bg-zinc-100 text-zinc-600",
+    80→};
+    81→
+    82→// ============ Helper ============
+    83→
+    84→function deltaPct(cur: number, prev?: number): number | null {
+    85→  if (prev === undefined || prev === 0) return null;
+    86→  const d = ((cur - prev) / prev) * 100;
+    87→  return Number.isFinite(d) ? d : null;
+    88→}
+    89→
+    90→function computeTrends(prev: DashboardData["kpi"] | null, cur: DashboardData["kpi"]): KpiTrendMap {
+    91→  const out: KpiTrendMap = {};
+    92→  for (const key of TREND_KEYS) {
+    93→    out[key] = deltaPct(cur[key], prev?.[key]);
+    94→  }
+    95→  return out;
+    96→}
+    97→
+    98→function trendNode(delta: number | null, goodWhen: "up" | "down"): ReactNode {
+    99→  if (delta === null) return null;
+   100→  if (Math.abs(delta) < 0.1) {
+   101→    return (
+   102→      <span className="inline-flex items-center gap-1 text-zinc-400">
+   103→        <Minus className="h-3 w-3" aria-hidden /> stabil
+   104→      </span>
+   105→    );
+   106→  }
+   107→  const up = delta > 0;
+   108→  const good = up ? goodWhen === "up" : goodWhen === "down";
+   109→  const Icon = up ? TrendingUp : TrendingDown;
+   110→  return (
+   111→    <span className={`inline-flex items-center gap-1 font-medium ${good ? "text-emerald-600" : "text-rose-600"}`}>
+   112→      <Icon className="h-3 w-3 shrink-0" aria-hidden />
+   113→      {up ? "+" : ""}{delta.toFixed(1)}%
+   114→    </span>
+   115→  );
+   116→}
+   117→
+   118→function slaBadgeClass(hours: number): string {
+   119→  if (hours <= 8) return "bg-emerald-100 text-emerald-700";
+   120→  if (hours > 24) return "bg-rose-100 text-rose-700";
+   121→  return "bg-amber-100 text-amber-700";
+   122→}
+   123→
+   124→function formatHours(h: number): string {
+   125→  if (h <= 0) return "< 1 jam";
+   126→  if (h < 1) return `${Math.round(h * 60)} mnt`;
+   127→  return `${Math.round(h)} jam`;
+   128→}
+   129→
+   130→function channelLabel(key: string): string {
+   131→  const found = CHANNELS.find((c) => c.key === key);
+   132→  if (found) return found.label;
+   133→  return key
+   134→    .split("_")
+   135→    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+   136→    .join(" ");
+   137→}
+   138→
+   139→function actionBadgeClass(action: string): string {
+   140→  return ACTION_BADGE_CLASS[action] ?? "bg-zinc-100 text-zinc-600";
+   141→}
+   142→
+   143→// ============ Sub-komponen ============
+   144→
+   145→function KpiCard({
+   146→  label, value, icon: Icon, hint, trend, badge, accentColor,
+   147→}: {
+   148→  label: string;
+   149→  value: string;
+   150→  icon: LucideIcon;
+   151→  hint: string;
+   152→  trend?: ReactNode;
+   153→  badge?: ReactNode;
+   154→  accentColor?: string;
+   155→}) {
+   156→  return (
+   157→    <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-colors hover:border-zinc-300">
+   158→      {accentColor ? (
+   159→        <span aria-hidden className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accentColor }} />
+   160→      ) : null}
+   161→      <div className="flex items-start justify-between gap-2">
+   162→        <div className="min-w-0">
+   163→          <p className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+   164→          <p className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{value}</p>
+   165→        </div>
+   166→        <span className="shrink-0 rounded-lg bg-zinc-100 p-2 text-zinc-600">
+   167→          <Icon className="h-4 w-4" aria-hidden />
+   168→        </span>
+   169→      </div>
+   170→      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+   171→        {trend}
+   172→        {badge}
+   173→        <span className="truncate">{hint}</span>
+   174→      </div>
+   175→    </div>
+   176→  );
+   177→}
+   178→
+   179→function SectionCard({
+   180→  title, subtitle, children, ariaLabel, className = "",
+   181→}: {
+   182→  title: string;
+   183→  subtitle?: string;
+   184→  children: ReactNode;
+   185→  ariaLabel: string;
+   186→  className?: string;
+   187→}) {
+   188→  return (
+   189→    <section aria-label={ariaLabel} className={`rounded-xl border bg-white p-4 shadow-sm sm:p-6 ${className}`}>
+   190→      <div className="mb-4">
+   191→        <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
+   192→        {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+   193→      </div>
+   194→      {children}
+   195→    </section>
+   196→  );
+   197→}
+   198→
+   199→function EmptyState({ text }: { text: string }) {
+   200→  return (
+   201→    <div className="flex items-center gap-2 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-700">
+   202→      <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+   203→      {text}
+   204→    </div>
+   205→  );
+   206→}
+   207→
+   208→function DashboardSkeleton() {
+   209→  return (
+   210→    <div className="space-y-6" aria-hidden>
+   211→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   212→        <div className="space-y-2">
+   213→          <Skeleton className="h-7 w-56" />
+   214→          <Skeleton className="h-4 w-72" />
+   215→        </div>
+   216→        <Skeleton className="h-9 w-36 rounded-lg" />
+   217→      </div>
+   218→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   219→        {Array.from({ length: 6 }).map((_, i) => (
+   220→          <Skeleton key={i} className="h-28 rounded-xl" />
+   221→        ))}
+   222→      </div>
+   223→      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+   224→        <Skeleton className="h-[480px] rounded-xl" />
+   225→        <div className="space-y-4">
+   226→          <Skeleton className="h-64 rounded-xl" />
+   227→          <Skeleton className="h-52 rounded-xl" />
+   228→        </div>
+   229→      </div>
+   230→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   231→        {Array.from({ length: 4 }).map((_, i) => (
+   232→          <Skeleton key={i} className="h-36 rounded-xl" />
+   233→        ))}
+   234→      </div>
+   235→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   236→        <Skeleton className="h-64 rounded-xl" />
+   237→        <Skeleton className="h-64 rounded-xl" />
+   238→      </div>
+   239→    </div>
+   240→  );
+   241→}
+   242→
+   243→// ============ Module utama ============
+   244→
+   245→export default function DashboardModule() {
+   246→  const brands = useCrmStore((s) => s.brands);
+   247→  const user = useCrmStore((s) => s.user);
+   248→
+   249→  const [data, setData] = useState<DashboardFullData | null>(null);
+   250→  const [loading, setLoading] = useState(true);
+   251→  const [fetchTime, setFetchTime] = useState<Date | null>(null);
+   252→  const [trends, setTrends] = useState<KpiTrendMap>({});
+   253→  const prevKpiRef = useRef<DashboardData["kpi"] | null>(null);
+   254→
+   255→  const load = useCallback(async (silent: boolean) => {
+   256→    if (!silent) setLoading(true);
+   257→    try {
+   258→      const res = normalizeDashboard(await api.dashboard());
+   259→      setTrends(computeTrends(prevKpiRef.current, res.kpi));
+   260→      prevKpiRef.current = res.kpi;
+   261→      setData(res);
+   262→      setFetchTime(new Date());
+   263→    } catch (err) {
+   264→      toast.error("Gagal memuat data Command Center", {
+   265→        description: err instanceof Error ? err.message : "Silakan coba lagi.",
+   266→      });
+   267→    } finally {
+   268→      setLoading(false);
+   269→    }
+   270→  }, []);
+   271→
+   272→  useEffect(() => {
+   273→    void load(false);
+   274→    const id = setInterval(() => void load(true), 60_000);
+   275→    return () => clearInterval(id);
+   276→  }, [load]);
+   277→
+   278→  if (!data) {
+   279→    if (loading) return <DashboardSkeleton />;
+   280→    return (
+   281→      <section aria-label="Error memuat data" className="rounded-xl border bg-white p-10 text-center shadow-sm">
+   282→        <AlertTriangle className="mx-auto h-8 w-8 text-rose-500" aria-hidden />
+   283→        <p className="mt-3 text-sm font-medium text-zinc-900">Gagal memuat data Command Center</p>
+   284→        <p className="mt-1 text-xs text-zinc-500">Periksa koneksi server, lalu coba muat ulang.</p>
+   285→        <Button size="sm" className="mt-4" onClick={() => void load(false)}>
+   286→          <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+   287→        </Button>
+   288→      </section>
+   289→    );
+   290→  }
+   291→
+   292→  const kpi = data.kpi;
+   293→  const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
+   294→  const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
+   295→  const funnelMap = new Map(data.funnel.map((f) => [f.stage, f] as const));
+   296→  const funnelMax = Math.max(...data.funnel.map((f) => f.count), 1);
+   297→  const wonCount = data.funnel.find((f) => f.stage === "won")?.count ?? 0;
+   298→
+   299→  const bestMarketerIdx = data.marketingPerf.reduce((best, m, i, arr) => {
+   300→    const cur = arr[best];
+   301→    if (m.won > cur.won || (m.won === cur.won && m.leads > cur.leads)) return i;
+   302→    return best;
+   303→  }, 0);
+   304→
+   305→  const lostMax = Math.max(...data.lostReasons.map((r) => r.count), 1);
+   306→
+   307→  const kpiCards: KpiDef[] = [
+   308→    {
+   309→      key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue),
+   310→      icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up",
+   311→    },
+   312→    {
+   313→      key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline),
+   314→      icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up",
+   315→    },
+   316→    {
+   317→      key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`,
+   318→      icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, accent: true, goodWhen: "up",
+   319→    },
+   320→    {
+   321→      key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue),
+   322→      icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up",
+   323→    },
+   324→    {
+   325→      key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours),
+   326→      icon: Timer, hint: "rata-rata waktu respons lead", accent: false, goodWhen: "down",
+   327→      badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge>,
+   328→    },
+   329→    {
+   330→      key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices),
+   331→      icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down",
+   332→    },
+   333→  ];
+   334→
+   335→  return (
+   336→    <div className="space-y-6">
+   337→      {/* ============ Header ============ */}
+   338→      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   339→        <div>
+   340→          <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">Command Center</h1>
+   341→          <p className="mt-0.5 text-sm text-zinc-500">Ringkasan eksekutif lintas brand</p>
+   342→        </div>
+   343→        <div className="flex items-center gap-2">
+   344→          {user ? (
+   345→            <div className="mr-1 hidden items-center gap-2 md:flex" title={user.email}>
+   346→              <span
+   347→                className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
+   348→                style={{ backgroundColor: user.avatarColor }}
+   349→                aria-hidden
+   350→              >
+   351→                {initials(user.name)}
+   352→              </span>
+   353→              <div className="text-xs leading-tight">
+   354→                <div className="font-semibold text-zinc-900">{user.name}</div>
+   355→                <div className="text-zinc-500">{ROLES.find((r) => r.key === user.role)?.label ?? user.role}</div>
+   356→              </div>
+   357→            </div>
+   358→          ) : null}
+   359→          <Badge variant="outline" className="gap-1.5 bg-white">
+   360→            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+   361→            {activeBrandCount} brand aktif
+   362→          </Badge>
+   363→          <Button
+   364→            variant="outline"
+   365→            size="sm"
+   366→            onClick={() => void load(false)}
+   367→            disabled={loading}
+   368→            aria-label="Muat ulang data dashboard"
+   369→            title="Muat ulang data"
+   370→          >
+   371→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden />
+   372→            <span className="hidden sm:inline">Muat ulang</span>
+   373→          </Button>
+   374→        </div>
+   375→      </header>
+   376→
+   377→      {/* ============ KPI ============ */}
+   378→      <section aria-label="KPI utama" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   379→        {kpiCards.map((c) => (
+   380→          <KpiCard
+   381→            key={c.key}
+   382→            label={c.label}
+   383→            value={c.value}
+   384→            icon={c.icon}
+   385→            hint={c.hint}
+   386→            badge={c.badge}
+   387→            trend={trendNode(trends[c.key] ?? null, c.goodWhen)}
+   388→            accentColor={c.accent ? firstBrandColor : undefined}
+   389→          />
+   390→        ))}
+   391→      </section>
+   392→
+   393→      {/* ============ Funnel + Charts ============ */}
+   394→      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+   395→        <SectionCard
+   396→          ariaLabel="Funnel konversi"
+   397→          title="Funnel Konversi"
+   398→          subtitle="Jumlah opportunity per tahap pipeline"
+   399→        >
+   400→          <div className="space-y-2">
+   401→            {PIPELINE_STAGES.map((stage) => {
+   402→              const entry = funnelMap.get(stage.key) ?? { stage: stage.key, count: 0, value: 0 };
+   403→              const pct = Math.round((entry.count / funnelMax) * 100);
+   404→              return (
+   405→                <div key={stage.key} className="flex items-center gap-3">
+   406→                  <div className="w-28 shrink-0 truncate text-xs text-zinc-600 sm:w-36" title={stageLabel(stage.key)}>
+   407→                    {stageLabel(stage.key)}
+   408→                  </div>
+   409→                  <div className="relative h-5 flex-1 overflow-hidden rounded-md bg-zinc-100">
+   410→                    <div
+   411→                      className="h-full rounded-md transition-all duration-500"
+   412→                      style={{ width: `${pct}%`, backgroundColor: stageColor(stage.key) }}
+   413→                      role="presentation"
+   414→                    />
+   415→                  </div>
+   416→                  <div className="w-20 shrink-0 text-right text-xs tabular-nums sm:w-28">
+   417→                    <div className="font-semibold text-zinc-900">{entry.count} deal</div>
+   418→                    <div className="text-zinc-500">{formatCurrency(entry.value)}</div>
+   419→                  </div>
+   420→                </div>
+   421→              );
+   422→            })}
+   423→          </div>
+   424→        </SectionCard>
+   425→
+   426→        <div className="flex flex-col gap-4">
+   427→          <SectionCard
+   428→            ariaLabel="Forecast weighted"
+   429→            title="Forecast Weighted 30/60/90"
+   430→            subtitle="Nilai pipeline tertimbang per bucket waktu"
+   431→            className="shrink-0"
+   432→          >
+   433→            <ResponsiveContainer width="100%" height={220}>
+   434→              <BarChart data={data.forecast} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+   435→                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+   436→                <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
+   437→                <YAxis
+   438→                  width={72}
+   439→                  tick={{ fontSize: 11, fill: "#71717a" }}
+   440→                  axisLine={false}
+   441→                  tickLine={false}
+   442→                  tickFormatter={(value: number) => formatCurrency(value)}
+   443→                />
+   444→                <Tooltip
+   445→                  cursor={{ fill: "rgba(5, 150, 105, 0.06)" }}
+   446→                  formatter={(value) => [formatCurrency(Number(value)), "Forecast"]}
+   447→                  contentStyle={TOOLTIP_STYLE}
+   448→                />
+   449→                <Bar dataKey="value" name="Forecast" fill="#059669" radius={[6, 6, 0, 0]} maxBarSize={56} />
+   450→              </BarChart>
+   451→            </ResponsiveContainer>
+   452→          </SectionCard>
+   453→
+   454→          <SectionCard
+   455→            ariaLabel="Tren pipeline"
+   456→            title="Tren Pipeline 6 Minggu"
+   457→            subtitle="Lead baru masuk vs deal won per minggu"
+   458→          >
+   459→            <ResponsiveContainer width="100%" height={200}>
+   460→              <AreaChart data={data.pipelineTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+   461→                <defs>
+   462→                  <linearGradient id="gradCreated" x1="0" y1="0" x2="0" y2="1">
+   463→                    <stop offset="5%" stopColor="#ea580c" stopOpacity={0.25} />
+   464→                    <stop offset="95%" stopColor="#ea580c" stopOpacity={0} />
+   465→                  </linearGradient>
+   466→                  <linearGradient id="gradWon" x1="0" y1="0" x2="0" y2="1">
+   467→                    <stop offset="5%" stopColor="#059669" stopOpacity={0.25} />
+   468→                    <stop offset="95%" stopColor="#059669" stopOpacity={0} />
+   469→                  </linearGradient>
+   470→                </defs>
+   471→                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+   472→                <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
+   473→                <YAxis
+   474→                  allowDecimals={false}
+   475→                  width={36}
+   476→                  tick={{ fontSize: 11, fill: "#71717a" }}
+   477→                  axisLine={false}
+   478→                  tickLine={false}
+   479→                />
+   480→                <Tooltip contentStyle={TOOLTIP_STYLE} />
+   481→                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: "#52525b" }} />
+   482→                <Area
+   483→                  type="monotone" dataKey="created" name="Lead dibuat"
+   484→                  stroke="#ea580c" strokeWidth={2} fill="url(#gradCreated)"
+   485→                />
+   486→                <Area
+   487→                  type="monotone" dataKey="won" name="Deal won"
+   488→                  stroke="#059669" strokeWidth={2} fill="url(#gradWon)"
+   489→                />
+   490→              </AreaChart>
+   491→            </ResponsiveContainer>
+   492→          </SectionCard>
+   493→        </div>
+   494→      </div>
+   495→
+   496→      {/* ============ Pipeline per Brand ============ */}
+   497→      <section aria-label="Pipeline per brand" className="space-y-3">
+   498→        <h2 className="text-sm font-semibold text-zinc-900">Pipeline per Brand</h2>
+   499→        {data.byBrand.length === 0 ? (
+   500→          <EmptyState text="Belum ada data pipeline per brand." />
+   501→        ) : (
+   502→          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   503→            {data.byBrand.map((b) => {
+   504→              const pct = b.leads > 0 ? Math.round((b.won / b.leads) * 100) : 0;
+   505→              return (
+   506→                <div
+   507→                  key={b.brandId}
+   508→                  className="rounded-xl border bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+   509→                >
+   510→                  <div className="flex items-center gap-2">
+   511→                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+   512→                    <span className="truncate text-sm font-semibold text-zinc-900" title={b.name}>{b.name}</span>
+   513→                  </div>
+   514→                  <div className="mt-3 flex items-end justify-between gap-2">
+   515→                    <div>
+   516→                      <div className="text-2xl font-bold tabular-nums text-zinc-900">{b.leads}</div>
+   517→                      <div className="text-xs text-zinc-500">leads</div>
+   518→                    </div>
+   519→                    <div className="text-right">
+   520→                      <Badge className="border-transparent bg-emerald-100 text-emerald-700">{b.won} won</Badge>
+   521→                      <div className="mt-1 text-xs tabular-nums text-zinc-600">{formatCurrency(b.value)} open</div>
+   522→                    </div>
+   523→                  </div>
+   524→                  <div
+   525→                    className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100"
+   526→                    role="progressbar"
+   527→                    aria-label={`Progress won ${b.name}`}
+   528→                    aria-valuenow={pct}
+   529→                    aria-valuemin={0}
+   530→                    aria-valuemax={100}
+   531→                  >
+   532→                    <div
+   533→                      className="h-full rounded-full transition-all duration-500"
+   534→                      style={{ width: `${pct}%`, backgroundColor: b.color }}
+   535→                    />
+   536→                  </div>
+   537→                  <p className="mt-1.5 text-[11px] text-zinc-500">{b.won} dari {b.leads} leads berhasil ({pct}%)</p>
+   538→                </div>
+   539→              );
+   540→            })}
+   541→          </div>
+   542→        )}
+   543→      </section>
+   544→
+   545→      {/* ============ Lost Reasons + Marketing Perf ============ */}
+   546→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   547→        <SectionCard
+   548→          ariaLabel="Alasan lost"
+   549→          title="Alasan Lost"
+   550→          subtitle="Distribusi alasan kegagalan deal"
+   551→        >
+   552→          {data.lostReasons.length === 0 ? (
+   553→            <EmptyState text="Tidak ada opportunity lost — bagus, pertahankan!" />
+   554→          ) : (
+   555→            <div className="space-y-3">
+   556→              {data.lostReasons.map((r) => {
+   557→                const pct = Math.round((r.count / lostMax) * 100);
+   558→                return (
+   559→                  <div key={r.reason} className="flex items-center gap-3">
+   560→                    <div className="w-32 shrink-0 truncate text-xs text-zinc-600 sm:w-44" title={r.reason}>{r.reason}</div>
+   561→                    <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
+   562→                      <div
+   563→                        className="h-full rounded transition-all duration-500"
+   564→                        style={{ width: `${pct}%`, backgroundColor: "#dc2626" }}
+   565→                      />
+   566→                    </div>
+   567→                    <div className="w-6 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">
+   568→                      {r.count}
+   569→                    </div>
+   570→                  </div>
+   571→                );
+   572→              })}
+   573→            </div>
+   574→          )}
+   575→        </SectionCard>
+   576→
+   577→        <SectionCard
+   578→          ariaLabel="Performa marketing"
+   579→          title="Performa Marketing"
+   580→          subtitle="Perbandingan hasil antar marketer"
+   581→        >
+   582→          {data.marketingPerf.length === 0 ? (
+   583→            <EmptyState text="Belum ada data performa marketing." />
+   584→          ) : (
+   585→            <Table>
+   586→              <TableHeader>
+   587→                <TableRow className="hover:bg-transparent">
+   588→                  <TableHead>Nama</TableHead>
+   589→                  <TableHead className="text-right">Leads</TableHead>
+   590→                  <TableHead className="text-right">Won</TableHead>
+   591→                  <TableHead className="text-right">Win Rate</TableHead>
+   592→                  <TableHead className="text-right">Avg Response</TableHead>
+   593→                </TableRow>
+   594→              </TableHeader>
+   595→              <TableBody>
+   596→                {data.marketingPerf.map((m, i) => {
+   597→                  const top = i === bestMarketerIdx;
+   598→                  const wr = m.leads > 0 ? Math.round((m.won / m.leads) * 100) : 0;
+   599→                  return (
+   600→                    <TableRow key={m.name} className={top ? "bg-amber-50/70" : undefined}>
+   601→                      <TableCell className="font-medium text-zinc-900">
+   602→                        <span className="flex items-center gap-2">
+   603→                          {m.name}
+   604→                          {top ? <Badge className="border-transparent bg-amber-100 text-amber-700">Top</Badge> : null}
+   605→                        </span>
+   606→                      </TableCell>
+   607→                      <TableCell className="text-right tabular-nums">{m.leads}</TableCell>
+   608→                      <TableCell className="text-right tabular-nums font-medium text-emerald-600">{m.won}</TableCell>
+   609→                      <TableCell className="text-right tabular-nums">{wr}%</TableCell>
+   610→                      <TableCell className="text-right tabular-nums text-zinc-600">{formatHours(m.avgResponseHours)}</TableCell>
+   611→                    </TableRow>
+   612→                  );
+   613→                })}
+   614→              </TableBody>
+   615→            </Table>
+   616→          )}
+   617→        </SectionCard>
+   618→      </div>
+   619→
+   620→      {/* ============ Distribusi + Produksi & Risiko ============ */}
+   621→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   622→        <SectionCard
+   623→          ariaLabel="Distribusi kanal dan negara"
+   624→          title="Distribusi Kanal & Negara"
+   625→          subtitle="Asal lead lintas kanal dan wilayah"
+   626→        >
+   627→          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+   628→            <div>
+   629→              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Kanal Lead</h3>
+   630→              {data.byChannel.length === 0 ? (
+   631→                <p className="text-sm text-zinc-400">Tidak ada data kanal.</p>
+   632→              ) : (
+   633→                <ul className="divide-y divide-zinc-100">
+   634→                  {data.byChannel.map((c) => (
+   635→                    <li key={c.channel} className="flex items-center justify-between gap-2 py-1.5">
+   636→                      <span className="truncate text-sm text-zinc-700">{channelLabel(c.channel)}</span>
+   637→                      <Badge variant="secondary" className="tabular-nums">{c.count}</Badge>
+   638→                    </li>
+   639→                  ))}
+   640→                </ul>
+   641→              )}
+   642→            </div>
+   643→            <div>
+   644→              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Negara</h3>
+   645→              {data.byCountry.length === 0 ? (
+   646→                <p className="text-sm text-zinc-400">Tidak ada data negara.</p>
+   647→              ) : (
+   648→                <ul className="divide-y divide-zinc-100">
+   649→                  {data.byCountry.map((c) => (
+   650→                    <li key={c.country} className="flex items-center justify-between gap-2 py-1.5">
+   651→                      <span className="flex min-w-0 items-center gap-1.5 text-sm text-zinc-700">
+   652→                        <Globe className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+   653→                        <span className="truncate">{c.country}</span>
+   654→                      </span>
+   655→                      <Badge variant="secondary" className="tabular-nums">{c.count}</Badge>
+   656→                    </li>
+   657→                  ))}
+   658→                </ul>
+   659→              )}
+   660→            </div>
+   661→          </div>
+   662→        </SectionCard>
+   663→
+   664→        <SectionCard
+   665→          ariaLabel="Produksi dan risiko"
+   666→          title="Produksi & Risiko"
+   667→          subtitle="Kesehatan operasional dan aktivitas terbaru"
+   668→        >
+   669→          <div className="grid grid-cols-2 gap-4">
+   670→            <div className={`rounded-lg border p-3 ${data.projectsAtRisk > 0 ? "border-rose-200 bg-rose-50" : "bg-zinc-50"}`}>
+   671→              <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">
+   672→                <AlertTriangle className={`h-3.5 w-3.5 ${data.projectsAtRisk > 0 ? "text-rose-500" : "text-zinc-400"}`} aria-hidden />
+   673→                Project at Risk
+   674→              </div>
+   675→              <div className={`mt-1 text-2xl font-bold tabular-nums ${data.projectsAtRisk > 0 ? "text-rose-600" : "text-zinc-900"}`}>
+   676→                {data.projectsAtRisk}
+   677→              </div>
+   678→              <div className="text-xs text-zinc-500">{data.projectsAtRisk > 0 ? "perlu perhatian segera" : "semua aman"}</div>
+   679→            </div>
+   680→            <div className="rounded-lg border bg-zinc-50 p-3">
+   681→              <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">
+   682→                <Factory className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+   683→                Kapasitas Produksi
+   684→              </div>
+   685→              <div className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{data.productionCapacity}</div>
+   686→              <div className="text-xs text-zinc-500">project aktif berjalan</div>
+   687→            </div>
+   688→          </div>
+   689→
+   690→          <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">Audit Terbaru</h3>
+   691→          {data.recentAudit.length === 0 ? (
+   692→            <p className="py-2 text-sm text-zinc-400">Belum ada aktivitas tercatat.</p>
+   693→          ) : (
+   694→            <ul className="crm-scroll max-h-64 overflow-y-auto pr-1">
+   695→              {data.recentAudit.map((a) => (
+   696→                <li
+   697→                  key={a.id}
+   698→                  className="flex flex-col gap-1 border-b border-zinc-100 py-2 last:border-0 sm:flex-row sm:items-center sm:justify-between"
+   699→                >
+   700→                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+   701→                    <span className="text-sm font-medium text-zinc-900">{a.actorName}</span>
+   702→                    <Badge className={`border-transparent uppercase ${actionBadgeClass(a.action)}`}>
+   703→                      {a.action.replace(/_/g, " ")}
+   704→                    </Badge>
+   705→                    <span className="truncate text-xs text-zinc-600">{a.entityLabel ?? a.entity}</span>
+   706→                  </div>
+   707→                  <span className="shrink-0 text-xs text-zinc-400">{timeAgo(a.createdAt)}</span>
+   708→                </li>
+   709→              ))}
+   710→            </ul>
+   711→          )}
+   712→        </SectionCard>
+   713→      </div>
+   714→
+   715→      {/* ============ Footer ============ */}
+   716→      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 text-xs text-zinc-500">
+   717→        <span className="inline-flex items-center gap-1.5" aria-live="polite">
+   718→          <Clock3 className="h-3.5 w-3.5" aria-hidden />
+   719→          Data diperbarui {fetchTime ? timeAgo(fetchTime) : "-"}
+   720→        </span>
+   721→        <span>Auto-refresh setiap 60 detik</span>
+   722→      </footer>
+   723→    </div>
+   724→  );
+   725→}
+   726→

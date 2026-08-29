@@ -15,6 +15,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       notes: { orderBy: { createdAt: "desc" } },
       projects: { include: { milestones: { orderBy: { order: "asc" } } } },
       invoices: { include: { payments: true } },
+      estimation: true,
+      quotations: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!opportunity) return fail("Opportunity tidak ditemukan", 404);

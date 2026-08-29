@@ -10,6 +10,9 @@ export async function seedDatabase(force = false) {
   if (existing > 0 && !force) return { seeded: false, reason: "data already exists" };
 
   // Clean (order matters)
+  await db.approvalRequest.deleteMany();
+  await db.estimation.deleteMany();
+  await db.quotation.deleteMany();
   await db.auditLog.deleteMany();
   await db.payment.deleteMany();
   await db.invoice.deleteMany();
@@ -274,6 +277,89 @@ export async function seedDatabase(force = false) {
       await db.payment.create({ data: { invoiceId: created.id, amount: p.amount, method: p.method, reference: p.reference, paidAt: p.at } });
     }
   }
+
+  // ============ ESTIMATION, QUOTATION, APPROVAL (Fase 2) ============
+  // Estimasi lengkap utk opp "Virtual tour destinasi wisata" (discovery) — draft
+  const oppVt = opps[5];
+  const estVtCost = { laborInternal: 28000000, vendorFreelance: 12000000, equipment: 18000000, transport: 6500000, accommodation: 9000000, talent: 0, locationFee: 4000000, softwareLicense: 3000000, hostingDomain: 1500000 };
+  const vtTotalCost = Object.values(estVtCost).reduce((a, b) => a + b, 0);
+  const vtRevenue = 210000000;
+  const vtContingency = Math.round(vtTotalCost * 0.05);
+  const vtMgmt = Math.round(vtTotalCost * 0.05);
+  const vtMargin = vtRevenue - (vtTotalCost + vtContingency + vtMgmt);
+  await db.estimation.create({ data: {
+    opportunityId: oppVt.id, ...estVtCost,
+    contingencyPct: 5, managementFeePct: 5, discountPct: 0, taxPct: 11, targetMarginPct: 30,
+    totalCost: vtTotalCost, contingency: vtContingency, managementFee: vtMgmt,
+    revenue: vtRevenue, discountAmount: 0, netRevenue: vtRevenue, taxAmount: Math.round(vtRevenue * 0.11),
+    grandTotal: Math.round(vtRevenue * 1.11), margin: vtMargin,
+    marginPct: Math.round((vtMargin / vtRevenue) * 1000) / 10,
+    status: "draft", createdBy: "Andi Saputra",
+    notes: "Survey 5 lokasi, kamera 360 + drone, hosting tour 1 tahun.",
+  }});
+
+  // Estimasi utk opp "Live streaming economic forum" (proposal_sent) — PENDING APPROVAL (diskon 8%)
+  const oppLs = opps[4];
+  const lsCost = { laborInternal: 35000000, vendorFreelance: 22000000, equipment: 42000000, transport: 8000000, accommodation: 12000000, talent: 15000000, locationFee: 0, softwareLicense: 6000000, hostingDomain: 2000000 };
+  const lsTotalCost = Object.values(lsCost).reduce((a, b) => a + b, 0);
+  const lsRevenue = 145000000;
+  const lsCont = Math.round(lsTotalCost * 0.05);
+  const lsMgmt = Math.round(lsTotalCost * 0.05);
+  const lsDiscount = Math.round(lsRevenue * 0.08);
+  const lsNet = lsRevenue - lsDiscount;
+  const lsMargin = lsNet - (lsTotalCost + lsCont + lsMgmt);
+  const estLs = await db.estimation.create({ data: {
+    opportunityId: oppLs.id, ...lsCost,
+    contingencyPct: 5, managementFeePct: 5, discountPct: 8, taxPct: 11, targetMarginPct: 30,
+    totalCost: lsTotalCost, contingency: lsCont, managementFee: lsMgmt,
+    revenue: lsRevenue, discountAmount: lsDiscount, netRevenue: lsNet,
+    taxAmount: Math.round(lsNet * 0.11), grandTotal: Math.round(lsNet * 1.11), margin: lsMargin,
+    marginPct: Math.round((lsMargin / lsNet) * 1000) / 10,
+    status: "pending_approval", createdBy: "Dewi Lestari",
+    notes: "Diskon 8% untuk event 2 hari — butuh approval Direktur karena margin di bawah target.",
+  }});
+  await db.approvalRequest.create({ data: {
+    entityType: "estimation", entityId: estLs.id,
+    entityLabel: "Estimasi — Live streaming economic forum",
+    opportunityId: oppLs.id, requestedBy: "Dewi Lestari",
+    amount: Math.round(lsNet * 1.11), discountPct: 8,
+    note: "Margin " + (Math.round((lsMargin / lsNet) * 1000) / 10) + "% (di bawah target 30%) karena kompetitif. Mohon persetujuan diskon 8%.",
+  }});
+
+  // Quotation utk opp "Video AI onboarding karyawan" (proposal_sent) — sudah terkirim
+  const oppAi = opps[9];
+  const qItems = [
+    { description: "Video AI presenter virtual (2 video, max 3 menit)", qty: 2, unitPrice: 38000000, subtotal: 76000000 },
+    { description: "Script & storyboard", qty: 1, unitPrice: 8000000, subtotal: 8000000 },
+    { description: "Voice over profesional EN", qty: 2, unitPrice: 2000000, subtotal: 4000000 },
+  ];
+  const qSubtotal = qItems.reduce((a, i) => a + i.subtotal, 0);
+  const qTax = Math.round(qSubtotal * 0.11);
+  await db.quotation.create({ data: {
+    number: "UCS-2026-0001", brandId: oppAi.brandId, opportunityId: oppAi.id, companyId: oppAi.companyId!,
+    items: JSON.stringify(qItems), subtotal: qSubtotal, discountPct: 0, discountAmount: 0,
+    taxPct: 11, taxAmount: qTax, total: qSubtotal + qTax, currency: "IDR",
+    status: "sent", validUntil: ahead(10), sentAt: ago(3),
+    notes: "Harga berlaku 14 hari. Termasuk 2 kali revisi.",
+  }});
+
+  // Quotation accepted utk opp "Dokumentasi pabrik + drone" (negotiation)
+  const oppDok = opps[3];
+  const dItems = [
+    { description: "Dokumentasi foto & video pabrik 2 hari", qty: 1, unitPrice: 72000000, subtotal: 72000000 },
+    { description: "Drone videography + lisensi udara", qty: 1, unitPrice: 18000000, subtotal: 18000000 },
+    { description: "Editing final + color grading", qty: 1, unitPrice: 12000000, subtotal: 12000000 },
+  ];
+  const dSubtotal = dItems.reduce((a, i) => a + i.subtotal, 0);
+  const dDiscount = Math.round(dSubtotal * 0.05);
+  const dTax = Math.round((dSubtotal - dDiscount) * 0.11);
+  await db.quotation.create({ data: {
+    number: "EFM-2026-0001", brandId: oppDok.brandId, opportunityId: oppDok.id, companyId: oppDok.companyId!,
+    items: JSON.stringify(dItems), subtotal: dSubtotal, discountPct: 5, discountAmount: dDiscount,
+    taxPct: 11, taxAmount: dTax, total: dSubtotal - dDiscount + dTax, currency: "IDR",
+    status: "accepted", validUntil: ahead(5), sentAt: ago(8), respondedAt: ago(1),
+    notes: "Revisi penawaran final — disetujui client via WhatsApp.",
+  }});
 
   // ============ FOLLOW-UP TEMPLATES ============
   await db.followUpTemplate.createMany({ data: [

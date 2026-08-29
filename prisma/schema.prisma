@@ -30,6 +30,7 @@ model Brand {
   projects      Project[]
   invoices      Invoice[]
   interactions  Interaction[]
+  quotations    Quotation[]
 }
 
 model User {
@@ -71,6 +72,7 @@ model Company {
   opportunities Opportunity[]
   projects      Project[]
   invoices      Invoice[]
+  quotations    Quotation[]
 }
 
 model Contact {
@@ -150,6 +152,9 @@ model Opportunity {
   notes        Note[]
   projects     Project[]
   invoices     Invoice[]
+  estimation   Estimation?
+  quotations   Quotation[]
+  approvals    ApprovalRequest[]
 }
 
 model Interaction {
@@ -311,4 +316,89 @@ model FollowUpTemplate {
   approved   Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+// ============ FASE 2: KOMERSIAL ============
+
+model Estimation {
+  id            String   @id @default(cuid())
+  opportunityId String   @unique
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  // Cost breakdown kategori (IDR)
+  laborInternal   Float @default(0)
+  vendorFreelance Float @default(0)
+  equipment       Float @default(0)
+  transport       Float @default(0)
+  accommodation   Float @default(0)
+  talent          Float @default(0)
+  locationFee     Float @default(0)
+  softwareLicense Float @default(0)
+  hostingDomain   Float @default(0)
+  contingencyPct   Float @default(5)
+  managementFeePct Float @default(5)
+  discountPct      Float @default(0)
+  taxPct           Float @default(11)
+  targetMarginPct  Float @default(30)
+  // Hasil kalkulasi (disimpan saat save)
+  totalCost  Float @default(0)
+  contingency Float @default(0)
+  managementFee Float @default(0)
+  revenue   Float @default(0)
+  discountAmount Float @default(0)
+  netRevenue Float @default(0)
+  taxAmount  Float @default(0)
+  grandTotal Float @default(0)
+  margin     Float @default(0)
+  marginPct  Float @default(0)
+  notes      String?
+  status     String   @default("draft") // draft, pending_approval, approved, rejected
+  createdBy  String?
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Quotation {
+  id            String   @id @default(cuid())
+  number        String   @unique
+  brandId       String
+  brand         Brand    @relation(fields: [brandId], references: [id])
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  items         String   @default("[]") // JSON [{description, qty, unitPrice, subtotal}]
+  subtotal      Float    @default(0)
+  discountPct    Float   @default(0)
+  discountAmount Float   @default(0)
+  taxPct        Float    @default(11)
+  taxAmount     Float    @default(0)
+  total         Float    @default(0)
+  currency      String   @default("IDR")
+  status        String   @default("draft") // draft, sent, accepted, rejected, expired
+  validUntil    DateTime?
+  notes         String?
+  sentAt        DateTime?
+  respondedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ApprovalRequest {
+  id            String   @id @default(cuid())
+  entityType    String // estimation, discount, budget
+  entityId      String
+  entityLabel   String?
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  requestedBy   String
+  amount        Float?
+  discountPct   Float?
+  note          String?
+  status        String   @default("pending") // pending, approved, rejected
+  decidedBy     String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime @default(now())
 }
