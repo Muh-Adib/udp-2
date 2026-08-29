@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
-  Download, Factory, FolderKanban, GitPullRequestArrow, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
+  Download, Factory, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +32,7 @@ import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import type { ChangeRequestDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
 import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
+import { cn } from "@/lib/utils";
 
 // ============ Meta ============
 
@@ -427,14 +428,19 @@ function dateKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
-function CalendarView({ projects, onOpenDetail }: {
+function CalendarView({ projects, onOpenDetail, onRescheduleMilestone }: {
   projects: ProjectDTO[];
   onOpenDetail: (p: ProjectDTO) => void;
+  /** Fase 3 — drag-reschedule: pindahkan deadline milestone ke tanggal lain. */
+  onRescheduleMilestone?: (project: ProjectDTO, m: MilestoneDTO, newDate: Date) => void;
 }) {
   const [cursor, setCursor] = useState(() => {
     const n = new Date();
     return { year: n.getFullYear(), month: n.getMonth() };
   });
+  // State drag-reschedule (HTML5 drag events — ringan tanpa library)
+  const [dragging, setDragging] = useState<{ milestoneId: string; projectId: string } | null>(null);
+  const [dropDayKey, setDropDayKey] = useState<string | null>(null);
 
   // Event per tanggal (key "y-m-d" lokal). Project/milestone tanpa dueDate diabaikan.
   // Milestone hanya dari project berstatus bukan completed/cancelled.
@@ -552,10 +558,33 @@ function CalendarView({ projects, onOpenDetail }: {
               const isWeekend = cell.i % 7 >= 5;
               const isToday = cell.date ? dateKey(cell.date) === todayKey : false;
               const bgCls = !cell.date ? "bg-zinc-50/40" : isToday ? "bg-zinc-100" : isWeekend ? "bg-zinc-50/60" : "";
+              const cellKey = cell.date ? dateKey(cell.date) : null;
+              const isDropTarget = Boolean(dragging) && cellKey !== null && dropDayKey === cellKey;
               return (
                 <div
                   key={cell.i}
-                  className={`min-h-[92px] p-1.5 ${bgCls} ${cell.i % 7 !== 6 ? "border-r border-zinc-100" : ""} ${cell.i < 35 ? "border-b border-zinc-100" : ""}`}
+                  className={`min-h-[92px] p-1.5 ${bgCls} ${cell.i % 7 !== 6 ? "border-r border-zinc-100" : ""} ${cell.i < 35 ? "border-b border-zinc-100" : ""} ${
+                    isDropTarget ? "ring-2 ring-inset ring-zinc-900 bg-zinc-100" : ""
+                  }`}
+                  onDragOver={(e) => {
+                    if (!dragging || !cell.date) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dropDayKey !== cellKey) setDropDayKey(cellKey);
+                  }}
+                  onDragLeave={() => {
+                    if (cellKey && dropDayKey === cellKey) setDropDayKey(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const target = dragging;
+                    setDragging(null);
+                    setDropDayKey(null);
+                    if (!target || !cell.date || !onRescheduleMilestone) return;
+                    const project = projects.find((p) => p.id === target.projectId);
+                    const ms = project?.milestones?.find((m) => m.id === target.milestoneId);
+                    if (project && ms) onRescheduleMilestone(project, ms, cell.date);
+                  }}
                 >
                   <div className="flex items-center">
                     {cell.day !== null ? (
@@ -588,9 +617,24 @@ function CalendarView({ projects, onOpenDetail }: {
                             key={`m-${ev.milestone.id}`}
                             type="button"
                             onClick={() => onOpenDetail(ev.project)}
-                            title={`${ev.project.code} · ${ev.milestone.name} · ${msMeta(ev.milestone.status).label}`}
-                            aria-label={`Buka detail project ${ev.project.name} — milestone ${ev.milestone.name}`}
-                            className="flex w-full items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50"
+                            draggable={ev.milestone.status !== "done" && Boolean(onRescheduleMilestone)}
+                            onDragStart={(e) => {
+                              if (ev.milestone.status === "done") return;
+                              e.dataTransfer.setData("text/plain", ev.milestone.id);
+                              e.dataTransfer.effectAllowed = "move";
+                              setDragging({ milestoneId: ev.milestone.id, projectId: ev.project.id });
+                            }}
+                            onDragEnd={() => {
+                              setDragging(null);
+                              setDropDayKey(null);
+                            }}
+                            title={`${ev.project.code} · ${ev.milestone.name} · ${msMeta(ev.milestone.status).label}${ev.milestone.status !== "done" && onRescheduleMilestone ? " · seret untuk menjadwalkan ulang" : ""}`}
+                            aria-label={`Buka detail project ${ev.project.name} — milestone ${ev.milestone.name}${ev.milestone.status !== "done" && onRescheduleMilestone ? " (dapat diseret ke tanggal lain)" : ""}`}
+                            className={cn(
+                              "flex w-full items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50",
+                              ev.milestone.status !== "done" && onRescheduleMilestone && "cursor-grab active:cursor-grabbing hover:border-zinc-400",
+                              dragging?.milestoneId === ev.milestone.id && "opacity-40"
+                            )}
                             style={{ borderLeftWidth: 2, borderLeftColor: ev.project.brand?.color ?? "#a1a1aa" }}
                           >
                             <span
@@ -600,6 +644,9 @@ function CalendarView({ projects, onOpenDetail }: {
                               aria-hidden
                             />
                             <span className="truncate">{ev.milestone.name}</span>
+                            {ev.milestone.status !== "done" && onRescheduleMilestone ? (
+                              <GripVertical className="ml-auto h-2.5 w-2.5 shrink-0 text-zinc-300" aria-hidden />
+                            ) : null}
                           </button>
                         )
                       )}
@@ -633,6 +680,12 @@ function CalendarView({ projects, onOpenDetail }: {
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+          {onRescheduleMilestone ? (
+            <span className="flex items-center gap-1.5 text-zinc-400">
+              <GripVertical className="h-3 w-3" aria-hidden />
+              Seret milestone (bukan yang selesai) ke tanggal lain untuk menjadwalkan ulang
+            </span>
+          ) : null}
         </div>
       </div>
     </div>
@@ -760,6 +813,46 @@ export default function ProjectsModule() {
       await refreshDetail();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal memperbarui milestone");
+    }
+  }
+
+  /** Fase 3 — drag-reschedule milestone di kalender: update optimis + revert bila gagal. */
+  async function handleRescheduleMilestone(project: ProjectDTO, m: MilestoneDTO, newDate: Date) {
+    const oldDue = m.dueDate ? new Date(m.dueDate) : null;
+    const sameDay = oldDue && oldDue.getFullYear() === newDate.getFullYear()
+      && oldDue.getMonth() === newDate.getMonth() && oldDue.getDate() === newDate.getDate();
+    if (sameDay) return;
+    if (m.status === "done") {
+      toast.info(`Milestone "${m.name}" sudah selesai — tidak dapat dijadwalkan ulang`);
+      return;
+    }
+
+    const applyDue = (iso: string | null) => {
+      setProjects((prev) => (prev ?? []).map((p) =>
+        p.id !== project.id ? p : {
+          ...p,
+          milestones: (p.milestones ?? []).map((x) => (x.id === m.id ? { ...x, dueDate: iso } : x)),
+        }
+      ));
+      setDetail((d) => (d && d.id === project.id
+        ? { ...d, milestones: (d.milestones ?? []).map((x) => (x.id === m.id ? { ...x, dueDate: iso } : x)) }
+        : d));
+    };
+
+    applyDue(newDate.toISOString()); // optimis
+    try {
+      await api.updateMilestone({
+        milestoneId: m.id,
+        dueDate: newDate.toISOString(),
+        actorName: user?.name ?? "Produksi",
+        actorRole: user?.role ?? "production",
+      });
+      toast.success(`Milestone "${m.name}" dijadwalkan ulang`, {
+        description: oldDue ? `${formatDate(oldDue)} → ${formatDate(newDate)}` : `Deadline baru: ${formatDate(newDate)}`,
+      });
+    } catch (err) {
+      applyDue(oldDue ? oldDue.toISOString() : null); // revert
+      toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang milestone");
     }
   }
 
@@ -988,7 +1081,7 @@ export default function ProjectsModule() {
           </div>
         )
       ) : view === "calendar" ? (
-        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} />
+        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} onRescheduleMilestone={handleRescheduleMilestone} />
       ) : (projects ?? []).length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
           <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />

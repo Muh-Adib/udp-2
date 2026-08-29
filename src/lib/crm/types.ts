@@ -399,6 +399,8 @@ export interface DashboardData {
   slaBreaches?: number;
   /** Jumlah change request menunggu persetujuan klien (Fase 2 Produksi). */
   pendingChangeRequests?: number;
+  /** Jumlah task eskalasi otomatis yang dibuat sweep SLA pada fetch ini (Fase 3). */
+  autoEscalated?: number;
 }
 
 // ============ NOTIFIKASI (Fase 3) ============

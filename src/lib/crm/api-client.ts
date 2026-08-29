@@ -118,6 +118,9 @@ export const api = {
   },
   convertLead: (payload: Record<string, unknown>) =>
     request<{ opportunity: OpportunityDTO }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
+  /** Respons & catat lead inbox (Fase 3): outbound reply + tandai respondedAt. */
+  inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string }) =>
+    request<{ reply: InteractionDTO; lead: InteractionDTO & { slaHours?: number } }>("/api/inbox/respond", { method: "POST", body: JSON.stringify(payload) }),
 
   // Interactions
   interactions: (params?: { opportunityId?: string; contactId?: string; channel?: string; companyId?: string }) => {
@@ -154,6 +157,9 @@ export const api = {
   },
   updateProject: (payload: Record<string, unknown>) =>
     request<{ project: ProjectDTO }>("/api/projects", { method: "PATCH", body: JSON.stringify(payload) }),
+  /** Update milestone (drag-reschedule kalender / status) — Fase 3. */
+  updateMilestone: (payload: { milestoneId: string; dueDate?: string | null; status?: string; name?: string; actorName?: string; actorRole?: string }) =>
+    request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "PATCH", body: JSON.stringify(payload) }),
 
   // Change Requests (Fase 2 — Produksi): scope change → persetujuan klien → invoice tambahan
   changeRequests: (params?: { projectId?: string; companyId?: string; status?: string }) => {

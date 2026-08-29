@@ -520,6 +520,13 @@ export default function DashboardModule() {
       prevKpiRef.current = res.kpi;
       setData(res);
       setFetchTime(new Date());
+      // Fase 3 — sweep SLA berjalan di server saat dashboard dimuat;
+      // beri tahu bila ada lead baru yang dieskalasi otomatis.
+      if (res.autoEscalated && res.autoEscalated > 0) {
+        toast.warning(`${res.autoEscalated} lead dieskalasi otomatis oleh SLA Bot`, {
+          description: "Task urgent dibuat untuk Direktur — lihat Follow-up Center.",
+        });
+      }
     } catch (err) {
       toast.error("Gagal memuat data Command Center", {
         description: err instanceof Error ? err.message : "Silakan coba lagi.",

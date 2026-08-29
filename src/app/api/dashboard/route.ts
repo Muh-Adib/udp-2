@@ -1,11 +1,21 @@
 import { db } from "@/lib/db";
 import { ok } from "@/lib/crm/server";
 import { OPEN_STAGES } from "@/lib/crm/constants";
+import { runSlaSweep } from "@/lib/crm/sla-sweep";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 export async function GET() {
+  // Fase 3 — SLA auto-sweep: berjalan periodik selama dashboard terbuka
+  // (polling 60 dtk, throttle 5 menit di lib). Kegagalan sweep diabaikan.
+  let autoEscalated = 0;
+  try {
+    autoEscalated = await runSlaSweep();
+  } catch {
+    autoEscalated = 0;
+  }
+
   const [
     opportunities, interactions, tasks, invoices, projects, recentAudit, brands, pendingApprovals,
     unresolvedInbound, pendingChangeRequests,
@@ -207,5 +217,6 @@ export async function GET() {
     productionCapacity: projects.filter((p) => p.status === "in_progress" || p.status === "planning").length,
     slaBreaches,
     pendingChangeRequests,
+    autoEscalated,
   });
 }

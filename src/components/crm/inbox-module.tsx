@@ -4,15 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlarmClock, AlertTriangle, Building2, Check, CheckCircle2, Fingerprint, Globe, Inbox,
-  Instagram, LayoutDashboard, Loader2, Mail, MessageCircle, Phone, RefreshCw, ShieldAlert,
-  Timer, TimerOff, User, UserPlus, Video, X,
+  Instagram, LayoutDashboard, Loader2, Mail, MessageCircle, Phone, RefreshCw, Reply, Send,
+  ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { formatDateTime, initials, timeAgo } from "@/lib/crm/utils";
-import type { InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
+import type { FollowUpTemplateDTO, InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,11 @@ import { Textarea } from "@/components/ui/textarea";
 // ============ Tipe lokal ============
 
 type InboxLead = InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] };
+
+/** Lead sudah direspons (respondedAt terisi dari alur Respons & Catat Fase 3). */
+function isResponded(lead: InboxLead): boolean {
+  return Boolean(lead.respondedAt);
+}
 
 interface ContactFormState {
   firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
@@ -110,7 +115,16 @@ const SLA_TONE_ICON: Record<SlaTone, LucideIcon> = {
 };
 
 /** Badge SLA dengan ikon + countdown, dipakai di kartu lead & panel detail. */
-function SlaBadge({ brandSlaHours, waitHours }: { brandSlaHours: number; waitHours: number }) {
+function SlaBadge({ brandSlaHours, waitHours, respondedAt }: { brandSlaHours: number; waitHours: number; respondedAt?: string | null }) {
+  // Sudah direspons → SLA terpenuhi, tampilkan status emerald alih-alih countdown
+  if (respondedAt) {
+    return (
+      <Badge variant="outline" className="border border-emerald-200 bg-emerald-50 text-emerald-700" aria-label="Lead sudah direspons">
+        <Reply aria-hidden="true" />
+        {`Direspons ${timeAgo(respondedAt)}`}
+      </Badge>
+    );
+  }
   const sla = slaBadgeInfo(brandSlaHours, waitHours);
   const Icon = SLA_TONE_ICON[sla.tone];
   return (
@@ -189,8 +203,9 @@ function LeadCard({
   onEscalate: (lead: InboxLead) => void;
 }) {
   const sender = (lead.senderName ?? "").trim() || "Tanpa nama";
+  const responded = isResponded(lead);
   const sla = slaBadgeInfo(lead.brand?.slaHours ?? 24, lead.slaHours);
-  const breached = sla.tone === "breach";
+  const breached = sla.tone === "breach" && !responded;
   const meta = channelMeta(lead.channel);
   return (
     <div
@@ -206,7 +221,7 @@ function LeadCard({
       aria-label={`Buka detail lead dari ${sender}`}
       className={cn(
         "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
-        breached ? "border-l-4 border-l-rose-500" : "hover:border-zinc-300",
+        breached ? "border-l-4 border-l-rose-500" : responded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
         selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
         selected && breached && "ring-1 ring-rose-500"
       )}
@@ -225,7 +240,7 @@ function LeadCard({
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Badge variant="outline" className={cn("border", meta.badge)}>{channelLabel(lead.channel)}</Badge>
             {lead.brand ? <BrandChip name={lead.brand.name} color={lead.brand.color} /> : null}
-            <SlaBadge brandSlaHours={lead.brand?.slaHours ?? 24} waitHours={lead.slaHours} />
+            <SlaBadge brandSlaHours={lead.brand?.slaHours ?? 24} waitHours={lead.slaHours} respondedAt={lead.respondedAt} />
             {lead.candidates.length > 0 ? (
               <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
                 <AlertTriangle aria-hidden="true" />
@@ -244,7 +259,7 @@ function LeadCard({
               type="button"
               size="sm"
               variant="outline"
-              disabled={escalated}
+              disabled={escalated || responded}
               className={cn(
                 "h-7 px-2.5 text-xs",
                 breached && !escalated
@@ -340,6 +355,239 @@ function ListSkeleton() {
   );
 }
 
+// ============ Respons & Catat (Fase 3): balas lead dengan template ============
+
+const RESPOND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
+  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { key: "email", label: "Email", icon: Mail },
+  { key: "phone", label: "Telepon", icon: Phone },
+];
+
+/** Ganti placeholder template untuk konteks lead inbox. */
+function renderLeadTemplate(body: string, vars: Record<string, string>): string {
+  return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => vars[key] ?? full);
+}
+
+function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
+  lead: InboxLead | null;
+  linkedContactName: string | null;
+  onClose: () => void;
+  onResponded: (updated: InboxLead) => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [templates, setTemplates] = useState<FollowUpTemplateDTO[]>([]);
+  const [loadingTpl, setLoadingTpl] = useState(false);
+  const [channel, setChannel] = useState("whatsapp");
+  const [templateId, setTemplateId] = useState<string>("blank");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const senderDisplay = (lead?.senderName ?? "").trim() || "Tanpa nama";
+
+  // Muat template + set kanal default saat dialog dibuka
+  useEffect(() => {
+    if (!lead) return;
+    let alive = true;
+    setLoadingTpl(true);
+    setTemplates([]);
+    setTemplateId("blank");
+    setBody("");
+    setChannel(["whatsapp", "email", "phone"].includes(lead.channel) ? lead.channel : "whatsapp");
+    (async () => {
+      try {
+        const res = await api.followUpTemplates("all");
+        if (!alive) return;
+        setTemplates(
+          res.templates
+            .filter((t) => !t.brandId || t.brandId === lead.brandId)
+            .sort((a, b) => a.delayDays - b.delayDays)
+        );
+      } catch {
+        if (alive) toast.error("Gagal memuat template follow-up");
+      } finally {
+        if (alive) setLoadingTpl(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [lead]);
+
+  const vars = useMemo<Record<string, string>>(() => ({
+    contact_name: linkedContactName ?? senderDisplay,
+    company_name: "perusahaan Bapak/Ibu",
+    brand_name: lead?.brand?.name ?? "tim kami",
+    marketing_name: user?.name ?? "Tim Sales",
+  }), [lead?.brand?.name, linkedContactName, senderDisplay, user?.name]);
+
+  function pickTemplate(id: string) {
+    setTemplateId(id);
+    if (id === "blank") { setBody(""); return; }
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) return;
+    setChannel(tpl.channel);
+    setBody(renderLeadTemplate(tpl.body, vars));
+  }
+
+  const unknownPlaceholders = useMemo(() => {
+    const found = body.match(/{{\s*(\w+)\s*}}/g) ?? [];
+    return Array.from(new Set(found));
+  }, [body]);
+
+  async function handleSend() {
+    if (!lead || !user) return;
+    const content = body.trim();
+    if (!content) { toast.error("Isi respons tidak boleh kosong"); return; }
+    setSending(true);
+    try {
+      const res = await api.inboxRespond({
+        interactionId: lead.id,
+        channel,
+        content,
+        subject: channel === "email" ? `Re: ${lead.subject ?? "permintaan Anda"}` : undefined,
+        contactId: undefined,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      toast.success(`Respons ${channel === "email" ? "email" : channel} tercatat`, {
+        description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
+      });
+      onResponded({ ...lead, ...res.lead, slaHours: lead.slaHours, candidates: lead.candidates });
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mencatat respons");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const chMeta = (key: string) => RESPOND_CHANNELS.find((c) => c.key === key) ?? RESPOND_CHANNELS[0];
+  const ChIcon = chMeta(channel).icon;
+
+  return (
+    <Dialog open={lead !== null} onOpenChange={(open) => { if (!open && !sending) onClose(); }}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto crm-scroll sm:max-w-xl" aria-label="Respons lead">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden>
+              <Reply className="h-3.5 w-3.5" />
+            </span>
+            Respons &amp; Catat
+          </DialogTitle>
+          <DialogDescription>
+            Balas pesan <span className="font-medium text-zinc-700">{senderDisplay}</span> — tercatat sebagai Interaction outbound dan menghentikan countdown SLA.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-1">
+          {/* Kutipan pesan masuk */}
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+            <p className="line-clamp-3 text-xs leading-relaxed text-zinc-600">{lead?.content}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-zinc-400">
+              <span>{lead ? formatDateTime(lead.createdAt) : ""}</span>
+              {lead?.brand ? (
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: lead.brand.color }} aria-hidden />
+                  {lead.brand.name}
+                </span>
+              ) : null}
+              {linkedContactName ? <span className="font-medium text-emerald-600">≡ {linkedContactName}</span> : null}
+            </div>
+          </div>
+
+          {/* Template */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5">Template respons</Label>
+            {loadingTpl ? (
+              <Skeleton className="h-16 w-full rounded-lg" />
+            ) : templates.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-zinc-200 p-2.5 text-xs text-zinc-400">
+                Belum ada template untuk brand ini — tulis pesan manual.
+              </p>
+            ) : (
+              <div className="crm-scroll max-h-36 space-y-1.5 overflow-y-auto pr-1">
+                <label className={cn(
+                  "flex cursor-pointer items-center gap-2 rounded-lg border p-2.5 text-xs transition-colors",
+                  templateId === "blank" ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"
+                )}>
+                  <Send className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+                  <span className="font-medium text-zinc-900">Tulis respons sendiri</span>
+                  <input type="radio" className="sr-only" checked={templateId === "blank"} onChange={() => pickTemplate("blank")} aria-label="Tulis respons sendiri" />
+                </label>
+                {templates.map((t) => {
+                  const TplIcon = chMeta(t.channel).icon;
+                  return (
+                    <label key={t.id} className={cn(
+                      "flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors",
+                      templateId === t.id ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"
+                    )}>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+                          {t.name}
+                          {!t.approved ? <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1 text-[9px] text-amber-700">review</Badge> : null}
+                        </span>
+                        <span className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+                          <span className="inline-flex items-center gap-1"><TplIcon className="h-3 w-3" aria-hidden />{chMeta(t.channel).label}</span>
+                          <span aria-hidden>·</span>
+                          <span>H+{t.delayDays}</span>
+                        </span>
+                      </span>
+                      <input type="radio" className="sr-only" checked={templateId === t.id} onChange={() => pickTemplate(t.id)} aria-label={`Pakai template ${t.name}`} />
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Kanal + isi */}
+          <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
+            <div className="space-y-2">
+              <Label htmlFor="respond-channel">Kanal respons</Label>
+              <Select value={channel} onValueChange={setChannel}>
+                <SelectTrigger id="respond-channel" className="bg-white"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {RESPOND_CHANNELS.map((c) => (
+                    <SelectItem key={c.key} value={c.key}>
+                      <span className="flex items-center gap-2"><c.icon className="h-3.5 w-3.5" aria-hidden /> {c.label}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="respond-body">Isi respons</Label>
+              <Textarea
+                id="respond-body"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={7}
+                placeholder="Tulis respons untuk lead ini…"
+                className="bg-white text-sm"
+              />
+              {unknownPlaceholders.length > 0 ? (
+                <p className="text-[11px] text-amber-600">
+                  Placeholder belum terisi: {unknownPlaceholders.join(", ")} — lengkapi manual sebelum kirim.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={sending}>Batal</Button>
+          <Button
+            onClick={() => void handleSend()}
+            disabled={sending || !body.trim()}
+            aria-label="Kirim dan catat respons lead"
+          >
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ChIcon className="h-4 w-4" aria-hidden />}
+            {sending ? "Mencatat…" : `Kirim via ${chMeta(channel).label}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ============ Modul utama ============
 
 export default function InboxModule() {
@@ -364,6 +612,8 @@ export default function InboxModule() {
   const [escalateNote, setEscalateNote] = useState("");
   const [escalating, setEscalating] = useState(false);
   const [escalatedIds, setEscalatedIds] = useState<Set<string>>(new Set());
+  // Fase 3 — respons & catat lead
+  const [respondTarget, setRespondTarget] = useState<InboxLead | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
 
   const loadLeads = useCallback(async (silent = false) => {
@@ -394,9 +644,10 @@ export default function InboxModule() {
     const list = leads ?? [];
     return {
       total: list.length,
-      // Breach baru (Fase 3): waktu tunggu melewati SLA brand masing-masing
-      late: list.filter((l) => (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
+      // Breach baru (Fase 3): waktu tunggu melewati SLA brand — lead yang sudah direspons tidak dihitung
+      late: list.filter((l) => !isResponded(l) && (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
       duplicate: list.filter((l) => l.candidates.length > 0).length,
+      responded: list.filter((l) => isResponded(l)).length,
     };
   }, [leads]);
 
@@ -578,6 +829,7 @@ export default function InboxModule() {
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />SLA Aman</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />Segera Jatuh Tempo</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-500" aria-hidden="true" />Terlambat</span>
+              <span className="inline-flex items-center gap-1.5"><Reply className="size-3 text-emerald-600" aria-hidden="true" />Sudah Direspons</span>
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -634,9 +886,10 @@ export default function InboxModule() {
       </div>
 
       {/* ===== Stat strip ===== */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon={Inbox} label="Total Lead" value={stats.total} tone="zinc" />
         <StatCard icon={AlarmClock} label="Terlambat Respons" value={stats.late} tone={stats.late > 0 ? "rose" : "zinc"} />
+        <StatCard icon={Reply} label="Sudah Direspons" value={stats.responded} tone={stats.responded > 0 ? "zinc" : "zinc"} />
         <StatCard icon={AlertTriangle} label="Warning Duplikat" value={stats.duplicate} tone={stats.duplicate > 0 ? "amber" : "zinc"} />
       </div>
 
@@ -713,7 +966,7 @@ export default function InboxModule() {
                         {selectedLead.brand ? (
                           <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
                         ) : null}
-                        <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} />
+                        <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} respondedAt={selectedLead.respondedAt} />
                       </div>
                     </div>
                   </div>
@@ -747,6 +1000,38 @@ export default function InboxModule() {
                       <dd className="text-zinc-700">{formatDateTime(selectedLead.createdAt)}</dd>
                     </div>
                   </dl>
+
+                  {/* Fase 3 — Respons & catat */}
+                  <div className={cn(
+                    "mt-3 rounded-lg border p-3",
+                    selectedLead.respondedAt ? "border-emerald-200 bg-emerald-50/60" : "border-dashed border-zinc-300"
+                  )}>
+                    {selectedLead.respondedAt ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 text-xs font-medium text-emerald-700">
+                          <Reply className="size-3.5 shrink-0" aria-hidden="true" />
+                          Direspons oleh {selectedLead.respondedBy ?? "-"} · {timeAgo(selectedLead.respondedAt)}
+                        </span>
+                        <span className="text-[10px] text-emerald-600">SLA terpenuhi</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-zinc-500">
+                          Belum direspons — balas dengan template agar SLA tercatat terpenuhi.
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 gap-1.5 rounded-lg bg-zinc-900 text-xs text-white hover:bg-zinc-800"
+                          onClick={() => setRespondTarget(selectedLead)}
+                          aria-label="Respons lead dengan template"
+                        >
+                          <Reply className="size-3" aria-hidden="true" />
+                          Respons
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Identifikasi Identitas */}
@@ -1082,6 +1367,20 @@ export default function InboxModule() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Fase 3 — dialog Respons & Catat lead */}
+      <RespondDialog
+        lead={respondTarget}
+        linkedContactName={
+          respondTarget && linkedContactId
+            ? respondTarget.candidates.find((c) => c.contactId === linkedContactId)?.contact?.fullName ?? null
+            : null
+        }
+        onClose={() => setRespondTarget(null)}
+        onResponded={(updated) => {
+          setLeads((prev) => (prev ?? []).map((l) => (l.id === updated.id ? updated : l)));
+        }}
+      />
     </div>
   );
 }
