@@ -1,0 +1,314 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ ORGANIZATION STRUCTURE ============
+
+model Brand {
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  color           String   @default("#f97316") // hex accent
+  logoEmoji       String   @default("◆")
+  description     String?
+  website         String?
+  primaryCurrency String   @default("IDR")
+  invoicePrefix   String   @default("INV")
+  quotePrefix     String   @default("QUO")
+  slaHours        Int      @default(4)
+  portalDomain    String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  opportunities Opportunity[]
+  projects      Project[]
+  invoices      Invoice[]
+  interactions  Interaction[]
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  role        String   @default("marketing") // super_admin, director, marketing, finance, production, client
+  pin         String   @default("1234")
+  avatarColor String   @default("#f97316")
+  phone       String?
+  active      Boolean  @default(true)
+  brandAccess String   @default("all") // "all" or comma-separated brand slugs
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============ IDENTITY (company-centric & contact-centric) ============
+
+model Company {
+  id              String   @id @default(cuid())
+  name            String
+  industry        String?
+  website         String?
+  websiteDomain   String? // normalized for matching
+  country         String?
+  city            String?
+  address         String?
+  size            String? // startup, sme, enterprise, government
+  taxId           String?
+  defaultCurrency String   @default("IDR")
+  lifetimeValue   Float    @default(0)
+  tags            String   @default("[]") // JSON array
+  notes           String?
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contacts      Contact[]
+  opportunities Opportunity[]
+  projects      Project[]
+  invoices      Invoice[]
+}
+
+model Contact {
+  id               String    @id @default(cuid())
+  firstName        String
+  lastName         String?
+  fullName         String // computed & stored for search
+  position         String?
+  email            String? // normalized lowercase
+  emailAlt         String?
+  whatsapp         String? // normalized E.164 digits
+  phone            String?
+  country          String?
+  city             String?
+  timezone         String?
+  language         String    @default("id")
+  preferredChannel String    @default("whatsapp") // whatsapp, email, phone, instagram
+  socialProfile    String?
+  linkedin         String?
+  consentStatus    String    @default("granted") // granted, declined, pending
+  tags             String    @default("[]") // JSON array
+  notes            String?
+  companyId        String?
+  company          Company?  @relation(fields: [companyId], references: [id])
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  opportunities Opportunity[]
+  interactions  Interaction[]
+}
+
+// ============ SALES ============
+
+model Opportunity {
+  id               String    @id @default(cuid())
+  title            String
+  brandId          String
+  brand            Brand     @relation(fields: [brandId], references: [id])
+  companyId        String?
+  company          Company?  @relation(fields: [companyId], references: [id])
+  contactId        String
+  contact          Contact   @relation(fields: [contactId], references: [id])
+  serviceCategory  String? // animation, website, video, immersive...
+  serviceName      String?
+  leadSource       String? // instagram, whatsapp, email, website, referral, event
+  campaign         String?
+  brief            String?
+  requirements     String?
+  targetAudience   String?
+  deliverables     String?
+  targetDeadline   DateTime?
+  estimatedValue   Float?
+  currency         String    @default("IDR")
+  probability      Int       @default(20)
+  expectedCloseDate DateTime?
+  ownerName        String?
+  priority         String    @default("medium") // low, medium, high, urgent
+  stage            String    @default("new") // new, contact_attempted, connected, qualified, discovery, estimation, proposal_sent, negotiation, verbal_agreement, won, lost, nurture
+  temperature      String    @default("warm") // hot, warm, cold
+  competitor       String?
+  nextAction       String?
+  nextActionDate   DateTime?
+  lostReason       String?
+  lostNotes        String?
+  lastOfferValue   Float?
+  reactivation     Boolean   @default(false)
+  followUpDate     DateTime?
+  nurtureSegment   String? // reoffer_30, reoffer_90, budget_season, cross_sell, smaller_package, alternative_service
+  crossSellOfId    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  interactions Interaction[]
+  tasks        Task[]
+  notes        Note[]
+  projects     Project[]
+  invoices     Invoice[]
+}
+
+model Interaction {
+  id            String       @id @default(cuid())
+  channel       String // whatsapp, email, instagram, website, phone, meeting, portal
+  direction     String // inbound, outbound
+  brandId       String?
+  externalId    String?
+  senderName    String?
+  recipientName String?
+  subject       String?
+  content       String
+  attachments   String? // JSON array
+  respondedBy   String?
+  respondedAt   DateTime?
+  deliveryStatus String? // delivered, read, failed
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  contactId     String?
+  contact       Contact?     @relation(fields: [contactId], references: [id])
+  companyId     String?
+  brand         Brand?       @relation(fields: [brandId], references: [id])
+  createdAt     DateTime     @default(now())
+}
+
+model Task {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  type          String    @default("follow_up") // follow_up, meeting, internal, admin
+  priority      String    @default("medium") // low, medium, high
+  status        String    @default("open") // open, done, cancelled
+  assigneeName  String?
+  dueDate       DateTime?
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Note {
+  id            String   @id @default(cuid())
+  body          String
+  authorName    String
+  type          String   @default("internal") // internal, director_feedback
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  createdAt     DateTime @default(now())
+}
+
+// ============ FINANCE ============
+
+model Invoice {
+  id            String    @id @default(cuid())
+  number        String    @unique
+  brandId       String
+  brand         Brand     @relation(fields: [brandId], references: [id])
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id])
+  projectId     String?
+  project       Project?  @relation(fields: [projectId], references: [id])
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  description   String?
+  amount        Float     @default(0)
+  taxRate       Float     @default(11) // PPN %
+  taxAmount     Float     @default(0)
+  total         Float     @default(0)
+  currency      String    @default("IDR")
+  status        String    @default("draft") // draft, sent, partial, paid, overdue, cancelled
+  issueDate     DateTime  @default(now())
+  dueDate       DateTime?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  payments Payment[]
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  amount    Float
+  method    String   @default("transfer") // transfer, cash, qris, credit_card
+  reference String?
+  paidAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+// ============ PRODUCTION ============
+
+model Project {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  name            String
+  brandId         String
+  brand           Brand     @relation(fields: [brandId], references: [id])
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id])
+  opportunityId   String?   @unique
+  opportunity     Opportunity? @relation(fields: [opportunityId], references: [id])
+  serviceCategory String?
+  status          String    @default("planning") // planning, in_progress, review, completed, cancelled
+  progress        Int       @default(0)
+  pmName          String?
+  startDate       DateTime?
+  dueDate         DateTime?
+  budgetInternal  Float     @default(0)
+  contractValue   Float     @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  milestones Milestone[]
+  invoices   Invoice[]
+}
+
+model Milestone {
+  id        String    @id @default(cuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id])
+  name      String
+  order     Int       @default(0)
+  status    String    @default("pending") // pending, in_progress, done
+  dueDate   DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ============ GOVERNANCE ============
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorName String
+  actorRole String?
+  action    String // create, update, delete, stage_change, merge, login, convert
+  entity    String // opportunity, contact, company, task, invoice, project, interaction
+  entityId  String
+  entityLabel String?
+  field     String?
+  oldValue  String?
+  newValue  String?
+  metadata  String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+}
+
+model FollowUpTemplate {
+  id         String   @id @default(cuid())
+  name       String
+  brandId    String?
+  channel    String   @default("whatsapp")
+  language   String   @default("id")
+  stage      String?
+  delayDays  Int      @default(1)
+  body       String
+  version    Int      @default(1)
+  approved   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

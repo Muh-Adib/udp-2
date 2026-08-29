@@ -1,0 +1,268 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useCrmStore, MODULE_META, canAccess, type ModuleKey } from "@/lib/crm/store";
+import { ROLES } from "@/lib/crm/constants";
+import { initials } from "@/lib/crm/utils";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import DashboardModule from "@/components/crm/dashboard-module";
+import PipelineModule from "@/components/crm/pipeline-module";
+import InboxModule from "@/components/crm/inbox-module";
+import ContactsModule from "@/components/crm/contacts-module";
+import FollowupsModule from "@/components/crm/followups-module";
+import FinanceModule from "@/components/crm/finance-module";
+import ProjectsModule from "@/components/crm/projects-module";
+import PortalModule from "@/components/crm/portal-module";
+import BrandsModule from "@/components/crm/brands-module";
+import UsersModule from "@/components/crm/users-module";
+import AuditModule from "@/components/crm/audit-module";
+import {
+  LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet,
+  FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu,
+  ChevronDown, CircleUser,
+} from "lucide-react";
+
+const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }>> = {
+  dashboard: LayoutDashboard,
+  inbox: Inbox,
+  contacts: Users2,
+  pipeline: KanbanSquare,
+  followups: BellRing,
+  finance: Wallet,
+  projects: FolderKanban,
+  portal: Globe2,
+  brands: Building2,
+  users: UserCog,
+  audit: ScrollText,
+};
+
+const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
+  { label: "Operasional", modules: ["dashboard", "inbox", "contacts", "pipeline"] },
+  { label: "Komersial & Produksi", modules: ["followups", "finance", "projects"] },
+  { label: "Eksternal", modules: ["portal"] },
+  { label: "Sistem", modules: ["brands", "users", "audit"] },
+];
+
+function roleLabel(role: string) {
+  return ROLES.find((r) => r.key === role)?.label ?? role;
+}
+
+function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+  const { user, activeModule, setActiveModule } = useCrmStore();
+  if (!user) return null;
+  return (
+    <nav aria-label="Navigasi utama CRM" className="flex-1 space-y-5 overflow-y-auto px-3 py-4 crm-scroll">
+      {NAV_SECTIONS.map((section) => {
+        const items = section.modules.filter((m) => canAccess(m, user.role));
+        if (items.length === 0) return null;
+        return (
+          <div key={section.label}>
+            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">{section.label}</p>
+            <ul className="space-y-0.5">
+              {items.map((m) => {
+                const Icon = MODULE_ICONS[m];
+                const active = activeModule === m;
+                return (
+                  <li key={m}>
+                    <button
+                      type="button"
+                      onClick={() => { setActiveModule(m); onNavigate?.(); }}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                        active ? "bg-zinc-800 text-white font-medium" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                      )}
+                    >
+                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-amber-400" : "text-zinc-500 group-hover:text-zinc-300")} aria-hidden />
+                      <span className="truncate">{MODULE_META[m].label}</span>
+                      {m === "inbox" && activeModule !== "inbox" && (
+                        <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white" title="Lead baru menunggu respons" aria-label="Ada lead baru di inbox">
+                          ●
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+function BrandStrip() {
+  const brands = useCrmStore((s) => s.brands);
+  return (
+    <div className="flex items-center justify-center gap-1.5 border-t border-zinc-800 px-3 py-3" aria-label="Brand aktif">
+      {brands.map((b) => (
+        <span key={b.id} className="h-1.5 w-8 rounded-full" style={{ backgroundColor: b.color }} title={b.name} aria-label={b.name} />
+      ))}
+    </div>
+  );
+}
+
+export default function AppShell() {
+  const user = useCrmStore((s) => s.user);
+  const activeModule = useCrmStore((s) => s.activeModule);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
+  const setActiveBrandFilter = useCrmStore((s) => s.setActiveBrandFilter);
+  const brands = useCrmStore((s) => s.brands);
+  const setUser = useCrmStore((s) => s.setUser);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Gate modul berdasarkan role: jika role tidak punya akses, paksa ke modul pertama yang diizinkan
+  useEffect(() => {
+    if (!user) return;
+    if (!canAccess(activeModule, user.role)) {
+      const first = (Object.keys(MODULE_META) as ModuleKey[]).find((m) => canAccess(m, user.role));
+      if (first) setActiveModule(first);
+    }
+  }, [user, activeModule, setActiveModule]);
+
+  if (!user) return null;
+  const meta = MODULE_META[activeModule];
+
+  return (
+    <div className="flex min-h-screen bg-zinc-100">
+      {/* Sidebar desktop */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col bg-zinc-950 lg:flex" aria-label="Sidebar">
+        <div className="flex items-center gap-2.5 px-4 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>G</div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-zinc-50">Grup CRM</p>
+            <p className="truncate text-[10px] text-zinc-500">Multi-Brand Platform</p>
+          </div>
+        </div>
+        <SidebarNav />
+        <BrandStrip />
+      </aside>
+
+      {/* Konten */}
+      <div className="flex min-h-screen w-full flex-col lg:pl-64">
+        {/* Header */}
+        <header className="sticky top-0 z-30 border-b border-zinc-200 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/75">
+          <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
+            {/* Hamburger mobile */}
+            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="icon" className="lg:hidden" aria-label="Buka menu navigasi">
+                  <Menu className="h-4 w-4" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-72 bg-zinc-950 p-0 text-zinc-50 [&>button]:text-zinc-400">
+                <SheetHeader className="border-b border-zinc-800 px-4 py-4 text-left">
+                  <SheetTitle className="text-sm text-zinc-50">Grup CRM</SheetTitle>
+                </SheetHeader>
+                <SidebarNav onNavigate={() => setMobileOpen(false)} />
+                <BrandStrip />
+              </SheetContent>
+            </Sheet>
+
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-sm font-bold text-zinc-900 sm:text-base">{meta?.label}</h1>
+              <p className="hidden truncate text-xs text-zinc-500 sm:block">{meta?.description}</p>
+            </div>
+
+            {/* Filter brand global */}
+            <Select value={activeBrandFilter} onValueChange={setActiveBrandFilter}>
+              <SelectTrigger className="w-[150px] sm:w-[170px]" aria-label="Filter brand global">
+                <SelectValue placeholder="Semua Brand" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Brand</SelectItem>
+                {brands.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+                      {b.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* User menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="gap-2 px-2" aria-label="Menu pengguna">
+                  <span
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: user.avatarColor }}
+                    aria-hidden
+                  >
+                    {initials(user.name)}
+                  </span>
+                  <span className="hidden text-left sm:block">
+                    <span className="block text-xs font-semibold leading-tight">{user.name}</span>
+                    <span className="block text-[10px] text-zinc-500 leading-tight">{roleLabel(user.role)}</span>
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <div className="flex items-center gap-2">
+                    <CircleUser className="h-4 w-4 text-zinc-400" aria-hidden />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{user.name}</p>
+                      <p className="truncate text-xs font-normal text-zinc-500">{user.email}</p>
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs font-normal text-zinc-500">
+                  Role: <Badge variant="secondary" className="ml-1">{roleLabel(user.role)}</Badge>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => { setUser(null); }}
+                  className="text-rose-600 focus:text-rose-600"
+                  aria-label="Keluar dari aplikasi"
+                >
+                  <LogOut className="h-4 w-4" aria-hidden /> Keluar
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </header>
+
+        {/* Modul aktif (hanya jika role berhak) */}
+        <main className="flex-1 px-4 py-5 lg:px-6" aria-label={`Konten ${meta?.label}`}>
+          {user && canAccess(activeModule, user.role) && (
+            <>
+              {activeModule === "dashboard" && <DashboardModule />}
+              {activeModule === "inbox" && <InboxModule />}
+              {activeModule === "contacts" && <ContactsModule />}
+              {activeModule === "pipeline" && <PipelineModule />}
+              {activeModule === "followups" && <FollowupsModule />}
+              {activeModule === "finance" && <FinanceModule />}
+              {activeModule === "projects" && <ProjectsModule />}
+              {activeModule === "portal" && <PortalModule />}
+              {activeModule === "brands" && <BrandsModule />}
+              {activeModule === "users" && <UsersModule />}
+              {activeModule === "audit" && <AuditModule />}
+            </>
+          )}
+        </main>
+
+        {/* Footer sticky */}
+        <footer className="mt-auto border-t border-zinc-200 bg-white">
+          <div className="flex flex-col items-center justify-between gap-1.5 px-4 py-3 text-center sm:flex-row sm:text-left lg:px-6" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+            <p className="text-xs text-zinc-500">
+              © 2026 Grup Agensi Kreatif — <span className="font-medium text-zinc-700">Unimasi</span> · <span className="font-medium text-zinc-700">Segia Tech</span> · <span className="font-medium text-zinc-700">Erfo Multimedia</span> · <span className="font-medium text-zinc-700">Unicam Studio</span>
+            </p>
+            <p className="text-[11px] text-zinc-400">Multi-Brand CRM v1.0 · Audit log aktif</p>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}

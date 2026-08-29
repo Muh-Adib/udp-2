@@ -1,0 +1,1853 @@
+"use client";
+
+// ============================================================
+// Modul: Contacts & Companies (Task 3-b)
+// Identitas calon klien global — terhubung ke seluruh brand.
+// ============================================================
+
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { toast } from "sonner";
+import {
+  AlertTriangle,
+  Banknote,
+  Briefcase,
+  Building2,
+  Clock,
+  ExternalLink,
+  GitMerge,
+  Globe,
+  Info,
+  Instagram,
+  Languages,
+  LayoutDashboard,
+  Linkedin,
+  Loader2,
+  Mail,
+  MailPlus,
+  MapPin,
+  MessageCircle,
+  Pencil,
+  Phone,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+  Users,
+  Video,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { api } from "@/lib/crm/api-client";
+import { CHANNELS } from "@/lib/crm/constants";
+import { useCrmStore } from "@/lib/crm/store";
+import type { CompanyRef, ContactRef, MatchCandidateDTO } from "@/lib/crm/types";
+import { formatCurrency, initials, parseJsonArray } from "@/lib/crm/utils";
+import { cn } from "@/lib/utils";
+
+// ---------- Tipe lokal ----------
+
+type TabKey = "contacts" | "companies";
+
+/** Contact dari API (payload berisi field lebih lengkap dari ContactRef). */
+interface ContactRecord extends ContactRef {
+  firstName: string;
+  lastName?: string | null;
+  emailAlt?: string | null;
+  linkedin?: string | null;
+  timezone?: string | null;
+  socialProfile?: string | null;
+  notes?: string | null;
+  _count?: { opportunities: number; interactions: number };
+}
+
+/** Company dari API (include contacts + _count). */
+interface CompanyRecord extends CompanyRef {
+  contacts?: ContactRef[];
+  _count?: { opportunities: number; projects: number; invoices: number };
+}
+
+interface ContactFormValues {
+  firstName: string;
+  lastName: string;
+  position: string;
+  email: string;
+  whatsapp: string;
+  phone: string;
+  companyName: string;
+  companyId: string;
+  city: string;
+  country: string;
+  preferredChannel: string;
+  tagsText: string;
+}
+
+interface CompanyFormValues {
+  name: string;
+  industry: string;
+  website: string;
+  country: string;
+  city: string;
+  size: string;
+  defaultCurrency: string;
+}
+
+// ---------- Konstanta & helper ----------
+
+const AVATAR_PALETTE: readonly string[] = [
+  "#18181b", // zinc-900
+  "#ea580c", // Unimasi
+  "#059669", // Segia Tech
+  "#e11d48", // Erfo Multimedia
+  "#7c3aed", // Unicam Studio
+  "#b45309",
+  "#0369a1",
+];
+
+const CHANNEL_ICONS: Record<string, LucideIcon> = {
+  whatsapp: MessageCircle,
+  email: Mail,
+  instagram: Instagram,
+  website: Globe,
+  phone: Phone,
+  meeting: Video,
+  portal: LayoutDashboard,
+};
+
+const LANGUAGE_LABELS: Record<string, string> = { id: "Bahasa Indonesia", en: "English" };
+
+const SIZE_OPTIONS = [
+  { value: "startup", label: "Startup" },
+  { value: "sme", label: "SME" },
+  { value: "enterprise", label: "Enterprise" },
+  { value: "government", label: "Government" },
+];
+
+const SIZE_LABELS: Record<string, string> = {
+  enterprise: "Enterprise",
+  government: "Government",
+  sme: "SME",
+  startup: "Startup",
+};
+
+const CURRENCY_OPTIONS = [
+  { value: "IDR", label: "IDR — Rupiah" },
+  { value: "USD", label: "USD — US Dollar" },
+  { value: "SGD", label: "SGD — Dollar Singapura" },
+];
+
+const EMPTY_CONTACT_FORM: ContactFormValues = {
+  firstName: "",
+  lastName: "",
+  position: "",
+  email: "",
+  whatsapp: "",
+  phone: "",
+  companyName: "",
+  companyId: "none",
+  city: "",
+  country: "",
+  preferredChannel: "whatsapp",
+  tagsText: "",
+};
+
+const EMPTY_COMPANY_FORM: CompanyFormValues = {
+  name: "",
+  industry: "",
+  website: "",
+  country: "",
+  city: "",
+  size: "none",
+  defaultCurrency: "IDR",
+};
+
+const NO_VALUE = "none";
+
+function hashColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+}
+
+function useDebounced<T>(value: T, delay = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+function channelLabel(key?: string | null): string {
+  return CHANNELS.find((c) => c.key === key)?.label ?? (key || "-");
+}
+
+function locationText(city?: string | null, country?: string | null): string {
+  return [city, country].filter(Boolean).join(", ") || "-";
+}
+
+function consentMeta(status: string): { label: string; className: string } {
+  if (status === "granted") return { label: "Consent: Disetujui", className: "bg-emerald-100 text-emerald-700" };
+  if (status === "pending") return { label: "Consent: Menunggu", className: "bg-amber-100 text-amber-700" };
+  if (status === "declined") return { label: "Consent: Ditolak", className: "bg-rose-100 text-rose-700" };
+  return { label: status, className: "bg-zinc-100 text-zinc-600" };
+}
+
+function sizeBadgeClass(size?: string | null): string {
+  switch (size) {
+    case "enterprise":
+      return "bg-violet-100 text-violet-700";
+    case "government":
+      return "bg-zinc-200 text-zinc-800";
+    case "sme":
+      return "bg-emerald-100 text-emerald-700";
+    case "startup":
+      return "bg-orange-100 text-orange-700";
+    default:
+      return "bg-zinc-100 text-zinc-600";
+  }
+}
+
+function scoreBadgeClass(score: number): string {
+  if (score >= 85) return "bg-rose-100 text-rose-700";
+  if (score >= 70) return "bg-amber-100 text-amber-700";
+  return "bg-zinc-100 text-zinc-600";
+}
+
+function parseTagsText(text: string): string[] {
+  return text
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// ---------- Elemen kecil ----------
+
+function AvatarBubble({
+  name,
+  size = "md",
+  icon: Icon,
+}: {
+  name: string;
+  size?: "sm" | "md" | "lg";
+  icon?: LucideIcon;
+}) {
+  const cls =
+    size === "sm"
+      ? "size-7 text-[10px]"
+      : size === "lg"
+        ? "size-12 text-sm"
+        : "size-10 text-xs";
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white",
+        cls
+      )}
+      style={{ backgroundColor: hashColor(name) }}
+    >
+      {Icon ? <Icon className="size-4" /> : initials(name)}
+    </span>
+  );
+}
+
+function InfoRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value?: string | null }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+        <Icon className="size-4" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{label}</p>
+        <p className="truncate text-sm text-zinc-800">{value || "-"}</p>
+      </div>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: ReactNode }) {
+  return <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{children}</h3>;
+}
+
+function ChannelBadge({ channel }: { channel?: string | null }) {
+  const Icon = CHANNEL_ICONS[channel ?? ""] ?? Globe;
+  return (
+    <Badge variant="secondary" className="shrink-0 bg-zinc-100 text-zinc-600">
+      <Icon className="size-3" /> {channelLabel(channel)}
+    </Badge>
+  );
+}
+
+function ConsentBadge({ status }: { status: string }) {
+  const meta = consentMeta(status);
+  return (
+    <Badge className={cn("border-transparent", meta.className)}>
+      <ShieldCheck className="size-3" /> {meta.label}
+    </Badge>
+  );
+}
+
+function SizeBadge({ size }: { size?: string | null }) {
+  return (
+    <Badge className={cn("border-transparent capitalize", sizeBadgeClass(size))}>
+      {SIZE_LABELS[size ?? ""] ?? size ?? "-"}
+    </Badge>
+  );
+}
+
+function TagList({ tags }: { tags: string[] }) {
+  if (tags.length === 0) return <p className="text-xs text-zinc-400">Belum ada tag.</p>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.map((t) => (
+        <Badge key={t} variant="secondary" className="bg-zinc-100 text-[11px] font-normal text-zinc-600">
+          {t}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  description,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border bg-white px-6 py-16 text-center shadow-sm">
+      <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100 text-zinc-400">
+        <Icon className="size-6" />
+      </span>
+      <div>
+        <p className="font-semibold text-zinc-900">{title}</p>
+        <p className="mt-1 max-w-md text-sm text-zinc-500">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <EmptyState
+      icon={AlertTriangle}
+      title="Gagal memuat data"
+      description={message}
+      action={
+        <Button variant="outline" onClick={onRetry} aria-label="Coba muat ulang data">
+          <RefreshCw className="size-4" /> Coba lagi
+        </Button>
+      }
+    />
+  );
+}
+
+function ContactCardSkeleton() {
+  return (
+    <div className="space-y-3 rounded-xl border bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <Skeleton className="size-10 rounded-full" />
+        <div className="flex-1 space-y-1.5">
+          <Skeleton className="h-3.5 w-2/3" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      </div>
+      <Skeleton className="h-3 w-3/4" />
+      <Skeleton className="h-3 w-1/2" />
+      <div className="flex gap-1.5">
+        <Skeleton className="h-5 w-16 rounded-md" />
+        <Skeleton className="h-5 w-14 rounded-md" />
+      </div>
+    </div>
+  );
+}
+
+function ContactSkeletonGrid() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <ContactCardSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
+
+function CompanyTableSkeleton() {
+  return (
+    <div className="space-y-4 rounded-xl border bg-white p-4 shadow-sm" aria-hidden="true">
+      <Skeleton className="h-5 w-44" />
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-4">
+          <Skeleton className="h-4 flex-1" />
+          <Skeleton className="hidden h-4 w-28 sm:block" />
+          <Skeleton className="hidden h-4 w-24 md:block" />
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- Kartu contact ----------
+
+function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () => void }) {
+  const tags = parseJsonArray(contact.tags);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Buka detail ${contact.fullName}`}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="flex cursor-pointer flex-col gap-3 rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30"
+    >
+      <div className="flex items-start gap-3">
+        <AvatarBubble name={contact.fullName} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold text-zinc-900">{contact.fullName}</p>
+          <p className="truncate text-xs text-zinc-500">{contact.position || "Tanpa jabatan"}</p>
+        </div>
+        <ChannelBadge channel={contact.preferredChannel} />
+      </div>
+
+      {contact.company && (
+        <p className="flex items-center gap-1.5 text-xs text-zinc-600">
+          <Building2 className="size-3.5 shrink-0 text-zinc-400" />
+          <span className="truncate">{contact.company.name}</span>
+        </p>
+      )}
+
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+        <MapPin className="size-3.5 shrink-0 text-zinc-400" />
+        <span className="truncate">{locationText(contact.city, contact.country)}</span>
+      </p>
+
+      <div className="space-y-1 border-t border-zinc-100 pt-2.5 text-xs text-zinc-500">
+        <p className="flex items-center gap-1.5">
+          <Mail className="size-3.5 shrink-0 text-zinc-400" />
+          <span className="truncate">{contact.email || "—"}</span>
+        </p>
+        <p className="flex items-center gap-1.5">
+          <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
+          <span className="truncate">{contact.whatsapp || "—"}</span>
+        </p>
+      </div>
+
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {tags.map((t) => (
+            <Badge key={t} variant="secondary" className="text-[11px] font-normal">
+              {t}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Form fields contact (dipakai create & edit) ----------
+
+function FormField({
+  label,
+  required,
+  className,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      <span className="text-xs font-medium text-zinc-600">
+        {label}
+        {required && <span className="text-rose-600"> *</span>}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+function ContactFormFields({
+  values,
+  onChange,
+  disabled,
+  mode,
+  companies,
+}: {
+  values: ContactFormValues;
+  onChange: (patch: Partial<ContactFormValues>) => void;
+  disabled?: boolean;
+  mode: "create" | "edit";
+  companies: CompanyRecord[];
+}) {
+  const setField = (key: keyof ContactFormValues) => (value: string) =>
+    onChange({ [key]: value } as Partial<ContactFormValues>);
+
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <FormField label="Nama depan" required>
+        <Input value={values.firstName} onChange={(e) => setField("firstName")(e.target.value)} placeholder="cth. Ratna" disabled={disabled} />
+      </FormField>
+      <FormField label="Nama belakang">
+        <Input value={values.lastName} onChange={(e) => setField("lastName")(e.target.value)} placeholder="cth. Wijaya" disabled={disabled} />
+      </FormField>
+      <FormField label="Jabatan">
+        <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
+      </FormField>
+      <FormField label="Email">
+        <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
+      </FormField>
+      <FormField label="WhatsApp">
+        <Input value={values.whatsapp} onChange={(e) => setField("whatsapp")(e.target.value)} placeholder="+62…" disabled={disabled} />
+      </FormField>
+      <FormField label="Telepon">
+        <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
+      </FormField>
+
+      {mode === "create" ? (
+        <FormField label="Perusahaan">
+          <Input
+            value={values.companyName}
+            onChange={(e) => setField("companyName")(e.target.value)}
+            placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
+            disabled={disabled}
+          />
+        </FormField>
+      ) : (
+        <FormField label="Perusahaan">
+          <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
+            <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
+              <SelectValue placeholder="Pilih perusahaan" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FormField>
+      )}
+
+      <FormField label="Kota">
+        <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
+      </FormField>
+      <FormField label="Negara">
+        <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={disabled} />
+      </FormField>
+      <FormField label="Kanal preferensi">
+        <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
+          <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
+            <SelectValue placeholder="Pilih kanal" />
+          </SelectTrigger>
+          <SelectContent>
+            {CHANNELS.map((c) => (
+              <SelectItem key={c.key} value={c.key}>
+                {c.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormField>
+      <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
+        <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
+      </FormField>
+    </div>
+  );
+}
+
+// ---------- Detail contact (Sheet) ----------
+
+function ContactDetailBody({
+  contact,
+  companies,
+  onSaved,
+  onDeleted,
+  onOpenCompany,
+}: {
+  contact: ContactRecord;
+  companies: CompanyRecord[];
+  onSaved: (contact: ContactRef) => void;
+  onDeleted: () => void;
+  onOpenCompany: (company: CompanyRef) => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<ContactFormValues>({
+    firstName: contact.firstName ?? "",
+    lastName: contact.lastName ?? "",
+    position: contact.position ?? "",
+    email: contact.email ?? "",
+    whatsapp: contact.whatsapp ?? "",
+    phone: contact.phone ?? "",
+    companyName: contact.company?.name ?? "",
+    companyId: contact.companyId || NO_VALUE,
+    city: contact.city ?? "",
+    country: contact.country ?? "",
+    preferredChannel: contact.preferredChannel || "whatsapp",
+    tagsText: "",
+  });
+  const [tags, setTags] = useState<string[]>(() => parseJsonArray(contact.tags));
+  const [tagInput, setTagInput] = useState("");
+  const [tagBusy, setTagBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const PreferredIcon = CHANNEL_ICONS[contact.preferredChannel] ?? Globe;
+  const company = contact.company ?? null;
+  const oppCount = contact._count?.opportunities;
+
+  function patchForm(p: Partial<ContactFormValues>) {
+    setForm((v) => ({ ...v, ...p }));
+  }
+
+  async function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!form.firstName.trim()) {
+      toast.error("Nama depan wajib diisi");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api.updateContact(contact.id, {
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim() || null,
+        position: form.position.trim() || null,
+        email: form.email.trim() || null,
+        whatsapp: form.whatsapp.trim() || null,
+        phone: form.phone.trim() || null,
+        city: form.city.trim() || null,
+        country: form.country.trim() || null,
+        preferredChannel: form.preferredChannel,
+        companyId: form.companyId === NO_VALUE ? null : form.companyId,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      toast.success("Perubahan contact tersimpan");
+      setEditing(false);
+      onSaved(res.contact);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan perubahan");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function patchTags(next: string[]) {
+    setTagBusy(true);
+    try {
+      const res = await api.updateContact(contact.id, {
+        tags: next,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      setTags(next);
+      onSaved(res.contact);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memperbarui tag");
+    } finally {
+      setTagBusy(false);
+    }
+  }
+
+  function addTag() {
+    const t = tagInput.trim();
+    if (!t || tags.includes(t)) {
+      setTagInput("");
+      return;
+    }
+    setTagInput("");
+    void patchTags([...tags, t]);
+  }
+
+  function removeTag(t: string) {
+    void patchTags(tags.filter((x) => x !== t));
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/contacts/${contact.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      toast.success(`Contact "${contact.fullName}" dihapus`);
+      onDeleted();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus contact");
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <SheetHeader className="border-b border-zinc-100">
+        <div className="flex items-start gap-3 pr-8">
+          <AvatarBubble name={contact.fullName} size="lg" />
+          <div className="min-w-0 flex-1">
+            <SheetTitle className="leading-tight">{contact.fullName}</SheetTitle>
+            <SheetDescription className="truncate">
+              {contact.position || "Tanpa jabatan"}
+              {company ? ` · ${company.name}` : ""}
+            </SheetDescription>
+          </div>
+          <Button
+            size="sm"
+            variant={editing ? "outline" : "secondary"}
+            onClick={() => setEditing((v) => !v)}
+            aria-label={editing ? "Batal edit contact" : "Edit contact"}
+          >
+            <Pencil className="size-3.5" /> {editing ? "Batal" : "Edit"}
+          </Button>
+        </div>
+      </SheetHeader>
+
+      <div className="flex-1 space-y-5 p-4">
+        {editing ? (
+          <form onSubmit={handleSave} className="space-y-4 rounded-xl border bg-white p-4 shadow-sm">
+            <p className="text-sm font-semibold text-zinc-900">Edit Contact</p>
+            <ContactFormFields
+              mode="edit"
+              values={form}
+              onChange={patchForm}
+              disabled={saving}
+              companies={companies}
+            />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+                Batal
+              </Button>
+              <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={saving}>
+                {saving && <Loader2 className="size-4 animate-spin" />} Simpan Perubahan
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <section aria-label="Informasi contact">
+            <SectionTitle>Informasi</SectionTitle>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <InfoRow icon={Mail} label="Email" value={contact.email} />
+              {contact.emailAlt ? <InfoRow icon={MailPlus} label="Email alternatif" value={contact.emailAlt} /> : null}
+              <InfoRow icon={MessageCircle} label="WhatsApp" value={contact.whatsapp} />
+              <InfoRow icon={Phone} label="Telepon" value={contact.phone} />
+              <InfoRow icon={MapPin} label="Lokasi" value={locationText(contact.city, contact.country)} />
+              <InfoRow icon={Clock} label="Zona waktu" value={contact.timezone} />
+              <InfoRow icon={Languages} label="Bahasa" value={LANGUAGE_LABELS[contact.language] ?? contact.language} />
+              <InfoRow icon={PreferredIcon} label="Kanal preferensi" value={channelLabel(contact.preferredChannel)} />
+              {contact.linkedin ? <InfoRow icon={Linkedin} label="LinkedIn" value={contact.linkedin} /> : null}
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+                  <ShieldCheck className="size-4" />
+                </span>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Consent</p>
+                  <div className="mt-0.5">
+                    <ConsentBadge status={contact.consentStatus} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section aria-label="Tag contact">
+          <SectionTitle>Tag</SectionTitle>
+          <div className="rounded-xl border bg-white p-3 shadow-sm">
+            <div className="flex flex-wrap gap-1.5">
+              {tags.length === 0 && <p className="text-xs text-zinc-400">Belum ada tag — tambahkan untuk segmentasi.</p>}
+              {tags.map((t) => (
+                <Badge key={t} variant="secondary" className="gap-1 bg-zinc-100 text-zinc-700">
+                  {t}
+                  <button
+                    type="button"
+                    aria-label={`Hapus tag ${t}`}
+                    disabled={tagBusy}
+                    onClick={() => removeTag(t)}
+                    className="rounded-full p-0.5 transition-colors hover:bg-zinc-200"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+            <form
+              className="mt-2.5 flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addTag();
+              }}
+            >
+              <Input
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                placeholder="Tambah tag…"
+                aria-label="Tag baru"
+                className="h-8 text-xs"
+                disabled={tagBusy}
+              />
+              <Button type="submit" size="sm" variant="outline" className="h-8" disabled={tagBusy || !tagInput.trim()}>
+                <Plus className="size-3.5" /> Tambah
+              </Button>
+            </form>
+          </div>
+        </section>
+
+        {company && (
+          <section aria-label="Perusahaan terkait">
+            <SectionTitle>Perusahaan</SectionTitle>
+            <button
+              type="button"
+              onClick={() => company && onOpenCompany(company)}
+              aria-label={`Buka detail perusahaan ${company.name}`}
+              className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+            >
+              <AvatarBubble name={company.name} icon={Building2} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-zinc-900">{company.name}</span>
+                <span className="block truncate text-xs text-zinc-500">
+                  {company.industry || "Industri belum diisi"}
+                  {company.website ? ` · ${company.website}` : ""}
+                </span>
+              </span>
+              <ExternalLink className="size-4 shrink-0 text-zinc-400" />
+            </button>
+          </section>
+        )}
+      </div>
+
+      <div className="mt-auto space-y-3 border-t border-zinc-100 bg-zinc-50/70 p-4">
+        <div className="flex items-center justify-between gap-3">
+          {typeof oppCount === "number" ? (
+            <p className="flex items-center gap-2 text-sm text-zinc-600">
+              <Briefcase className="size-4 text-zinc-400" />
+              Total <span className="font-semibold text-zinc-900">{oppCount}</span> opportunity
+            </p>
+          ) : (
+            <span />
+          )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={deleting}
+                className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                aria-label="Hapus contact"
+              >
+                <Trash2 className="size-4" /> Hapus Contact
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Hapus contact ini?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  &ldquo;{contact.fullName}&rdquo; akan dihapus (soft delete) dan tidak lagi muncul di daftar. Riwayat opportunity dan interaksi tetap tersimpan di database.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => void handleDelete()}
+                  disabled={deleting}
+                  className="bg-red-600 text-white hover:bg-red-700"
+                >
+                  {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />} Ya, hapus
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContactDetailSheet({
+  contact,
+  open,
+  onOpenChange,
+  companies,
+  onSaved,
+  onDeleted,
+  onOpenCompany,
+}: {
+  contact: ContactRecord | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  companies: CompanyRecord[];
+  onSaved: (contact: ContactRef) => void;
+  onDeleted: () => void;
+  onOpenCompany: (company: CompanyRef) => void;
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+        {contact && (
+          <ContactDetailBody
+            key={contact.id}
+            contact={contact}
+            companies={companies}
+            onSaved={onSaved}
+            onDeleted={onDeleted}
+            onOpenCompany={onOpenCompany}
+          />
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ---------- Detail perusahaan (Sheet, read-only) ----------
+
+function CompanyDetailBody({
+  company,
+  contacts,
+  onOpenContact,
+}: {
+  company: CompanyRecord;
+  contacts: ContactRecord[];
+  onOpenContact: (contact: ContactRecord) => void;
+}) {
+  const tags = parseJsonArray(company.tags);
+  const websiteHref = company.website
+    ? company.website.startsWith("http")
+      ? company.website
+      : `https://${company.website}`
+    : null;
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <SheetHeader className="border-b border-zinc-100">
+        <div className="flex items-start gap-3 pr-8">
+          <AvatarBubble name={company.name} size="lg" icon={Building2} />
+          <div className="min-w-0 flex-1">
+            <SheetTitle className="leading-tight">{company.name}</SheetTitle>
+            <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{company.industry || "Industri belum diisi"}</span>
+              {websiteHref && (
+                <a
+                  href={websiteHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+                  aria-label={`Buka website ${company.name}`}
+                >
+                  {company.website} <ExternalLink className="size-3" />
+                </a>
+              )}
+            </SheetDescription>
+          </div>
+        </div>
+      </SheetHeader>
+
+      <div className="flex-1 space-y-5 p-4">
+        <section aria-label="Informasi perusahaan">
+          <SectionTitle>Informasi</SectionTitle>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <InfoRow icon={Globe} label="Website" value={company.website} />
+            <InfoRow icon={Building2} label="Industri" value={company.industry} />
+            <InfoRow icon={MapPin} label="Lokasi" value={locationText(company.city, company.country)} />
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+                <Users className="size-4" />
+              </span>
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Ukuran</p>
+                <div className="mt-0.5">
+                  <SizeBadge size={company.size} />
+                </div>
+              </div>
+            </div>
+            <InfoRow icon={Banknote} label="Mata uang default" value={company.defaultCurrency} />
+            <InfoRow
+              icon={Banknote}
+              label="Lifetime value"
+              value={formatCurrency(company.lifetimeValue, company.defaultCurrency)}
+            />
+          </div>
+        </section>
+
+        <section aria-label="Tag perusahaan">
+          <SectionTitle>Tag</SectionTitle>
+          <div className="rounded-xl border bg-white p-3 shadow-sm">
+            <TagList tags={tags} />
+          </div>
+        </section>
+
+        <section aria-label="Contact perusahaan">
+          <SectionTitle>
+            Kontak ({contacts.length}
+            {contacts.length === 5 ? "+" : ""})
+          </SectionTitle>
+          {contacts.length === 0 ? (
+            <p className="rounded-xl border bg-white p-3 text-xs text-zinc-400 shadow-sm">
+              Belum ada contact yang terhubung ke perusahaan ini.
+            </p>
+          ) : (
+            <ul className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+              {contacts.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenContact(c)}
+                    aria-label={`Buka detail contact ${c.fullName}`}
+                    className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+                  >
+                    <AvatarBubble name={c.fullName} size="sm" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-zinc-900">{c.fullName}</span>
+                      <span className="block truncate text-xs text-zinc-500">{c.position || c.email || "-"}</span>
+                    </span>
+                    <ChannelBadge channel={c.preferredChannel} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      <div className="mt-auto space-y-2 border-t border-zinc-100 bg-zinc-50/70 p-4">
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+            {company._count?.opportunities ?? 0} opportunity
+          </Badge>
+          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+            {company._count?.projects ?? 0} project
+          </Badge>
+          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+            {company._count?.invoices ?? 0} invoice
+          </Badge>
+        </div>
+        <p className="flex items-center gap-1.5 text-xs text-zinc-400">
+          <Info className="size-3.5" /> Data perusahaan bersifat read-only di UI — perubahan dilakukan via API.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CompanyDetailSheet({
+  company,
+  open,
+  onOpenChange,
+  contacts,
+  onOpenContact,
+}: {
+  company: CompanyRecord | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  contacts: ContactRecord[];
+  onOpenContact: (contact: ContactRecord) => void;
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+        {company && <CompanyDetailBody key={company.id} company={company} contacts={contacts} onOpenContact={onOpenContact} />}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ---------- Dialog: Contact baru ----------
+
+function CreateContactDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (contact: ContactRef, duplicates: MatchCandidateDTO[]) => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [values, setValues] = useState<ContactFormValues>(EMPTY_CONTACT_FORM);
+  const [candidates, setCandidates] = useState<MatchCandidateDTO[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setValues(EMPTY_CONTACT_FORM);
+      setCandidates(null);
+    }
+  }, [open]);
+
+  function patchForm(p: Partial<ContactFormValues>) {
+    setValues((v) => ({ ...v, ...p }));
+  }
+
+  async function createNow() {
+    if (!values.firstName.trim()) {
+      toast.error("Nama depan wajib diisi");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await api.createContact({
+        firstName: values.firstName.trim(),
+        lastName: values.lastName.trim() || undefined,
+        position: values.position.trim() || undefined,
+        email: values.email.trim() || undefined,
+        whatsapp: values.whatsapp.trim() || undefined,
+        phone: values.phone.trim() || undefined,
+        companyName: values.companyName.trim() || undefined,
+        city: values.city.trim() || undefined,
+        country: values.country.trim() || undefined,
+        preferredChannel: values.preferredChannel,
+        tags: parseTagsText(values.tagsText),
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      toast.success(`Contact "${res.contact.fullName}" berhasil dibuat`);
+      onCreated(res.contact, res.duplicateCandidates ?? []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat contact");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!values.firstName.trim()) {
+      toast.error("Nama depan wajib diisi");
+      return;
+    }
+    setChecking(true);
+    try {
+      const res = await api.identify({
+        email: values.email.trim() || undefined,
+        whatsapp: values.whatsapp.trim() || undefined,
+        fullName: `${values.firstName.trim()} ${values.lastName.trim()}`.trim(),
+        companyName: values.companyName.trim() || undefined,
+      });
+      if (res.candidates.length > 0) {
+        setCandidates(res.candidates);
+        return;
+      }
+      await createNow();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memeriksa duplikat");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  function pickExisting() {
+    toast.info("Menggunakan contact existing");
+    onOpenChange(false);
+  }
+
+  const busy = checking || creating;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Contact Baru</DialogTitle>
+          <DialogDescription>
+            Tambah identitas calon klien. Sistem otomatis memeriksa kemungkinan duplikat sebelum menyimpan.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <ContactFormFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
+
+          {candidates && candidates.length > 0 && (
+            <Alert className="border-amber-200 bg-amber-50">
+              <AlertTriangle className="size-4 text-amber-600" />
+              <AlertTitle className="text-amber-800">Kemungkinan duplikat</AlertTitle>
+              <AlertDescription className="text-amber-700">
+                <span className="block text-xs">
+                  Contact berikut mirip dengan data yang Anda masukkan. Gunakan data existing, atau tetap buat baru.
+                </span>
+                <ul className="mt-2 max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+                  {candidates.map((c) => (
+                    <li
+                      key={c.contactId}
+                      className="flex items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white p-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-zinc-900">
+                          <span className="truncate">{c.contact?.fullName ?? "Contact tanpa nama"}</span>
+                          <Badge className={cn("border-transparent", scoreBadgeClass(c.score))}>{c.score}% mirip</Badge>
+                        </p>
+                        <p className="truncate text-xs text-zinc-500">
+                          {c.contact?.email || "-"}
+                          {c.contact?.company?.name ? ` · ${c.contact.company.name}` : ""}
+                        </p>
+                        {c.reasons.length > 0 && (
+                          <p className="mt-0.5 text-[11px] text-amber-700">Alasan: {c.reasons.join(" · ")}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100"
+                        onClick={pickExisting}
+                      >
+                        Pilih ini
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="mt-2.5 bg-zinc-900 text-white hover:bg-zinc-800"
+                  onClick={() => void createNow()}
+                  disabled={busy}
+                >
+                  {creating && <Loader2 className="size-3.5 animate-spin" />} Tetap buat baru
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+              Batal
+            </Button>
+            <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={busy}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+              {checking ? "Memeriksa duplikat…" : creating ? "Menyimpan…" : "Simpan Contact"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------- Dialog: Perusahaan baru ----------
+
+function CreateCompanyDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: () => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [values, setValues] = useState<CompanyFormValues>(EMPTY_COMPANY_FORM);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) setValues(EMPTY_COMPANY_FORM);
+  }, [open]);
+
+  function patchForm(p: Partial<CompanyFormValues>) {
+    setValues((v) => ({ ...v, ...p }));
+  }
+
+  const setField = (key: keyof CompanyFormValues) => (value: string) => patchForm({ [key]: value } as Partial<CompanyFormValues>);
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!values.name.trim()) {
+      toast.error("Nama perusahaan wajib diisi");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await api.createCompany({
+        name: values.name.trim(),
+        industry: values.industry.trim() || undefined,
+        website: values.website.trim() || undefined,
+        country: values.country.trim() || undefined,
+        city: values.city.trim() || undefined,
+        size: values.size === NO_VALUE ? undefined : values.size,
+        defaultCurrency: values.defaultCurrency,
+        actorName: user?.name ?? "System",
+      });
+      toast.success(`Perusahaan "${res.company.name}" berhasil dibuat`);
+      onCreated();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat perusahaan");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Perusahaan Baru</DialogTitle>
+          <DialogDescription>Daftarkan akun perusahaan calon klien sebelum menambahkan contactnya.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <FormField label="Nama perusahaan" required className="sm:col-span-2">
+              <Input value={values.name} onChange={(e) => setField("name")(e.target.value)} placeholder="cth. PT Maju Jaya Abadi" disabled={submitting} />
+            </FormField>
+            <FormField label="Industri">
+              <Input value={values.industry} onChange={(e) => setField("industry")(e.target.value)} placeholder="cth. Perbankan" disabled={submitting} />
+            </FormField>
+            <FormField label="Website">
+              <Input value={values.website} onChange={(e) => setField("website")(e.target.value)} placeholder="cth. majujaya.co.id" disabled={submitting} />
+            </FormField>
+            <FormField label="Negara">
+              <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={submitting} />
+            </FormField>
+            <FormField label="Kota">
+              <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Bandung" disabled={submitting} />
+            </FormField>
+            <FormField label="Ukuran">
+              <Select value={values.size} onValueChange={setField("size")} disabled={submitting}>
+                <SelectTrigger className="w-full" aria-label="Pilih ukuran perusahaan">
+                  <SelectValue placeholder="Pilih ukuran" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_VALUE}>— Tanpa ukuran —</SelectItem>
+                  {SIZE_OPTIONS.map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Mata uang default">
+              <Select value={values.defaultCurrency} onValueChange={setField("defaultCurrency")} disabled={submitting}>
+                <SelectTrigger className="w-full" aria-label="Pilih mata uang default">
+                  <SelectValue placeholder="Pilih mata uang" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+              Batal
+            </Button>
+            <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={submitting}>
+              {submitting ? <Loader2 className="size-4 animate-spin" /> : <Building2 className="size-4" />}
+              {submitting ? "Menyimpan…" : "Simpan Perusahaan"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------- Modul utama ----------
+
+export default function ContactsModule() {
+  const user = useCrmStore((s) => s.user);
+
+  const [tab, setTab] = useState<TabKey>("contacts");
+  const [contactInput, setContactInput] = useState("");
+  const [companyInput, setCompanyInput] = useState("");
+  const contactQuery = useDebounced(contactInput, 300);
+  const companyQuery = useDebounced(companyInput, 300);
+
+  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+  const [allContacts, setAllContacts] = useState<ContactRecord[]>([]);
+  const [companies, setCompanies] = useState<CompanyRecord[]>([]);
+  const [allCompanies, setAllCompanies] = useState<CompanyRecord[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(true);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+  const [errorContacts, setErrorContacts] = useState<string | null>(null);
+  const [errorCompanies, setErrorCompanies] = useState<string | null>(null);
+
+  const [contactSheet, setContactSheet] = useState<{ open: boolean; contact: ContactRecord | null }>({
+    open: false,
+    contact: null,
+  });
+  const [companySheet, setCompanySheet] = useState<{ open: boolean; company: CompanyRecord | null }>({
+    open: false,
+    company: null,
+  });
+  const [createContactOpen, setCreateContactOpen] = useState(false);
+  const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
+  const [mergeState, setMergeState] = useState<{ newContactId: string; candidates: MatchCandidateDTO[] } | null>(null);
+  const [merging, setMerging] = useState(false);
+
+  const loadContacts = useCallback(async (q?: string) => {
+    setLoadingContacts(true);
+    try {
+      const res = await api.contacts(q || undefined);
+      const list = res.contacts as ContactRecord[];
+      setContacts(list);
+      if (!q) setAllContacts(list);
+      setErrorContacts(null);
+    } catch (err) {
+      setErrorContacts(err instanceof Error ? err.message : "Gagal memuat contact");
+      toast.error("Gagal memuat contact");
+    } finally {
+      setLoadingContacts(false);
+    }
+  }, []);
+
+  const loadCompanies = useCallback(async (q?: string) => {
+    setLoadingCompanies(true);
+    try {
+      const res = await api.companies(q || undefined);
+      const list = res.companies as CompanyRecord[];
+      setCompanies(list);
+      if (!q) setAllCompanies(list);
+      setErrorCompanies(null);
+    } catch (err) {
+      setErrorCompanies(err instanceof Error ? err.message : "Gagal memuat perusahaan");
+      toast.error("Gagal memuat perusahaan");
+    } finally {
+      setLoadingCompanies(false);
+    }
+  }, []);
+
+  // Fetch awal + saat query berubah (debounce 300ms).
+  useEffect(() => {
+    void loadContacts(contactQuery);
+  }, [contactQuery, loadContacts]);
+  useEffect(() => {
+    void loadCompanies(companyQuery);
+  }, [companyQuery, loadCompanies]);
+
+  /** Refetch master (tanpa filter) + ulangi query aktif, berurutan agar tidak balapan. */
+  const refreshAll = useCallback(async () => {
+    await loadContacts("");
+    if (contactQuery) await loadContacts(contactQuery);
+    await loadCompanies("");
+    if (companyQuery) await loadCompanies(companyQuery);
+  }, [contactQuery, companyQuery, loadContacts, loadCompanies]);
+
+  const retryAll = useCallback(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  const openContact = useCallback((c: ContactRecord) => {
+    setContactSheet({ open: true, contact: c });
+  }, []);
+
+  const openCompany = useCallback(
+    (company: CompanyRef) => {
+      const full = allCompanies.find((x) => x.id === company.id) ?? company;
+      setContactSheet((s) => ({ ...s, open: false }));
+      setCompanySheet({ open: true, company: full });
+    },
+    [allCompanies]
+  );
+
+  const openContactFromCompany = useCallback(
+    (c: ContactRecord) => {
+      setCompanySheet((s) => ({ ...s, open: false }));
+      openContact(c);
+    },
+    [openContact]
+  );
+
+  const handleContactSaved = useCallback(
+    (updated: ContactRef) => {
+      setContactSheet((s) => ({
+        ...s,
+        contact: s.contact ? ({ ...s.contact, ...updated } as ContactRecord) : s.contact,
+      }));
+      void refreshAll();
+    },
+    [refreshAll]
+  );
+
+  const handleContactDeleted = useCallback(() => {
+    setContactSheet({ open: false, contact: null });
+    void refreshAll();
+  }, [refreshAll]);
+
+  const handleContactCreated = useCallback(
+    (contact: ContactRef, duplicates: MatchCandidateDTO[]) => {
+      setCreateContactOpen(false);
+      void refreshAll();
+      if (duplicates.length > 0) {
+        setMergeState({ newContactId: contact.id, candidates: duplicates });
+      }
+    },
+    [refreshAll]
+  );
+
+  const handleCompanyCreated = useCallback(() => {
+    setCreateCompanyOpen(false);
+    void refreshAll();
+  }, [refreshAll]);
+
+  async function handleMerge(candidate: MatchCandidateDTO) {
+    if (!mergeState) return;
+    setMerging(true);
+    try {
+      await api.mergeContacts(mergeState.newContactId, candidate.contactId, user?.name ?? "System");
+      toast.success(
+        `Contact digabungkan dengan ${candidate.contact?.fullName ?? "kandidat terpilih"}`
+      );
+      setMergeState(null);
+      void refreshAll();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menggabungkan contact");
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  // Jumlah contact per perusahaan (dari master contact, akurat meski API company hanya include 5).
+  const contactCountByCompany = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of allContacts) {
+      if (c.companyId) m.set(c.companyId, (m.get(c.companyId) ?? 0) + 1);
+    }
+    return m;
+  }, [allContacts]);
+
+  const companySheetContacts = useMemo(() => {
+    const company = companySheet.company;
+    if (!company) return [] as ContactRecord[];
+    const owned = allContacts.filter((c) => c.companyId === company.id);
+    return owned.length > 0 ? owned : ((company.contacts ?? []) as ContactRecord[]);
+  }, [companySheet.company, allContacts]);
+
+  const contactEmpty = (
+    <EmptyState
+      icon={Users}
+      title={contactQuery ? "Tidak ada hasil" : "Belum ada contact"}
+      description={
+        contactQuery
+          ? `Tidak ada contact yang cocok dengan pencarian "${contactQuery}". Coba kata kunci lain.`
+          : "Mulai bangun basis data calon klien lintas brand dengan menambahkan contact baru."
+      }
+      action={
+        contactQuery ? (
+          <Button variant="outline" onClick={() => setContactInput("")} aria-label="Reset pencarian contact">
+            <X className="size-4" /> Reset pencarian
+          </Button>
+        ) : (
+          <Button className="bg-zinc-900 text-white hover:bg-zinc-800" onClick={() => setCreateContactOpen(true)}>
+            <Plus className="size-4" /> Contact Baru
+          </Button>
+        )
+      }
+    />
+  );
+
+  const companyEmpty = (
+    <EmptyState
+      icon={Building2}
+      title={companyQuery ? "Tidak ada hasil" : "Belum ada perusahaan"}
+      description={
+        companyQuery
+          ? `Tidak ada perusahaan yang cocok dengan pencarian "${companyQuery}". Coba kata kunci lain.`
+          : "Daftarkan perusahaan calon klien agar contact dapat terhubung ke akun yang tepat."
+      }
+      action={
+        companyQuery ? (
+          <Button variant="outline" onClick={() => setCompanyInput("")} aria-label="Reset pencarian perusahaan">
+            <X className="size-4" /> Reset pencarian
+          </Button>
+        ) : (
+          <Button className="bg-zinc-900 text-white hover:bg-zinc-800" onClick={() => setCreateCompanyOpen(true)}>
+            <Plus className="size-4" /> Perusahaan Baru
+          </Button>
+        )
+      }
+    />
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-zinc-900 sm:text-2xl">Contacts &amp; Companies</h1>
+          <p className="mt-0.5 text-sm text-zinc-500">Identitas calon klien global — terhubung ke seluruh brand</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400"
+              aria-hidden="true"
+            />
+            <Input
+              value={tab === "contacts" ? contactInput : companyInput}
+              onChange={(e) => (tab === "contacts" ? setContactInput(e.target.value) : setCompanyInput(e.target.value))}
+              placeholder={tab === "contacts" ? "Cari nama, email, WA, jabatan…" : "Cari nama perusahaan…"}
+              aria-label={tab === "contacts" ? "Cari contact" : "Cari perusahaan"}
+              className="w-full pl-9 sm:w-72"
+            />
+          </div>
+          {tab === "contacts" ? (
+            <Button
+              onClick={() => setCreateContactOpen(true)}
+              className="bg-zinc-900 text-white hover:bg-zinc-800"
+              aria-label="Tambah contact baru"
+            >
+              <Plus className="size-4" /> Contact Baru
+            </Button>
+          ) : (
+            <Button
+              onClick={() => setCreateCompanyOpen(true)}
+              className="bg-zinc-900 text-white hover:bg-zinc-800"
+              aria-label="Tambah perusahaan baru"
+            >
+              <Plus className="size-4" /> Perusahaan Baru
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
+        <TabsList>
+          <TabsTrigger value="contacts" className="gap-1.5">
+            Kontak
+            <Badge variant="secondary" className="ml-0.5 bg-zinc-200/70 text-zinc-700">
+              {contacts.length}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="companies" className="gap-1.5">
+            Perusahaan
+            <Badge variant="secondary" className="ml-0.5 bg-zinc-200/70 text-zinc-700">
+              {companies.length}
+            </Badge>
+          </TabsTrigger>
+        </TabsList>
+
+        {/* TAB KONTAK */}
+        <TabsContent value="contacts" className="mt-4">
+          {errorContacts ? (
+            <ErrorState message={errorContacts} onRetry={retryAll} />
+          ) : loadingContacts && contacts.length === 0 ? (
+            <ContactSkeletonGrid />
+          ) : contacts.length === 0 ? (
+            contactEmpty
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {contacts.map((c) => (
+                <ContactCard key={c.id} contact={c} onOpen={() => openContact(c)} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* TAB PERUSAHAAN */}
+        <TabsContent value="companies" className="mt-4">
+          {errorCompanies ? (
+            <ErrorState message={errorCompanies} onRetry={retryAll} />
+          ) : loadingCompanies && companies.length === 0 ? (
+            <CompanyTableSkeleton />
+          ) : companies.length === 0 ? (
+            companyEmpty
+          ) : (
+            <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-zinc-50 hover:bg-zinc-50">
+                      <TableHead>Perusahaan</TableHead>
+                      <TableHead>Industri</TableHead>
+                      <TableHead>Lokasi</TableHead>
+                      <TableHead>Ukuran</TableHead>
+                      <TableHead className="text-center">Kontak</TableHead>
+                      <TableHead className="text-center">Opportunities</TableHead>
+                      <TableHead className="text-right">Lifetime Value</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {companies.map((c) => (
+                      <TableRow
+                        key={c.id}
+                        tabIndex={0}
+                        aria-label={`Buka detail ${c.name}`}
+                        onClick={() => openCompany(c)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openCompany(c);
+                          }
+                        }}
+                        className="cursor-pointer"
+                      >
+                        <TableCell>
+                          <span className="block font-semibold text-zinc-900">{c.name}</span>
+                          {c.website && <span className="block text-xs text-zinc-500">{c.website}</span>}
+                        </TableCell>
+                        <TableCell className="text-zinc-600">{c.industry || "-"}</TableCell>
+                        <TableCell className="text-zinc-600">{locationText(c.city, c.country)}</TableCell>
+                        <TableCell>
+                          <SizeBadge size={c.size} />
+                        </TableCell>
+                        <TableCell className="text-center text-zinc-600">
+                          {contactCountByCompany.get(c.id) ?? 0}
+                        </TableCell>
+                        <TableCell className="text-center text-zinc-600">{c._count?.opportunities ?? 0}</TableCell>
+                        <TableCell className="text-right font-medium text-zinc-900">
+                          {formatCurrency(c.lifetimeValue, c.defaultCurrency)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* Sheets & dialogs */}
+      <ContactDetailSheet
+        contact={contactSheet.contact}
+        open={contactSheet.open}
+        onOpenChange={(open) => setContactSheet((s) => ({ ...s, open }))}
+        companies={allCompanies}
+        onSaved={handleContactSaved}
+        onDeleted={handleContactDeleted}
+        onOpenCompany={openCompany}
+      />
+
+      <CompanyDetailSheet
+        company={companySheet.company}
+        open={companySheet.open}
+        onOpenChange={(open) => setCompanySheet((s) => ({ ...s, open }))}
+        contacts={companySheetContacts}
+        onOpenContact={openContactFromCompany}
+      />
+
+      <CreateContactDialog
+        open={createContactOpen}
+        onOpenChange={setCreateContactOpen}
+        onCreated={handleContactCreated}
+      />
+
+      <CreateCompanyDialog
+        open={createCompanyOpen}
+        onOpenChange={setCreateCompanyOpen}
+        onCreated={handleCompanyCreated}
+      />
+
+      {/* Dialog merge pasca-create */}
+      <Dialog open={!!mergeState} onOpenChange={(o) => !o && setMergeState(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <GitMerge className="size-5 text-zinc-900" /> Mungkin duplikat?
+            </DialogTitle>
+            <DialogDescription>
+              Contact baru berhasil dibuat, namun sistem menemukan data existing yang mirip. Gabungkan agar data tidak
+              terpecah, atau biarkan terpisah.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+            {mergeState?.candidates.map((c) => (
+              <li
+                key={c.contactId}
+                className="flex items-start justify-between gap-3 rounded-xl border bg-white p-3 shadow-sm"
+              >
+                <div className="min-w-0">
+                  <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-zinc-900">
+                    <span className="truncate">{c.contact?.fullName ?? "Contact tanpa nama"}</span>
+                    <Badge className={cn("border-transparent", scoreBadgeClass(c.score))}>{c.score}% mirip</Badge>
+                  </p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {c.contact?.email || "-"}
+                    {c.contact?.company?.name ? ` · ${c.contact.company.name}` : ""}
+                  </p>
+                  {c.reasons.length > 0 && (
+                    <p className="mt-0.5 text-[11px] text-zinc-400">Alasan: {c.reasons.join(" · ")}</p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  className="shrink-0 bg-zinc-900 text-white hover:bg-zinc-800"
+                  disabled={merging}
+                  onClick={() => void handleMerge(c)}
+                >
+                  {merging ? <Loader2 className="size-3.5 animate-spin" /> : <GitMerge className="size-3.5" />} Gabungkan
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={merging}
+              onClick={() => {
+                setMergeState(null);
+                void refreshAll();
+              }}
+            >
+              Tetap terpisah
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

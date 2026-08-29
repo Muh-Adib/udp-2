@@ -1,0 +1,123 @@
+// ============ Pipeline stages (standar perusahaan) ============
+
+export const PIPELINE_STAGES = [
+  { key: "new", label: "New", meaning: "Lead baru masuk", required: "Assign marketing dan SLA", color: "#78716c" },
+  { key: "contact_attempted", label: "Contact Attempted", meaning: "Sudah dicoba dihubungi", required: "Catat kanal dan hasil", color: "#a8a29e" },
+  { key: "connected", label: "Connected", meaning: "Sudah mendapat respons", required: "Verifikasi kebutuhan", color: "#d97706" },
+  { key: "qualified", label: "Qualified", meaning: "Layak diproses", required: "Budget, authority, need, timeline", color: "#ea580c" },
+  { key: "discovery", label: "Discovery", meaning: "Penggalian brief", required: "Meeting dan brief", color: "#f59e0b" },
+  { key: "estimation", label: "Estimation", meaning: "Penyusunan scope dan biaya", required: "Kolaborasi finance/produksi", requiredKey: "finance", color: "#0d9488" },
+  { key: "proposal_sent", label: "Proposal Sent", meaning: "Proposal dikirim", required: "Versi dan masa berlaku", color: "#8b5cf6" },
+  { key: "negotiation", label: "Negotiation", meaning: "Negosiasi berjalan", required: "Revisi scope/harga", color: "#a855f7" },
+  { key: "verbal_agreement", label: "Verbal Agreement", meaning: "Persetujuan awal", required: "Kontrak/PO/DP", color: "#16a34a" },
+  { key: "won", label: "Won", meaning: "Deal berhasil", required: "Buat project", color: "#15803d" },
+  { key: "lost", label: "Lost", meaning: "Tidak berhasil", required: "Alasan wajib", color: "#dc2626" },
+  { key: "nurture", label: "Nurture", meaning: "Belum siap membeli", required: "Jadwal penawaran ulang", color: "#64748b" },
+] as const;
+
+export type StageKey = (typeof PIPELINE_STAGES)[number]["key"];
+
+export const OPEN_STAGES: StageKey[] = [
+  "new", "contact_attempted", "connected", "qualified", "discovery",
+  "estimation", "proposal_sent", "negotiation", "verbal_agreement",
+];
+
+export function stageLabel(key: string): string {
+  return PIPELINE_STAGES.find((s) => s.key === key)?.label ?? key;
+}
+
+export function stageColor(key: string): string {
+  return PIPELINE_STAGES.find((s) => s.key === key)?.color ?? "#78716c";
+}
+
+// ============ Lost reasons ============
+
+export const LOST_REASONS = [
+  "Harga terlalu tinggi",
+  "Tidak ada budget",
+  "Memilih kompetitor",
+  "Timeline tidak sesuai",
+  "Kebutuhan berubah",
+  "Tidak mendapat respons",
+  "Scope tidak cocok",
+  "Ditunda internal klien",
+  "Kontak tidak valid",
+  "Duplikat",
+  "Tidak sesuai target pasar",
+  "Alasan lainnya",
+] as const;
+
+export const NURTURE_SEGMENTS = [
+  { key: "reoffer_30", label: "Re-offer 30 hari" },
+  { key: "reoffer_90", label: "Re-offer 90 hari" },
+  { key: "budget_season", label: "Re-offer periode anggaran" },
+  { key: "cross_sell", label: "Cross-sell brand lain" },
+  { key: "smaller_package", label: "Paket lebih kecil" },
+  { key: "alternative_service", label: "Layanan alternatif" },
+] as const;
+
+// ============ Channels ============
+
+export const CHANNELS = [
+  { key: "whatsapp", label: "WhatsApp", icon: "MessageCircle" },
+  { key: "email", label: "Email", icon: "Mail" },
+  { key: "instagram", label: "Instagram", icon: "Instagram" },
+  { key: "website", label: "Website", icon: "Globe" },
+  { key: "phone", label: "Telepon", icon: "Phone" },
+  { key: "meeting", label: "Meeting", icon: "Video" },
+  { key: "portal", label: "Client Portal", icon: "LayoutDashboard" },
+] as const;
+
+export const LEAD_SOURCES = [
+  "instagram", "whatsapp", "email", "website", "referral", "event", "cold_outreach", "linkedin",
+] as const;
+
+// ============ Roles ============
+
+export const ROLES = [
+  { key: "super_admin", label: "Super Admin", description: "Brand, user, role, permission, pipeline, template, integrasi, master data, audit log" },
+  { key: "director", label: "Direktur", description: "Semua dashboard, revenue forecast, pipeline, workload, approval" },
+  { key: "marketing", label: "Marketing", description: "Lead inbox, contact, opportunity, komunikasi, follow-up, proposal" },
+  { key: "finance", label: "Keuangan", description: "Estimasi, budget, quotation, pajak, invoice, pembayaran, profitability" },
+  { key: "production", label: "Produksi", description: "Brief, scope, resource planning, timeline, milestone, task, deliverable" },
+  { key: "client", label: "Client", description: "Project, milestone, file, approval, invoice miliknya sendiri" },
+] as const;
+
+export type RoleKey = (typeof ROLES)[number]["key"];
+
+// ============ Brand service catalogs ============
+
+export const BRAND_SERVICES: Record<string, string[]> = {
+  unimasi: ["Animasi Company Profile", "Animasi Pembelajaran", "Video Infografis", "Animasi Program/Produk", "Video Sosialisasi", "Video Marketing"],
+  segia_tech: ["Website Company Profile", "Website E-Commerce", "SEO Optimization", "UI/UX Design", "Produksi Konten Digital", "Web Application"],
+  erfo_multimedia: ["Dokumentasi Foto/Video", "Shooting Iklan", "Live Streaming", "Drone Videography", "Video AI", "Video 360"],
+  unicam_studio: ["Corporate Video", "Animasi 2D/3D", "AI Video Production", "AR/VR Experience", "Virtual Tour", "Projection Mapping", "Immersive Experience"],
+};
+
+export const SERVICE_CATEGORIES = [
+  "animation", "website", "video", "immersive", "digital_marketing",
+] as const;
+
+export const PRIORITIES = ["low", "medium", "high", "urgent"] as const;
+
+export const TEMPERATURES = [
+  { key: "hot", label: "Hot", color: "#dc2626" },
+  { key: "warm", label: "Warm", color: "#f59e0b" },
+  { key: "cold", label: "Cold", color: "#0891b2" },
+] as const;
+
+export const PROJECT_WORKFLOWS: Record<string, string[]> = {
+  website: ["Discovery", "Sitemap & Wireframe", "UI/UX Design", "Development", "QA & Testing", "Launch"],
+  video: ["Pre-Production", "Shooting", "Editing", "Revision", "Final Delivery"],
+  animation: ["Script", "Storyboard", "Asset Production", "Animation", "Sound Design", "Revision", "Final Render"],
+  immersive: ["Survey Lokasi", "Technical Plan", "Production", "Setup & Install", "Event / Go-Live", "Archive"],
+};
+
+export function workflowFor(category?: string | null): string[] {
+  if (!category) return PROJECT_WORKFLOWS.video;
+  const c = category.toLowerCase();
+  if (c.includes("website") || c.includes("digital")) return PROJECT_WORKFLOWS.website;
+  if (c.includes("anim")) return PROJECT_WORKFLOWS.animation;
+  if (c.includes("immersive") || c.includes("tour") || c.includes("projection") || c.includes("ar") || c.includes("vr")) return PROJECT_WORKFLOWS.immersive;
+  return PROJECT_WORKFLOWS.video;
+}
