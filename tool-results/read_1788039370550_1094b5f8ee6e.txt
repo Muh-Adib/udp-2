@@ -1,0 +1,982 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     4→import {
+     5→  DndContext,
+     6→  PointerSensor,
+     7→  useDraggable,
+     8→  useDroppable,
+     9→  useSensor,
+    10→  useSensors,
+    11→  type DragEndEvent,
+    12→} from "@dnd-kit/core";
+    13→import { CSS } from "@dnd-kit/utilities";
+    14→import { toast } from "sonner";
+    15→import {
+    16→  ArrowDown,
+    17→  ArrowDownWideNarrow,
+    18→  ArrowUp,
+    19→  ArrowUpDown,
+    20→  Download,
+    21→  Flame,
+    22→  Inbox,
+    23→  KanbanSquare,
+    24→  Search,
+    25→  Table2,
+    26→} from "lucide-react";
+    27→import { Badge } from "@/components/ui/badge";
+    28→import { Button } from "@/components/ui/button";
+    29→import {
+    30→  Dialog,
+    31→  DialogContent,
+    32→  DialogDescription,
+    33→  DialogFooter,
+    34→  DialogHeader,
+    35→  DialogTitle,
+    36→} from "@/components/ui/dialog";
+    37→import { Input } from "@/components/ui/input";
+    38→import {
+    39→  Select,
+    40→  SelectContent,
+    41→  SelectItem,
+    42→  SelectTrigger,
+    43→  SelectValue,
+    44→} from "@/components/ui/select";
+    45→import { Skeleton } from "@/components/ui/skeleton";
+    46→import {
+    47→  Table,
+    48→  TableBody,
+    49→  TableCell,
+    50→  TableHead,
+    51→  TableHeader,
+    52→  TableRow,
+    53→} from "@/components/ui/table";
+    54→import { Textarea } from "@/components/ui/textarea";
+    55→import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+    56→import OpportunityDetail from "@/components/crm/opportunity-detail";
+    57→import { api } from "@/lib/crm/api-client";
+    58→import { LOST_REASONS, OPEN_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+    59→import { scoreTier } from "@/lib/crm/scoring";
+    60→import { useCrmStore } from "@/lib/crm/store";
+    61→import type { OpportunityDTO } from "@/lib/crm/types";
+    62→import { formatCurrency, formatDate, initials, timeAgo } from "@/lib/crm/utils";
+    63→import { cn } from "@/lib/utils";
+    64→
+    65→// ---------- Konstanta tampilan ----------
+    66→
+    67→const KANBAN_KEYS: string[] = [...OPEN_STAGES, "won", "lost", "nurture"];
+    68→const TERMINAL_STAGES = ["won", "lost", "nurture"];
+    69→const UNASSIGNED = "__unassigned";
+    70→
+    71→type ViewMode = "kanban" | "table";
+    72→
+    73→// ---------- Ekspor CSV opportunity (Task 13): BOM + CRLF + separator titik-koma ----------
+    74→
+    75→const OPP_CSV_HEADERS = [
+    76→  "judul", "brand", "perusahaan", "kontak", "kategori_layanan", "layanan",
+    77→  "tahap", "temperatur", "prioritas", "skor", "nilai_estimasi", "mata_uang",
+    78→  "probabilitas_pct", "owner", "target_close", "aksi_berikutnya", "dibuat",
+    79→] as const;
+    80→
+    81→function escapeCsvField(value: string): string {
+    82→  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+    83→  return value;
+    84→}
+    85→
+    86→function buildOpportunitiesCsv(opps: OpportunityDTO[]): string {
+    87→  const lines: string[] = [OPP_CSV_HEADERS.join(";")];
+    88→  for (const o of opps) {
+    89→    const fields: string[] = [
+    90→      o.title,
+    91→      o.brand?.name ?? "",
+    92→      o.company?.name ?? "",
+    93→      o.contact?.fullName ?? "",
+    94→      o.serviceCategory ?? "",
+    95→      o.serviceName ?? "",
+    96→      stageLabel(o.stage),
+    97→      o.temperature,
+    98→      o.priority,
+    99→      String(o.score ?? ""),
+   100→      o.estimatedValue != null ? String(o.estimatedValue) : "",
+   101→      o.currency,
+   102→      String(o.probability),
+   103→      o.ownerName ?? "",
+   104→      o.expectedCloseDate ? formatDate(o.expectedCloseDate) : "",
+   105→      o.nextAction ?? "",
+   106→      formatDate(o.createdAt),
+   107→    ];
+   108→    lines.push(fields.map(escapeCsvField).join(";"));
+   109→  }
+   110→  return "\uFEFF" + lines.join("\r\n");
+   111→}
+   112→type SortDir = "asc" | "desc" | null;
+   113→
+   114→interface LostExtra {
+   115→  lostReason: string;
+   116→  lostNotes?: string;
+   117→  competitor?: string;
+   118→}
+   119→
+   120→// ---------- Helper ----------
+   121→
+   122→function startOfToday(): number {
+   123→  const d = new Date();
+   124→  d.setHours(0, 0, 0, 0);
+   125→  return d.getTime();
+   126→}
+   127→
+   128→function isOverdue(opp: OpportunityDTO): boolean {
+   129→  if (!opp.nextActionDate || TERMINAL_STAGES.includes(opp.stage)) return false;
+   130→  return new Date(opp.nextActionDate).getTime() < startOfToday();
+   131→}
+   132→
+   133→function priorityChip(priority: string): string {
+   134→  if (priority === "urgent") return "bg-red-100 text-red-700";
+   135→  if (priority === "high") return "bg-amber-100 text-amber-700";
+   136→  return "bg-zinc-100 text-zinc-600";
+   137→}
+   138→
+   139→function temperatureDot(temperature: string): string {
+   140→  if (temperature === "hot") return "bg-red-600";
+   141→  if (temperature === "warm") return "bg-amber-500";
+   142→  return "bg-cyan-600";
+   143→}
+   144→
+   145→function companyOf(opp: OpportunityDTO): string {
+   146→  return opp.company?.name ?? opp.contact?.company?.name ?? "Tanpa perusahaan";
+   147→}
+   148→
+   149→function scoreOf(opp: OpportunityDTO): number {
+   150→  return opp.score ?? 0;
+   151→}
+   152→
+   153→function isScoreVisible(opp: OpportunityDTO): boolean {
+   154→  return opp.stage !== "won" && opp.stage !== "lost";
+   155→}
+   156→
+   157→/** Chip skor kecil untuk kartu kanban (ikon Flame + angka, warna tier). */
+   158→function ScoreChip({ opp }: { opp: OpportunityDTO }) {
+   159→  const score = scoreOf(opp);
+   160→  const tier = scoreTier(score);
+   161→  const tip = (opp.scoreReasons ?? []).slice(0, 3).join(" · ");
+   162→  return (
+   163→    <span
+   164→      className={cn(
+   165→        "inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+   166→        tier.cls
+   167→      )}
+   168→      title={tip || `Skor lead ${score}`}
+   169→      aria-label={`Skor lead ${score}: ${tier.label}`}
+   170→    >
+   171→      <Flame className="size-3" aria-hidden="true" />
+   172→      {score}
+   173→    </span>
+   174→  );
+   175→}
+   176→
+   177→/** Chip tier + angka skor untuk tabel (tabular-nums). */
+   178→function ScoreTierCell({ opp }: { opp: OpportunityDTO }) {
+   179→  const score = scoreOf(opp);
+   180→  const tier = scoreTier(score);
+   181→  const tip = (opp.scoreReasons ?? []).slice(0, 3).join(" · ");
+   182→  return (
+   183→    <span
+   184→      className={cn(
+   185→        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums",
+   186→        tier.cls
+   187→      )}
+   188→      title={tip || `Skor lead ${score}`}
+   189→      aria-label={`Skor lead ${score}: ${tier.label}`}
+   190→    >
+   191→      <Flame className="size-3" aria-hidden="true" />
+   192→      {score} · {tier.label}
+   193→    </span>
+   194→  );
+   195→}
+   196→
+   197→// ---------- Kartu opportunity (draggable) ----------
+   198→
+   199→function OppCard({ opp, onOpen }: { opp: OpportunityDTO; onOpen: (id: string) => void }) {
+   200→  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: opp.id });
+   201→  const overdue = isOverdue(opp);
+   202→
+   203→  return (
+   204→    <div
+   205→      ref={setNodeRef}
+   206→      {...attributes}
+   207→      {...listeners}
+   208→      role="button"
+   209→      tabIndex={0}
+   210→      aria-label={`Buka detail ${opp.title}`}
+   211→      onClick={() => onOpen(opp.id)}
+   212→      onKeyDown={(e) => {
+   213→        if (e.key === "Enter" || e.key === " ") {
+   214→          e.preventDefault();
+   215→          onOpen(opp.id);
+   216→        }
+   217→      }}
+   218→      style={{ transform: CSS.Translate.toString(transform) }}
+   219→      className={cn(
+   220→        "cursor-grab touch-none rounded-xl border bg-white p-3 shadow-sm outline-none transition-colors hover:border-zinc-300 focus-visible:ring-2 focus-visible:ring-zinc-900/20 active:cursor-grabbing",
+   221→        isDragging && "z-10 rotate-1 opacity-70 ring-2 ring-zinc-900/20"
+   222→      )}
+   223→    >
+   224→      <div className="flex items-start gap-2">
+   225→        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{companyOf(opp)}</p>
+   226→        {isScoreVisible(opp) ? <ScoreChip opp={opp} /> : null}
+   227→        <span
+   228→          className={cn(
+   229→            "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+   230→            priorityChip(opp.priority)
+   231→          )}
+   232→        >
+   233→          {opp.priority}
+   234→        </span>
+   235→      </div>
+   236→      <p className="mt-0.5 truncate text-xs text-zinc-500">{opp.title}</p>
+   237→
+   238→      <div className="mt-2 flex flex-wrap items-center gap-1">
+   239→        {opp.serviceName ? (
+   240→          <span className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-600">
+   241→            {opp.serviceName}
+   242→          </span>
+   243→        ) : null}
+   244→        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-700">
+   245→          {formatCurrency(opp.estimatedValue, opp.currency)} · {opp.probability}%
+   246→        </span>
+   247→        {opp.stage === "lost" && opp.lostReason ? (
+   248→          <span className="max-w-full truncate rounded bg-red-50 px-1.5 py-0.5 text-[11px] text-red-600">
+   249→            {opp.lostReason}
+   250→          </span>
+   251→        ) : null}
+   252→      </div>
+   253→
+   254→      <div className="mt-2.5 flex items-center gap-1.5">
+   255→        <span
+   256→          className={cn("size-1.5 shrink-0 rounded-full", temperatureDot(opp.temperature))}
+   257→          title={`Temperatur: ${opp.temperature}`}
+   258→        />
+   259→        <span
+   260→          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-semibold text-zinc-700"
+   261→          title={`Owner: ${opp.ownerName ?? "Belum di-assign"}`}
+   262→        >
+   263→          {initials(opp.ownerName)}
+   264→        </span>
+   265→        {overdue ? (
+   266→          <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+   267→            Overdue
+   268→          </span>
+   269→        ) : null}
+   270→        <span className="ml-auto shrink-0 text-[10px] text-zinc-400">{timeAgo(opp.updatedAt)}</span>
+   271→      </div>
+   272→    </div>
+   273→  );
+   274→}
+   275→
+   276→// ---------- Kolom stage (droppable) ----------
+   277→
+   278→function StageColumn({
+   279→  stageKey,
+   280→  opportunities,
+   281→  onOpen,
+   282→}: {
+   283→  stageKey: string;
+   284→  opportunities: OpportunityDTO[];
+   285→  onOpen: (id: string) => void;
+   286→}) {
+   287→  const { setNodeRef, isOver } = useDroppable({ id: stageKey });
+   288→  const color = stageColor(stageKey);
+   289→  const total = opportunities.reduce((sum, o) => sum + (o.estimatedValue ?? 0), 0);
+   290→
+   291→  return (
+   292→    <div
+   293→      ref={setNodeRef}
+   294→      className={cn(
+   295→        "flex w-[280px] shrink-0 flex-col rounded-xl border bg-zinc-50 transition-colors",
+   296→        isOver && "bg-zinc-200/50"
+   297→      )}
+   298→    >
+   299→      <div className="flex items-center gap-2 border-b px-3 py-2.5">
+   300→        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+   301→        <h3 className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-zinc-600">
+   302→          {stageLabel(stageKey)}
+   303→        </h3>
+   304→        <Badge variant="secondary" className="px-1.5 text-[11px]">
+   305→          {opportunities.length}
+   306→        </Badge>
+   307→      </div>
+   308→      <p className="px-3 pt-1.5 text-[11px] text-zinc-400">{formatCurrency(total)}</p>
+   309→      <div className="crm-scroll flex max-h-[600px] flex-col gap-2 overflow-y-auto p-2">
+   310→        {opportunities.length === 0 ? (
+   311→          <p className="rounded-lg border border-dashed p-4 text-center text-[11px] text-zinc-400">
+   312→            Kosong
+   313→          </p>
+   314→        ) : (
+   315→          opportunities.map((opp) => <OppCard key={opp.id} opp={opp} onOpen={onOpen} />)
+   316→        )}
+   317→      </div>
+   318→    </div>
+   319→  );
+   320→}
+   321→
+   322→// ---------- Tabel opportunity ----------
+   323→
+   324→function OpportunityTable({
+   325→  rows,
+   326→  sortDir,
+   327→  onToggleSort,
+   328→  scoreSortDir,
+   329→  onToggleScoreSort,
+   330→  onOpen,
+   331→}: {
+   332→  rows: OpportunityDTO[];
+   333→  sortDir: SortDir;
+   334→  onToggleSort: () => void;
+   335→  scoreSortDir: SortDir;
+   336→  onToggleScoreSort: () => void;
+   337→  onOpen: (id: string) => void;
+   338→}) {
+   339→  const color = stageColor;
+   340→  return (
+   341→    <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+   342→      <Table>
+   343→        <TableHeader>
+   344→          <TableRow className="hover:bg-transparent">
+   345→            <TableHead className="min-w-[220px]">Judul / Perusahaan</TableHead>
+   346→            <TableHead>Brand</TableHead>
+   347→            <TableHead>Layanan</TableHead>
+   348→            <TableHead>Stage</TableHead>
+   349→            <TableHead>
+   350→              <Button
+   351→                variant="ghost"
+   352→                size="sm"
+   353→                className="-ml-2 h-7 font-medium"
+   354→                onClick={onToggleScoreSort}
+   355→                aria-label="Urutkan berdasarkan skor"
+   356→              >
+   357→                Skor
+   358→                {scoreSortDir === "asc" ? (
+   359→                  <ArrowUp className="size-3.5" aria-hidden="true" />
+   360→                ) : scoreSortDir === "desc" ? (
+   361→                  <ArrowDown className="size-3.5" aria-hidden="true" />
+   362→                ) : (
+   363→                  <ArrowUpDown className="size-3.5" aria-hidden="true" />
+   364→                )}
+   365→              </Button>
+   366→            </TableHead>
+   367→            <TableHead>
+   368→              <Button
+   369→                variant="ghost"
+   370→                size="sm"
+   371→                className="-ml-2 h-7 font-medium"
+   372→                onClick={onToggleSort}
+   373→                aria-label="Urutkan berdasarkan nilai"
+   374→              >
+   375→                Nilai
+   376→                {sortDir === "asc" ? (
+   377→                  <ArrowUp className="size-3.5" aria-hidden="true" />
+   378→                ) : sortDir === "desc" ? (
+   379→                  <ArrowDown className="size-3.5" aria-hidden="true" />
+   380→                ) : (
+   381→                  <ArrowUpDown className="size-3.5" aria-hidden="true" />
+   382→                )}
+   383→              </Button>
+   384→            </TableHead>
+   385→            <TableHead>Prob.</TableHead>
+   386→            <TableHead>Owner</TableHead>
+   387→            <TableHead>Expected Close</TableHead>
+   388→            <TableHead className="min-w-[180px]">Next Action</TableHead>
+   389→          </TableRow>
+   390→        </TableHeader>
+   391→        <TableBody>
+   392→          {rows.map((opp) => {
+   393→            const brandColor = opp.brand?.color ?? "#a1a1aa";
+   394→            const closeOverdue =
+   395→              !!opp.expectedCloseDate &&
+   396→              !TERMINAL_STAGES.includes(opp.stage) &&
+   397→              new Date(opp.expectedCloseDate).getTime() < startOfToday();
+   398→            return (
+   399→              <TableRow
+   400→                key={opp.id}
+   401→                className="cursor-pointer"
+   402→                onClick={() => onOpen(opp.id)}
+   403→              >
+   404→                <TableCell>
+   405→                  <button
+   406→                    type="button"
+   407→                    className="max-w-[260px] text-left"
+   408→                    onClick={(e) => {
+   409→                      e.stopPropagation();
+   410→                      onOpen(opp.id);
+   411→                    }}
+   412→                    aria-label={`Buka detail ${opp.title}`}
+   413→                  >
+   414→                    <span className="block truncate font-medium text-zinc-900 hover:underline">{opp.title}</span>
+   415→                    <span className="block truncate text-xs text-zinc-500">{companyOf(opp)}</span>
+   416→                  </button>
+   417→                </TableCell>
+   418→                <TableCell>
+   419→                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-sm text-zinc-700">
+   420→                    <span className="size-2 rounded-full" style={{ backgroundColor: brandColor }} />
+   421→                    {opp.brand?.name ?? "-"}
+   422→                  </span>
+   423→                </TableCell>
+   424→                <TableCell className="max-w-[160px] truncate text-sm text-zinc-600">
+   425→                  {opp.serviceName ?? "-"}
+   426→                </TableCell>
+   427→                <TableCell>
+   428→                  <span
+   429→                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium"
+   430→                    style={{ backgroundColor: `${color(opp.stage)}1f`, color: color(opp.stage) }}
+   431→                  >
+   432→                    <span className="size-1.5 rounded-full" style={{ backgroundColor: color(opp.stage) }} />
+   433→                    {stageLabel(opp.stage)}
+   434→                  </span>
+   435→                </TableCell>
+   436→                <TableCell>
+   437→                  {isScoreVisible(opp) ? (
+   438→                    <ScoreTierCell opp={opp} />
+   439→                  ) : (
+   440→                    <span className="text-xs text-zinc-400">-</span>
+   441→                  )}
+   442→                </TableCell>
+   443→                <TableCell className="whitespace-nowrap text-sm font-medium text-zinc-800">
+   444→                  {formatCurrency(opp.estimatedValue, opp.currency)}
+   445→                </TableCell>
+   446→                <TableCell className="text-sm text-zinc-600">{opp.probability}%</TableCell>
+   447→                <TableCell>
+   448→                  {opp.ownerName ? (
+   449→                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-sm text-zinc-700">
+   450→                      <span className="flex size-5 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-semibold text-zinc-700">
+   451→                        {initials(opp.ownerName)}
+   452→                      </span>
+   453→                      {opp.ownerName}
+   454→                    </span>
+   455→                  ) : (
+   456→                    <span className="text-xs italic text-zinc-400">Belum di-assign</span>
+   457→                  )}
+   458→                </TableCell>
+   459→                <TableCell
+   460→                  className={cn(
+   461→                    "whitespace-nowrap text-sm",
+   462→                    closeOverdue ? "font-medium text-red-600" : "text-zinc-600"
+   463→                  )}
+   464→                >
+   465→                  {formatDate(opp.expectedCloseDate)}
+   466→                </TableCell>
+   467→                <TableCell>
+   468→                  {opp.nextAction ? (
+   469→                    <div className="max-w-[200px]">
+   470→                      <p className="truncate text-sm text-zinc-700">{opp.nextAction}</p>
+   471→                      {opp.nextActionDate ? (
+   472→                        <p className={cn("text-xs", isOverdue(opp) ? "text-rose-600" : "text-zinc-400")}>
+   473→                          {formatDate(opp.nextActionDate)}
+   474→                        </p>
+   475→                      ) : null}
+   476→                    </div>
+   477→                  ) : (
+   478→                    <span className="text-xs text-zinc-400">-</span>
+   479→                  )}
+   480→                </TableCell>
+   481→              </TableRow>
+   482→            );
+   483→          })}
+   484→        </TableBody>
+   485→      </Table>
+   486→    </div>
+   487→  );
+   488→}
+   489→
+   490→// ---------- Dialog alasan lost ----------
+   491→
+   492→function LostReasonDialog({
+   493→  open,
+   494→  saving,
+   495→  onConfirm,
+   496→  onCancel,
+   497→}: {
+   498→  open: boolean;
+   499→  saving: boolean;
+   500→  onConfirm: (extra: LostExtra) => void;
+   501→  onCancel: () => void;
+   502→}) {
+   503→  const [lostReason, setLostReason] = useState("");
+   504→  const [lostNotes, setLostNotes] = useState("");
+   505→  const [competitor, setCompetitor] = useState("");
+   506→
+   507→  function resetAndClose() {
+   508→    setLostReason("");
+   509→    setLostNotes("");
+   510→    setCompetitor("");
+   511→    onCancel();
+   512→  }
+   513→
+   514→  return (
+   515→    <Dialog open={open} onOpenChange={(o) => !o && resetAndClose()}>
+   516→      <DialogContent className="sm:max-w-md">
+   517→        <DialogHeader>
+   518→          <DialogTitle>Pindah ke Lost</DialogTitle>
+   519→          <DialogDescription>
+   520→            Pilih alasan mengapa opportunity ini tidak berhasil. Alasan wajib diisi sebelum lanjut.
+   521→          </DialogDescription>
+   522→        </DialogHeader>
+   523→        <div className="space-y-3">
+   524→          <Select value={lostReason} onValueChange={setLostReason}>
+   525→            <SelectTrigger className="w-full" aria-label="Alasan lost">
+   526→              <SelectValue placeholder="Pilih alasan lost" />
+   527→            </SelectTrigger>
+   528→            <SelectContent>
+   529→              {LOST_REASONS.map((r) => (
+   530→                <SelectItem key={r} value={r}>
+   531→                  {r}
+   532→                </SelectItem>
+   533→              ))}
+   534→            </SelectContent>
+   535→          </Select>
+   536→          <Input
+   537→            value={competitor}
+   538→            onChange={(e) => setCompetitor(e.target.value)}
+   539→            placeholder="Nama kompetitor (opsional)"
+   540→            aria-label="Nama kompetitor"
+   541→          />
+   542→          <Textarea
+   543→            rows={3}
+   544→            value={lostNotes}
+   545→            onChange={(e) => setLostNotes(e.target.value)}
+   546→            placeholder="Catatan tambahan (opsional)"
+   547→            aria-label="Catatan lost"
+   548→          />
+   549→        </div>
+   550→        <DialogFooter>
+   551→          <Button variant="outline" onClick={resetAndClose}>
+   552→            Batal
+   553→          </Button>
+   554→          <Button
+   555→            className="bg-red-600 hover:bg-red-700"
+   556→            disabled={!lostReason || saving}
+   557→            onClick={() => {
+   558→              const extra: LostExtra = {
+   559→                lostReason,
+   560→                lostNotes: lostNotes.trim() || undefined,
+   561→                competitor: competitor.trim() || undefined,
+   562→              };
+   563→              setLostReason("");
+   564→              setLostNotes("");
+   565→              setCompetitor("");
+   566→              onConfirm(extra);
+   567→            }}
+   568→          >
+   569→            Tandai Lost
+   570→          </Button>
+   571→        </DialogFooter>
+   572→      </DialogContent>
+   573→    </Dialog>
+   574→  );
+   575→}
+   576→
+   577→// ---------- Modul utama ----------
+   578→
+   579→export default function PipelineModule() {
+   580→  const { user, brands, activeBrandFilter, setActiveBrandFilter } = useCrmStore();
+   581→
+   582→  const [opps, setOpps] = useState<OpportunityDTO[]>([]);
+   583→  const [loading, setLoading] = useState(true);
+   584→  const [qInput, setQInput] = useState("");
+   585→  const [q, setQ] = useState("");
+   586→  const [owner, setOwner] = useState<string>("all");
+   587→  const [view, setView] = useState<ViewMode>("kanban");
+   588→  const [tempFilter, setTempFilter] = useState<string>("all");
+   589→  const [sortDir, setSortDir] = useState<SortDir>(null);
+   590→  const [scoreSortDir, setScoreSortDir] = useState<SortDir>(null);
+   591→  const [sortByScore, setSortByScore] = useState(false);
+   592→  const [skorMin, setSkorMin] = useState<string>("all");
+   593→  const [selectedId, setSelectedId] = useState<string | null>(null);
+   594→  const [drawerOpen, setDrawerOpen] = useState(false);
+   595→  const [pendingLost, setPendingLost] = useState<OpportunityDTO | null>(null);
+   596→  const [savingStage, setSavingStage] = useState(false);
+   597→
+   598→  const oppsRef = useRef<OpportunityDTO[]>([]);
+   599→  const draggedRecentlyRef = useRef(false);
+   600→
+   601→  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+   602→
+   603→  // Debounce pencarian
+   604→  useEffect(() => {
+   605→    const t = setTimeout(() => setQ(qInput), 300);
+   606→    return () => clearTimeout(t);
+   607→  }, [qInput]);
+   608→
+   609→  const load = useCallback(
+   610→    async (opts?: { silent?: boolean }) => {
+   611→      if (!opts?.silent) setLoading(true);
+   612→      try {
+   613→        const res = await api.opportunities({
+   614→          brandId: activeBrandFilter !== "all" ? activeBrandFilter : undefined,
+   615→          q: q.trim() ? q.trim() : undefined,
+   616→        });
+   617→        oppsRef.current = res.opportunities;
+   618→        setOpps(res.opportunities);
+   619→      } catch (e) {
+   620→        toast.error(e instanceof Error ? e.message : "Gagal memuat opportunity");
+   621→      } finally {
+   622→        if (!opts?.silent) setLoading(false);
+   623→      }
+   624→    },
+   625→    [activeBrandFilter, q]
+   626→  );
+   627→
+   628→  useEffect(() => {
+   629→    void load();
+   630→  }, [load]);
+   631→
+   632→  const ownerOptions = useMemo(() => {
+   633→    const names = new Set<string>();
+   634→    for (const o of opps) {
+   635→      if (o.ownerName && o.ownerName.trim()) names.add(o.ownerName.trim());
+   636→    }
+   637→    return Array.from(names).sort((a, b) => a.localeCompare(b));
+   638→  }, [opps]);
+   639→
+   640→  const filtered = useMemo(() => {
+   641→    if (owner === "all") return opps;
+   642→    if (owner === UNASSIGNED) return opps.filter((o) => !o.ownerName || !o.ownerName.trim());
+   643→    return opps.filter((o) => o.ownerName === owner);
+   644→  }, [opps, owner]);
+   645→
+   646→  const tableRows = useMemo(() => {
+   647→    let base = tempFilter === "all" ? filtered : filtered.filter((o) => o.temperature === tempFilter);
+   648→    if (skorMin !== "all") {
+   649→      const min = Number(skorMin);
+   650→      base = base.filter((o) => scoreOf(o) >= min);
+   651→    }
+   652→    if (scoreSortDir) {
+   653→      base = [...base].sort((a, b) =>
+   654→        scoreSortDir === "asc" ? scoreOf(a) - scoreOf(b) : scoreOf(b) - scoreOf(a)
+   655→      );
+   656→    }
+   657→    if (!sortDir) return base;
+   658→    return [...base].sort((a, b) => {
+   659→      const av = a.estimatedValue ?? 0;
+   660→      const bv = b.estimatedValue ?? 0;
+   661→      return sortDir === "asc" ? av - bv : bv - av;
+   662→    });
+   663→  }, [filtered, tempFilter, skorMin, scoreSortDir, sortDir]);
+   664→
+   665→  const grouped = useMemo(() => {
+   666→    const map: Record<string, OpportunityDTO[]> = {};
+   667→    for (const key of KANBAN_KEYS) map[key] = [];
+   668→    for (const o of filtered) {
+   669→      const target = KANBAN_KEYS.includes(o.stage) ? o.stage : null;
+   670→      if (target) map[target].push(o);
+   671→    }
+   672→    if (sortByScore) {
+   673→      for (const key of KANBAN_KEYS) {
+   674→        map[key].sort((a, b) => scoreOf(b) - scoreOf(a));
+   675→      }
+   676→    }
+   677→    return map;
+   678→  }, [filtered, sortByScore]);
+   679→
+   680→  function openDetail(id: string) {
+   681→    setSelectedId(id);
+   682→    setDrawerOpen(true);
+   683→  }
+   684→
+   685→  function toggleSort() {
+   686→    setSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
+   687→  }
+   688→
+   689→  function toggleScoreSort() {
+   690→    setScoreSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
+   691→  }
+   692→
+   693→  async function moveOpportunity(opp: OpportunityDTO, stage: string, extra?: LostExtra) {
+   694→    const snapshot = oppsRef.current;
+   695→    const optimistic = snapshot.map((o) => (o.id === opp.id ? { ...o, stage } : o));
+   696→    oppsRef.current = optimistic;
+   697→    setOpps(optimistic);
+   698→    setSavingStage(true);
+   699→    try {
+   700→      const res = await api.updateOpportunity(opp.id, {
+   701→        stage,
+   702→        ...(extra ?? {}),
+   703→        actorName: user?.name ?? "System",
+   704→        actorRole: user?.role ?? "system",
+   705→      });
+   706→      if (stage === "won") {
+   707→        toast.success(
+   708→          res.createdProject
+   709→            ? `Deal Won! Project ${res.createdProject.code} otomatis dibuat beserta invoice DP`
+   710→            : "Deal ditandai Won"
+   711→        );
+   712→      } else {
+   713→        toast.success(`Stage "${opp.title}" diubah ke ${stageLabel(stage)}`);
+   714→      }
+   715→      await load({ silent: true });
+   716→    } catch (e) {
+   717→      oppsRef.current = snapshot;
+   718→      setOpps(snapshot);
+   719→      toast.error(e instanceof Error ? e.message : "Gagal memperbarui stage");
+   720→    } finally {
+   721→      setSavingStage(false);
+   722→    }
+   723→  }
+   724→
+   725→  function handleDragStart() {
+   726→    draggedRecentlyRef.current = true;
+   727→  }
+   728→
+   729→  function handleDragEnd(event: DragEndEvent) {
+   730→    const { active, over } = event;
+   731→    window.setTimeout(() => {
+   732→      draggedRecentlyRef.current = false;
+   733→    }, 250);
+   734→    if (!over) return;
+   735→    const opp = oppsRef.current.find((o) => o.id === active.id);
+   736→    if (!opp) return;
+   737→    const targetStage = String(over.id);
+   738→    if (!KANBAN_KEYS.includes(targetStage)) return;
+   739→    if (targetStage === opp.stage) return;
+   740→    if (targetStage === "lost") {
+   741→      setPendingLost(opp);
+   742→      return;
+   743→    }
+   744→    void moveOpportunity(opp, targetStage);
+   745→  }
+   746→
+   747→  const isEmpty = !loading && filtered.length === 0;
+   748→
+   749→  return (
+   750→    <div className="space-y-4">
+   751→      {/* Toolbar */}
+   752→      <div className="flex flex-col gap-1">
+   753→        <h1 className="text-xl font-semibold text-zinc-900">Sales Pipeline</h1>
+   754→        <p className="text-sm text-zinc-500">
+   755→          Kelola opportunity lintas brand: kanban drag-and-drop, tabel ringkas, dan detail lengkap.
+   756→        </p>
+   757→      </div>
+   758→
+   759→      <div className="flex flex-wrap items-center gap-2">
+   760→        <div className="relative w-full sm:w-64">
+   761→          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
+   762→          <Input
+   763→            value={qInput}
+   764→            onChange={(e) => setQInput(e.target.value)}
+   765→            placeholder="Cari lead, perusahaan..."
+   766→            aria-label="Cari opportunity"
+   767→            className="w-full bg-white pl-8"
+   768→          />
+   769→        </div>
+   770→
+   771→        <Select value={activeBrandFilter} onValueChange={setActiveBrandFilter}>
+   772→          <SelectTrigger className="w-full bg-white sm:w-44" aria-label="Filter brand">
+   773→            <SelectValue placeholder="Semua Brand" />
+   774→          </SelectTrigger>
+   775→          <SelectContent>
+   776→            <SelectItem value="all">Semua Brand</SelectItem>
+   777→            {brands.map((b) => (
+   778→              <SelectItem key={b.id} value={b.id}>
+   779→                <span className="flex items-center gap-2">
+   780→                  <span className="size-2 rounded-full" style={{ backgroundColor: b.color }} />
+   781→                  {b.name}
+   782→                </span>
+   783→              </SelectItem>
+   784→            ))}
+   785→          </SelectContent>
+   786→        </Select>
+   787→
+   788→        <Select value={owner} onValueChange={setOwner}>
+   789→          <SelectTrigger className="w-full bg-white sm:w-44" aria-label="Filter owner">
+   790→            <SelectValue placeholder="Semua Owner" />
+   791→          </SelectTrigger>
+   792→          <SelectContent>
+   793→            <SelectItem value="all">Semua Owner</SelectItem>
+   794→            <SelectItem value={UNASSIGNED}>Belum di-assign</SelectItem>
+   795→            {ownerOptions.map((name) => (
+   796→              <SelectItem key={name} value={name}>
+   797→                {name}
+   798→              </SelectItem>
+   799→            ))}
+   800→          </SelectContent>
+   801→        </Select>
+   802→
+   803→        {view === "table" ? (
+   804→          <>
+   805→            <Select value={tempFilter} onValueChange={setTempFilter}>
+   806→              <SelectTrigger className="w-full bg-white sm:w-40" aria-label="Filter temperatur">
+   807→                <SelectValue placeholder="Semua Temperatur" />
+   808→              </SelectTrigger>
+   809→              <SelectContent>
+   810→                <SelectItem value="all">Semua Temperatur</SelectItem>
+   811→                <SelectItem value="hot">Hot</SelectItem>
+   812→                <SelectItem value="warm">Warm</SelectItem>
+   813→                <SelectItem value="cold">Cold</SelectItem>
+   814→              </SelectContent>
+   815→            </Select>
+   816→            <Select value={skorMin} onValueChange={setSkorMin}>
+   817→              <SelectTrigger className="w-full bg-white sm:w-40" aria-label="Filter skor minimum">
+   818→                <SelectValue placeholder="Skor Min" />
+   819→              </SelectTrigger>
+   820→              <SelectContent>
+   821→                <SelectItem value="all">Skor Min: Semua</SelectItem>
+   822→                <SelectItem value="45">≥ 45 (Warm+)</SelectItem>
+   823→                <SelectItem value="70">≥ 70 (Hot)</SelectItem>
+   824→              </SelectContent>
+   825→            </Select>
+   826→          </>
+   827→        ) : null}
+   828→
+   829→        <div className="ml-auto flex items-center gap-2">
+   830→          <Badge variant="secondary" className="bg-zinc-200/60 text-zinc-700">
+   831→            {filtered.length} opportunity
+   832→          </Badge>
+   833→          <Button
+   834→            variant="outline"
+   835→            size="sm"
+   836→            aria-label="Ekspor opportunity ke CSV"
+   837→            title={`Ekspor ${view === "table" ? tableRows.length : filtered.length} opportunity ke CSV`}
+   838→            onClick={() => {
+   839→              const rows = view === "table" ? tableRows : filtered;
+   840→              if (rows.length === 0) {
+   841→                toast.error("Tidak ada opportunity untuk diekspor");
+   842→                return;
+   843→              }
+   844→              const csv = buildOpportunitiesCsv(rows);
+   845→              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+   846→              const url = URL.createObjectURL(blob);
+   847→              const a = document.createElement("a");
+   848→              const ymd = new Date().toISOString().slice(0, 10);
+   849→              a.href = url;
+   850→              a.download = `opportunity-grupcrm-${ymd}.csv`;
+   851→              document.body.appendChild(a);
+   852→              a.click();
+   853→              a.remove();
+   854→              URL.revokeObjectURL(url);
+   855→              toast.success(`Ekspor CSV selesai — ${rows.length} opportunity diunduh`);
+   856→            }}
+   857→          >
+   858→            <Download className="size-4" aria-hidden="true" />
+   859→            <span className="hidden sm:inline">Ekspor CSV</span>
+   860→          </Button>
+   861→          <Button
+   862→            variant="outline"
+   863→            size="sm"
+   864→            aria-pressed={sortByScore}
+   865→            aria-label="Urutkan kartu berdasarkan skor"
+   866→            onClick={() => setSortByScore((v) => !v)}
+   867→            className={cn(
+   868→              sortByScore &&
+   869→                "bg-zinc-900 text-white hover:bg-zinc-800 hover:text-white"
+   870→            )}
+   871→          >
+   872→            <ArrowDownWideNarrow className="size-4" aria-hidden="true" />
+   873→            Urut Skor
+   874→          </Button>
+   875→          <ToggleGroup
+   876→            type="single"
+   877→            variant="outline"
+   878→            value={view}
+   879→            onValueChange={(v) => {
+   880→              if (v === "kanban" || v === "table") setView(v);
+   881→            }}
+   882→          >
+   883→            <ToggleGroupItem
+   884→              value="kanban"
+   885→              aria-label="Tampilan Kanban"
+   886→              className="data-[state=on]:bg-zinc-900 data-[state=on]:text-white"
+   887→            >
+   888→              <KanbanSquare className="size-4" aria-hidden="true" />
+   889→              <span className="hidden sm:inline">Kanban</span>
+   890→            </ToggleGroupItem>
+   891→            <ToggleGroupItem
+   892→              value="table"
+   893→              aria-label="Tampilan Tabel"
+   894→              className="data-[state=on]:bg-zinc-900 data-[state=on]:text-white"
+   895→            >
+   896→              <Table2 className="size-4" aria-hidden="true" />
+   897→              <span className="hidden sm:inline">Tabel</span>
+   898→            </ToggleGroupItem>
+   899→          </ToggleGroup>
+   900→        </div>
+   901→      </div>
+   902→
+   903→      {/* Konten */}
+   904→      {loading ? (
+   905→        <div className="flex gap-3 overflow-hidden">
+   906→          {Array.from({ length: 5 }).map((_, i) => (
+   907→            <Skeleton key={i} className="h-[420px] w-[280px] shrink-0 rounded-xl" />
+   908→          ))}
+   909→        </div>
+   910→      ) : isEmpty ? (
+   911→        <div className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-white py-16 text-center shadow-sm">
+   912→          <Inbox className="size-10 text-zinc-300" aria-hidden="true" />
+   913→          <p className="font-medium text-zinc-700">Belum ada opportunity</p>
+   914→          <p className="max-w-sm text-sm text-zinc-500">
+   915→            Tidak ada opportunity yang cocok dengan filter saat ini. Coba ubah kata kunci, brand, atau owner.
+   916→          </p>
+   917→        </div>
+   918→      ) : view === "kanban" ? (
+   919→        <DndContext
+   920→          sensors={sensors}
+   921→          onDragStart={handleDragStart}
+   922→          onDragEnd={handleDragEnd}
+   923→          onDragCancel={() => {
+   924→            window.setTimeout(() => {
+   925→              draggedRecentlyRef.current = false;
+   926→            }, 250);
+   927→          }}
+   928→        >
+   929→          <div className="crm-scroll overflow-x-auto pb-2">
+   930→            <div className="flex min-w-max gap-3">
+   931→              {KANBAN_KEYS.map((key) => (
+   932→                <StageColumn
+   933→                  key={key}
+   934→                  stageKey={key}
+   935→                  opportunities={grouped[key] ?? []}
+   936→                  onOpen={(id) => {
+   937→                    if (draggedRecentlyRef.current) return;
+   938→                    openDetail(id);
+   939→                  }}
+   940→                />
+   941→              ))}
+   942→            </div>
+   943→          </div>
+   944→        </DndContext>
+   945→      ) : (
+   946→        <OpportunityTable
+   947→          rows={tableRows}
+   948→          sortDir={sortDir}
+   949→          onToggleSort={toggleSort}
+   950→          scoreSortDir={scoreSortDir}
+   951→          onToggleScoreSort={toggleScoreSort}
+   952→          onOpen={(id) => {
+   953→            if (draggedRecentlyRef.current) return;
+   954→            openDetail(id);
+   955→          }}
+   956→        />
+   957→      )}
+   958→
+   959→      {/* Drawer detail */}
+   960→      <OpportunityDetail
+   961→        opportunityId={selectedId}
+   962→        open={drawerOpen}
+   963→        onOpenChange={setDrawerOpen}
+   964→        onChanged={() => void load({ silent: true })}
+   965→      />
+   966→
+   967→      {/* Dialog alasan lost (dari drag kanban) */}
+   968→      <LostReasonDialog
+   969→        open={!!pendingLost}
+   970→        saving={savingStage}
+   971→        onCancel={() => setPendingLost(null)}
+   972→        onConfirm={(extra) => {
+   973→          if (!pendingLost) return;
+   974→          const opp = pendingLost;
+   975→          setPendingLost(null);
+   976→          void moveOpportunity(opp, "lost", extra);
+   977→        }}
+   978→      />
+   979→    </div>
+   980→  );
+   981→}
+   982→

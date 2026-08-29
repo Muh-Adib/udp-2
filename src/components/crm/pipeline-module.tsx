@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -18,11 +18,14 @@ import {
   ArrowUp,
   ArrowUpDown,
   Download,
+  FileUp,
   Flame,
   Inbox,
   KanbanSquare,
+  Loader2,
   Search,
   Table2,
+  Upload,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,7 +61,12 @@ import { api } from "@/lib/crm/api-client";
 import { LOST_REASONS, OPEN_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
-import type { OpportunityDTO } from "@/lib/crm/types";
+import type {
+  ImportOpportunityCommitResponseDTO,
+  ImportOpportunityPreviewResponseDTO,
+  ImportOpportunityRowDTO,
+  OpportunityDTO,
+} from "@/lib/crm/types";
 import { formatCurrency, formatDate, initials, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
@@ -109,6 +117,91 @@ function buildOpportunitiesCsv(opps: OpportunityDTO[]): string {
   }
   return "\uFEFF" + lines.join("\r\n");
 }
+
+// ---------- Impor CSV opportunity (Task 15-a): round-trip dengan format ekspor ----------
+
+const OPP_IMPORT_MAX_ROWS = 200;
+
+/** Deteksi separator dari baris pertama: titik koma (hasil ekspor) atau koma. */
+function detectCsvSeparator(firstLine: string): string {
+  const semis = (firstLine.match(/;/g) ?? []).length;
+  const commas = (firstLine.match(/,/g) ?? []).length;
+  return semis > commas ? ";" : ",";
+}
+
+/** Parser CSV murni (adaptasi contacts-module, tidak diekspor): strip BOM, quoted field dengan escape "", CRLF/LF. */
+function parseCsv(text: string): string[][] {
+  const raw = text.replace(/^\uFEFF/, "").trim();
+  if (!raw) return [];
+  const firstNewline = raw.search(/\r?\n/);
+  const sep = detectCsvSeparator(firstNewline === -1 ? raw : raw.slice(0, firstNewline));
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (raw[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === sep) {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && raw[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.length > 1 || row[0] !== "") rows.push(row);
+
+  // Lewati baris yang seluruh selnya kosong.
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+
+function isOppHeaderRow(cells: string[]): boolean {
+  const lower = cells.map((c) => c.trim().toLowerCase());
+  return lower.includes("judul") && lower.includes("brand");
+}
+
+/** Petakan baris CSV ke baris impor: via header (lowercase) atau urutan kolom ekspor bila tanpa header. */
+function mapOpportunityCsvRows(rows: string[][]): Record<string, string>[] {
+  if (rows.length === 0) return [];
+  const known = OPP_CSV_HEADERS as readonly string[];
+  const header = isOppHeaderRow(rows[0]);
+  const cols = header
+    ? rows[0].map((c) => {
+        const k = c.trim().toLowerCase();
+        return known.includes(k) ? k : null;
+      })
+    : [...known];
+  const body = header ? rows.slice(1) : rows;
+  return body.map((cells) => {
+    const out: Record<string, string> = {};
+    cols.forEach((key, i) => {
+      if (key) out[key] = (cells[i] ?? "").trim();
+    });
+    return out;
+  });
+}
+
 type SortDir = "asc" | "desc" | null;
 
 interface LostExtra {
@@ -574,6 +667,270 @@ function LostReasonDialog({
   );
 }
 
+// ---------- Dialog: Impor CSV opportunity (Task 15-a) ----------
+
+function importStatusChipClass(status: ImportOpportunityRowDTO["status"]): string {
+  if (status === "valid") return "bg-emerald-100 text-emerald-700";
+  if (status === "review") return "bg-amber-100 text-amber-700";
+  return "bg-red-100 text-red-700";
+}
+
+function formatNilaiImport(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  return digits ? formatCurrency(Number(digits)) : "-";
+}
+
+function ImportOpportunitiesDialog({
+  open,
+  onOpenChange,
+  onImported,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onImported: () => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [rows, setRows] = useState<Record<string, string>[]>([]);
+  const [preview, setPreview] = useState<ImportOpportunityPreviewResponseDTO | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [committing, setCommitting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setFileName(null);
+      setRows([]);
+      setPreview(null);
+      setAnalyzing(false);
+      setCommitting(false);
+    }
+  }, [open]);
+
+  async function runPreview(parsed: Record<string, string>[]) {
+    setAnalyzing(true);
+    try {
+      const res = await api.importOpportunities({
+        rows: parsed,
+        commit: false,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      setPreview(res as ImportOpportunityPreviewResponseDTO);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menganalisis data impor");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      const parsed = mapOpportunityCsvRows(parseCsv(text));
+      if (parsed.length === 0) {
+        toast.error("Tidak ada baris terbaca dari file CSV");
+        return;
+      }
+      if (parsed.length > OPP_IMPORT_MAX_ROWS) {
+        toast.error(`Maksimal ${OPP_IMPORT_MAX_ROWS} baris per impor (terdeteksi ${parsed.length})`);
+        return;
+      }
+      setFileName(file.name);
+      setRows(parsed);
+      void runPreview(parsed);
+    };
+    reader.onerror = () => toast.error("Gagal membaca file CSV");
+    reader.readAsText(file);
+    e.target.value = ""; // agar file yang sama bisa diunggah ulang
+  }
+
+  async function commit() {
+    if (!preview || rows.length === 0) return;
+    setCommitting(true);
+    try {
+      const res = await api.importOpportunities({
+        rows,
+        commit: true,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "system",
+      });
+      const data = res as ImportOpportunityCommitResponseDTO;
+      toast.success(`Impor selesai — ${data.summary.created} opportunity dibuat, ${data.summary.skipped} dilewati`);
+      onImported();
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengimpor opportunity");
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  function backToInput() {
+    setPreview(null);
+    setRows([]);
+    setFileName(null);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+        {!preview ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileUp className="size-5 text-zinc-900" /> Impor CSV Opportunity
+              </DialogTitle>
+              <DialogDescription>
+                Unggah file CSV hasil &quot;Ekspor CSV&quot; untuk membuat opportunity massal. Semua baris divalidasi
+                dulu sebelum disimpan.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Dropzone unggah file */}
+            <label
+              className={cn(
+                "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/60 p-8 text-center transition-colors hover:border-zinc-400 hover:bg-zinc-100",
+                analyzing && "pointer-events-none opacity-60"
+              )}
+            >
+              <span className="flex size-12 items-center justify-center rounded-full bg-zinc-200/70 text-zinc-500">
+                {analyzing ? <Loader2 className="size-6 animate-spin" /> : <Upload className="size-6" />}
+              </span>
+              <span className="text-sm font-medium text-zinc-800">
+                {analyzing ? "Menganalisis baris…" : "Pilih file CSV untuk diimpor"}
+              </span>
+              <span className="max-w-sm text-xs leading-relaxed text-zinc-500">
+                Format kolom sama dengan hasil Ekspor CSV: judul, brand, perusahaan, kontak, kategori_layanan, layanan,
+                tahap, temperatur, prioritas, skor, nilai_estimasi, mata_uang, probabilitas_pct, owner, target_close,
+                aksi_berikutnya, dibuat — dipisah titik koma, maksimal {OPP_IMPORT_MAX_ROWS} baris. Kolom skor &amp;
+                dibuat diabaikan (skor dihitung otomatis).
+              </span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={handleFile}
+                aria-label="Unggah file CSV opportunity"
+              />
+            </label>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={analyzing}>
+                Batal
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileUp className="size-5 text-zinc-900" /> Pratinjau Impor
+              </DialogTitle>
+              <DialogDescription>
+                {fileName ? `${fileName} · ` : ""}
+                {preview.summary.total} baris terbaca. Periksa hasil validasi sebelum menyimpan.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Chip ringkasan */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                {preview.summary.valid} Valid
+              </span>
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                {preview.summary.review} Review
+              </span>
+              <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                {preview.summary.invalid} Invalid
+              </span>
+              <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+                {preview.summary.total} baris
+              </span>
+            </div>
+
+            {/* Tabel pratinjau per baris */}
+            <div className="crm-scroll max-h-96 overflow-y-auto overflow-x-auto rounded-xl border bg-white shadow-sm">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-zinc-50">
+                    <TableHead>Judul</TableHead>
+                    <TableHead>Brand</TableHead>
+                    <TableHead>Kontak</TableHead>
+                    <TableHead>Tahap</TableHead>
+                    <TableHead className="text-right">Nilai</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Catatan</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {preview.preview.map((row) => (
+                    <TableRow key={row.index}>
+                      <TableCell className="max-w-40 truncate font-medium text-zinc-800" title={row.judul}>
+                        {row.judul || "-"}
+                      </TableCell>
+                      <TableCell className="max-w-28 truncate" title={row.brand}>
+                        {row.brand || "-"}
+                      </TableCell>
+                      <TableCell className="max-w-32 truncate" title={row.kontak}>
+                        {row.kontak || "-"}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{stageLabel(row.tahapResolved)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right tabular-nums">
+                        {formatNilaiImport(row.nilai)}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                            importStatusChipClass(row.status)
+                          )}
+                        >
+                          {row.status === "valid" ? "Valid" : row.status === "review" ? "Review" : "Invalid"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-44">
+                        {row.errors.length ? (
+                          <span className="block truncate text-xs text-red-600" title={row.errors.join("; ")}>
+                            {row.errors.join("; ")}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-zinc-400">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            <DialogFooter>
+              <span className="mr-auto hidden self-center text-xs text-zinc-500 sm:block">
+                {preview.summary.valid} siap diimpor · {preview.summary.review} review dilewati ·{" "}
+                {preview.summary.invalid} invalid
+              </span>
+              <Button variant="outline" onClick={backToInput} disabled={committing}>
+                Unggah ulang
+              </Button>
+              <Button
+                className="bg-zinc-900 text-white hover:bg-zinc-800"
+                disabled={preview.summary.valid === 0 || committing}
+                onClick={() => void commit()}
+                aria-label={`Impor ${preview.summary.valid} baris opportunity`}
+              >
+                {committing ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                {committing ? "Mengimpor…" : `Impor ${preview.summary.valid} baris`}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- Modul utama ----------
 
 export default function PipelineModule() {
@@ -594,6 +951,7 @@ export default function PipelineModule() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pendingLost, setPendingLost] = useState<OpportunityDTO | null>(null);
   const [savingStage, setSavingStage] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const oppsRef = useRef<OpportunityDTO[]>([]);
   const draggedRecentlyRef = useRef(false);
@@ -826,10 +1184,20 @@ export default function PipelineModule() {
           </>
         ) : null}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <Badge variant="secondary" className="bg-zinc-200/60 text-zinc-700">
             {filtered.length} opportunity
           </Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Impor opportunity dari CSV"
+            title="Impor opportunity dari CSV"
+            onClick={() => setImportOpen(true)}
+          >
+            <Upload className="size-4" aria-hidden="true" />
+            <span className="hidden sm:inline">Impor CSV</span>
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -975,6 +1343,13 @@ export default function PipelineModule() {
           setPendingLost(null);
           void moveOpportunity(opp, "lost", extra);
         }}
+      />
+
+      {/* Dialog impor CSV opportunity (Task 15-a) */}
+      <ImportOpportunitiesDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={() => void load({ silent: true })}
       />
     </div>
   );

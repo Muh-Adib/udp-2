@@ -105,6 +105,11 @@ export const api = {
     request<import("@/lib/crm/types").ImportPreviewResponseDTO | import("@/lib/crm/types").ImportCommitResponseDTO>(
       "/api/contacts/import", { method: "POST", body: JSON.stringify(payload) }
     ),
+  /** Import CSV opportunity (round-trip dgn ekspor ronde 13): preview validasi atau commit pembuatan. */
+  importOpportunities: (payload: { rows: Record<string, string>[]; commit: boolean; actorName: string; actorRole: string }) =>
+    request<import("@/lib/crm/types").ImportOpportunityPreviewResponseDTO | import("@/lib/crm/types").ImportOpportunityCommitResponseDTO>(
+      "/api/opportunities/import", { method: "POST", body: JSON.stringify(payload) }
+    ),
   identify: (identity: { email?: string; whatsapp?: string; fullName?: string; companyName?: string }) =>
     request<{ candidates: MatchCandidateDTO[] }>("/api/identify", { method: "POST", body: JSON.stringify(identity) }),
 

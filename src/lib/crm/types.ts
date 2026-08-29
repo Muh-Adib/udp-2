@@ -370,6 +370,42 @@ export interface ImportCommitResponseDTO {
   results: ImportCommitResultRowDTO[];
 }
 
+// ============ IMPORT CSV OPPORTUNITY (round-trip dgn ekspor ronde 13) ============
+
+/** Baris preview impor opportunity — status valid/review/invalid + alasan validasi. */
+export interface ImportOpportunityRowDTO {
+  index: number;
+  judul: string;
+  brand: string;
+  kontak: string;
+  /** Nilai tahap mentah dari CSV. */
+  tahap: string;
+  /** Stage slug hasil resolusi (default "new" bila tidak dikenali). */
+  tahapResolved: string;
+  /** Nilai estimasi mentah dari CSV. */
+  nilai: string;
+  status: "valid" | "review" | "invalid";
+  errors: string[];
+}
+
+export interface ImportOpportunityPreviewResponseDTO {
+  preview: ImportOpportunityRowDTO[];
+  summary: { total: number; valid: number; invalid: number; review: number };
+}
+
+export interface ImportOpportunityCommitResultRowDTO {
+  index: number;
+  action: "create" | "skip" | "invalid";
+  opportunityId?: string;
+  label?: string;
+  error?: string;
+}
+
+export interface ImportOpportunityCommitResponseDTO {
+  summary: { created: number; skipped: number; invalid: number };
+  results: ImportOpportunityCommitResultRowDTO[];
+}
+
 export interface DashboardData {
   kpi: {
     totalLeads: number;

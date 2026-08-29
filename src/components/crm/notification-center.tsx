@@ -7,6 +7,7 @@ import {
   applyNotifPrefs, NOTIF_TYPES, useNotifPrefs,
 } from "@/lib/crm/notif-prefs";
 import { timeAgo } from "@/lib/crm/utils";
+import { useNotifSocket } from "@/lib/crm/notif-socket";
 import type { NotificationDTO, NotificationSeverity, NotificationType } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,9 @@ import {
 
 /** Event global untuk membuka pusat notifikasi dari widget dashboard. */
 export const OPEN_NOTIF_EVENT = "crm:open-notifications";
+
+/** Event global: notifikasi berubah (realtime) — widget dashboard ikut refresh. */
+export const NOTIF_CHANGED_EVENT = "crm:notif-changed";
 
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
   sla: Timer,
@@ -60,6 +64,7 @@ export default function NotificationCenter() {
   const openRef = useRef(open);
   const inFlightRef = useRef(false);
   const firstLoadDoneRef = useRef(false);
+  const realtimeRef = useRef(false);
 
   useEffect(() => {
     brandRef.current = activeBrandFilter;
@@ -111,15 +116,31 @@ export default function NotificationCenter() {
     void load();
   }, [user, activeBrandFilter, load]);
 
-  // Polling 60 detik untuk refresh unread — skip saat tab tidak terlihat
+  // Polling 60 detik untuk refresh unread — skip saat tab tidak terlihat atau realtime aktif
   useEffect(() => {
     if (!user) return;
     const id = setInterval(() => {
       if (document.hidden) return;
+      if (realtimeRef.current) return; // push realtime menang — hindari fetch dobel
       void load(true);
     }, 60_000);
     return () => clearInterval(id);
   }, [user, load]);
+
+  // Push realtime via mini service socket.io (port 3005) — onChanged memakai refetch yang sama.
+  const { connected: realtimeConnected } = useNotifSocket({
+    email: user?.email ?? null,
+    brandId: activeBrandFilter,
+    enabled: !!user,
+    onChanged: () => {
+      void load(true);
+      window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
+    },
+  });
+
+  useEffect(() => {
+    realtimeRef.current = realtimeConnected;
+  }, [realtimeConnected]);
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
@@ -379,7 +400,16 @@ export default function NotificationCenter() {
 
         {/* Footer */}
         <div className="border-t border-zinc-200 px-4 py-2">
-          <p className="text-[10px] text-zinc-400">Diperbarui otomatis setiap 60 detik</p>
+          <p className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite">
+            <span
+              className={cn(
+                "h-2 w-2 shrink-0 rounded-full",
+                realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-zinc-400"
+              )}
+              aria-hidden
+            />
+            {realtimeConnected ? "Realtime aktif" : "Mode fallback · polling 60 dtk"}
+          </p>
         </div>
       </PopoverContent>
     </Popover>

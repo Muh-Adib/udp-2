@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlarmClock, AlertTriangle, Building2, Check, CheckCircle2, Fingerprint, Globe, Inbox,
-  Instagram, LayoutDashboard, Loader2, Mail, MessageCircle, Phone, RefreshCw, Reply, Send,
+  Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone, RefreshCw, Reply, Send,
   ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -368,8 +368,10 @@ function renderLeadTemplate(body: string, vars: Record<string, string>): string 
   return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => vars[key] ?? full);
 }
 
-function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
+function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onResponded }: {
   lead: InboxLead | null;
+  /** Kontak terpilih di panel detail (identifikasi) — dipakai sebagai pilihan awal bila ada di kandidat. */
+  linkedContactId: string | null;
   linkedContactName: string | null;
   onClose: () => void;
   onResponded: (updated: InboxLead) => void;
@@ -381,10 +383,17 @@ function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
   const [templateId, setTemplateId] = useState<string>("blank");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  // Task 15-c — kontak yang ditautkan ke respons (null = "Tidak menautkan")
+  const [contactChoice, setContactChoice] = useState<string | null>(null);
 
   const senderDisplay = (lead?.senderName ?? "").trim() || "Tanpa nama";
+  // Opsi = kandidat identifikasi yang punya contactId
+  const candidates = useMemo(
+    () => (lead?.candidates ?? []).filter((c) => Boolean(c.contactId)),
+    [lead?.candidates]
+  );
 
-  // Muat template + set kanal default saat dialog dibuka
+  // Muat template + set kanal & kontak default saat dialog dibuka
   useEffect(() => {
     if (!lead) return;
     let alive = true;
@@ -393,6 +402,13 @@ function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
     setTemplateId("blank");
     setBody("");
     setChannel(["whatsapp", "email", "phone"].includes(lead.channel) ? lead.channel : "whatsapp");
+    const cands = lead.candidates.filter((c) => Boolean(c.contactId));
+    // Default: pilihan di panel detail bila cocok, jika tidak → kandidat pertama
+    setContactChoice(
+      linkedContactId && cands.some((c) => c.contactId === linkedContactId)
+        ? linkedContactId
+        : cands[0]?.contactId ?? null
+    );
     (async () => {
       try {
         const res = await api.followUpTemplates("all");
@@ -409,14 +425,20 @@ function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
       }
     })();
     return () => { alive = false; };
-  }, [lead]);
+  }, [lead, linkedContactId]);
+
+  const selectedCandidate = useMemo(
+    () => candidates.find((c) => c.contactId === contactChoice) ?? null,
+    [candidates, contactChoice]
+  );
+  const respondContactName = selectedCandidate?.contact?.fullName?.trim() || linkedContactName || null;
 
   const vars = useMemo<Record<string, string>>(() => ({
-    contact_name: linkedContactName ?? senderDisplay,
+    contact_name: respondContactName ?? senderDisplay,
     company_name: "perusahaan Bapak/Ibu",
     brand_name: lead?.brand?.name ?? "tim kami",
     marketing_name: user?.name ?? "Tim Sales",
-  }), [lead?.brand?.name, linkedContactName, senderDisplay, user?.name]);
+  }), [lead?.brand?.name, respondContactName, senderDisplay, user?.name]);
 
   function pickTemplate(id: string) {
     setTemplateId(id);
@@ -443,7 +465,7 @@ function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
         channel,
         content,
         subject: channel === "email" ? `Re: ${lead.subject ?? "permintaan Anda"}` : undefined,
-        contactId: undefined,
+        contactId: contactChoice ?? undefined,
         actorName: user.name,
         actorRole: user.role,
       });
@@ -489,9 +511,82 @@ function RespondDialog({ lead, linkedContactName, onClose, onResponded }: {
                   {lead.brand.name}
                 </span>
               ) : null}
-              {linkedContactName ? <span className="font-medium text-emerald-600">≡ {linkedContactName}</span> : null}
+              {respondContactName ? <span className="font-medium text-emerald-600">≡ {respondContactName}</span> : null}
             </div>
           </div>
+
+          {/* Task 15-c — pilih kontak yang ditautkan ke respons (kandidat identifikasi) */}
+          {candidates.length > 0 ? (
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5" id="respond-contact-label">
+                <Link2 className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+                Tautkan kontak
+              </Label>
+              <div
+                role="radiogroup"
+                aria-labelledby="respond-contact-label"
+                aria-label="Tautkan kontak ke respons"
+                className="crm-scroll max-h-40 space-y-1.5 overflow-y-auto pr-1"
+              >
+                {candidates.map((c) => {
+                  const label = c.contact?.fullName?.trim() || `Contact #${c.contactId.slice(0, 8)}`;
+                  const selected = contactChoice === c.contactId;
+                  return (
+                    <label
+                      key={c.contactId}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-xs transition-colors",
+                        selected
+                          ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900"
+                          : "border-zinc-200 bg-white hover:bg-zinc-50"
+                      )}
+                    >
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600" aria-hidden="true">
+                        {initials(label)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-zinc-900">{label}</span>
+                        {c.contact?.company?.name ? (
+                          <span className="block truncate text-[10px] text-zinc-400">{c.contact.company.name}</span>
+                        ) : null}
+                      </span>
+                      <span className={cn("shrink-0 text-[10px] font-bold", scoreTone(c.score).text)}>{c.score}%</span>
+                      {selected ? <Check className="size-3.5 shrink-0 text-zinc-900" aria-hidden="true" /> : null}
+                      <input
+                        type="radio"
+                        name="respond-contact-link"
+                        className="sr-only"
+                        checked={selected}
+                        onChange={() => setContactChoice(c.contactId)}
+                        aria-label={`Tautkan kontak ${label}`}
+                      />
+                    </label>
+                  );
+                })}
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-xs transition-colors",
+                    contactChoice === null
+                      ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900"
+                      : "border-zinc-200 bg-white hover:bg-zinc-50"
+                  )}
+                >
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed border-zinc-300 bg-white text-zinc-400" aria-hidden="true">
+                    <Link2Off className="h-3 w-3" />
+                  </span>
+                  <span className="min-w-0 flex-1 font-medium text-zinc-700">Tidak menautkan</span>
+                  <input
+                    type="radio"
+                    name="respond-contact-link"
+                    className="sr-only"
+                    checked={contactChoice === null}
+                    onChange={() => setContactChoice(null)}
+                    aria-label="Tidak menautkan kontak"
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
 
           {/* Template */}
           <div className="space-y-2">
@@ -1371,6 +1466,7 @@ export default function InboxModule() {
       {/* Fase 3 — dialog Respons & Catat lead */}
       <RespondDialog
         lead={respondTarget}
+        linkedContactId={linkedContactId}
         linkedContactName={
           respondTarget && linkedContactId
             ? respondTarget.candidates.find((c) => c.contactId === linkedContactId)?.contact?.fullName ?? null

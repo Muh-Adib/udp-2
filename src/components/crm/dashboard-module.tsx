@@ -27,7 +27,7 @@ import { canAccess, useCrmStore, type ModuleKey } from "@/lib/crm/store";
 import type { ApprovalRequestDTO, DashboardData, NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
 import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
-import { OPEN_NOTIF_EVENT } from "@/components/crm/notification-center";
+import { NOTIF_CHANGED_EVENT, OPEN_NOTIF_EVENT } from "@/components/crm/notification-center";
 
 // ============ Tipe lokal ============
 
@@ -396,6 +396,15 @@ function NotificationBriefWidget() {
       if (!document.hidden) void load(true);
     }, 60_000);
     return () => clearInterval(id);
+  }, [load]);
+
+  // Realtime (Task 15-b): NotificationCenter men-dispatch event saat socket "notif:changed" — widget ikut segar.
+  useEffect(() => {
+    const onNotifChanged = () => {
+      if (!document.hidden) void load(true);
+    };
+    window.addEventListener(NOTIF_CHANGED_EVENT, onNotifChanged);
+    return () => window.removeEventListener(NOTIF_CHANGED_EVENT, onNotifChanged);
   }, [load]);
 
   function openItem(n: NotificationDTO) {
