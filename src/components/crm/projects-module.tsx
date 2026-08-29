@@ -2,13 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CalendarDays, CheckCircle2, CircleDashed, CircleDotDashed, Factory, FolderKanban,
-  RefreshCw, User2, type LucideIcon,
+  CalendarClock, CalendarDays, Check, CheckCircle2, CircleDashed, CircleDotDashed,
+  Factory, FolderKanban, GitPullRequestArrow, Plus, ReceiptText, RefreshCw, User2, X,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -19,10 +27,11 @@ import {
   Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
-import type { MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
-import { formatCurrency, formatDate } from "@/lib/crm/utils";
+import type { ChangeRequestDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
+import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
 
 // ============ Meta ============
 
@@ -39,8 +48,19 @@ const MILESTONE_STATUS: Record<string, { label: string; cls: string; icon: Lucid
   pending: { label: "Menunggu", cls: "border-zinc-200 bg-white text-zinc-500", icon: CircleDashed },
 };
 
+const CR_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: "Menunggu Persetujuan", cls: "bg-amber-100 text-amber-700" },
+  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+  cancelled: { label: "Dibatalkan", cls: "bg-zinc-100 text-zinc-600" },
+};
+
 function statusMeta(s: string) {
   return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+}
+
+function crMeta(s: string) {
+  return CR_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
 }
 
 function msMeta(s: string) {
@@ -62,6 +82,7 @@ function ProjectCard({ project, onOpen, onMilestoneClick }: {
 }) {
   const st = statusMeta(project.status);
   const brand = project.brand;
+  const pendingCrCount = (project.changeRequests ?? []).filter((c) => c.status === "pending").length;
   return (
     <button
       type="button"
@@ -74,7 +95,19 @@ function ProjectCard({ project, onOpen, onMilestoneClick }: {
           <p className="font-mono text-[11px] text-zinc-500">{project.code}</p>
           <p className="mt-0.5 truncate text-sm font-semibold text-zinc-900">{project.name}</p>
         </div>
-        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {pendingCrCount > 0 ? (
+            <span
+              title="Ada change request menunggu persetujuan klien"
+              aria-label={`Ada ${pendingCrCount} change request menunggu`}
+              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+            >
+              <GitPullRequestArrow className="h-3 w-3" aria-hidden />
+              {pendingCrCount} CR
+            </span>
+          ) : null}
+          <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+        </div>
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
@@ -163,6 +196,7 @@ function ProjectsSkeleton() {
 
 export default function ProjectsModule() {
   const storeBrands = useCrmStore((s) => s.brands);
+  const user = useCrmStore((s) => s.user);
 
   const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -174,6 +208,23 @@ export default function ProjectsModule() {
   const [editStatus, setEditStatus] = useState("planning");
   const [editProgress, setEditProgress] = useState("0");
   const [savingDetail, setSavingDetail] = useState(false);
+
+  // Change request (Fase 2 — Produksi)
+  const [crDialogOpen, setCrDialogOpen] = useState(false);
+  const [crTitle, setCrTitle] = useState("");
+  const [crDesc, setCrDesc] = useState("");
+  const [crCost, setCrCost] = useState("");
+  const [crDays, setCrDays] = useState("");
+  const [crSaving, setCrSaving] = useState(false);
+  const [decideTarget, setDecideTarget] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" } | null>(null);
+  const [decideNote, setDecideNote] = useState("");
+  const [deciding, setDeciding] = useState(false);
+
+  const canDecideCr = user?.role === "director" || user?.role === "super_admin";
+  const detailCrs = detail?.changeRequests ?? [];
+  const approvedCrSum = detailCrs
+    .filter((c) => c.status === "approved")
+    .reduce((s, c) => s + (c.additionalCost ?? 0), 0);
 
   const load = useCallback(async (silent = false): Promise<ProjectDTO[]> => {
     if (!silent) setLoading(true);
@@ -225,6 +276,12 @@ export default function ProjectsModule() {
     });
   }
 
+  /** Ambil ulang daftar project lalu sinkronkan sheet detail dengan data terbaru. */
+  async function refreshDetail() {
+    const fresh = await load(true);
+    setDetail((d) => (d ? fresh.find((p) => p.id === d.id) ?? d : d));
+  }
+
   async function markMilestoneDone(project: ProjectDTO, m: MilestoneDTO) {
     try {
       await api.updateProject({
@@ -234,10 +291,82 @@ export default function ProjectsModule() {
       });
       // API menghitung ulang progress & status project di server — ambil data terbaru
       toast.success(`Milestone "${m.name}" ditandai selesai`);
-      const fresh = await load(true);
-      setDetail((d) => (d ? fresh.find((p) => p.id === d.id) ?? d : d));
+      await refreshDetail();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal memperbarui milestone");
+    }
+  }
+
+  function openCrDialog() {
+    setCrTitle("");
+    setCrDesc("");
+    setCrCost("");
+    setCrDays("");
+    setCrDialogOpen(true);
+  }
+
+  async function submitCreateCr(e: React.FormEvent) {
+    e?.preventDefault();
+    if (!detail || !user) {
+      toast.error("Sesi tidak ditemukan — muat ulang halaman");
+      return;
+    }
+    const title = crTitle.trim();
+    const description = crDesc.trim();
+    if (!title || !description) {
+      toast.error("Judul dan deskripsi change request wajib diisi");
+      return;
+    }
+    setCrSaving(true);
+    try {
+      const res = await api.createChangeRequest({
+        projectId: detail.id,
+        title,
+        description,
+        additionalCost: Math.max(0, Number(crCost) || 0),
+        additionalDays: Math.max(0, Number(crDays) || 0),
+        requestedBy: user.name,
+        actorRole: user.role,
+      });
+      toast.success(`Change Request ${res.changeRequest.number} diajukan — menunggu persetujuan klien`);
+      setCrDialogOpen(false);
+      await refreshDetail();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengajukan change request");
+    } finally {
+      setCrSaving(false);
+    }
+  }
+
+  function openDecide(cr: ChangeRequestDTO, decision: "approve" | "reject") {
+    setDecideNote("");
+    setDecideTarget({ cr, decision });
+  }
+
+  async function submitDecision() {
+    if (!decideTarget || !user) return;
+    setDeciding(true);
+    try {
+      const res = await api.decideChangeRequest({
+        id: decideTarget.cr.id,
+        decision: decideTarget.decision,
+        decisionNote: decideNote.trim() || undefined,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      if (decideTarget.decision === "approve") {
+        toast.success(res.invoice
+          ? `CR ${res.changeRequest.number} disetujui — invoice ${res.invoice.number} dibuat`
+          : `CR ${res.changeRequest.number} disetujui`);
+      } else {
+        toast.success(`CR ${res.changeRequest.number} ditolak`);
+      }
+      setDecideTarget(null);
+      await refreshDetail();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memutuskan change request");
+    } finally {
+      setDeciding(false);
     }
   }
 
@@ -366,6 +495,11 @@ export default function ProjectsModule() {
                   <div>
                     <p className="text-xs text-zinc-500">Nilai Kontrak</p>
                     <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{formatCurrency(detail.contractValue)}</p>
+                    {approvedCrSum > 0 ? (
+                      <p className="mt-0.5 text-[11px] font-medium text-emerald-600">
+                        +{formatCurrency(approvedCrSum)} dari change request
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <p className="text-xs text-zinc-500">Mulai</p>
@@ -419,6 +553,95 @@ export default function ProjectsModule() {
                   </div>
                 </div>
 
+                {/* Change Request (Fase 2 — Produksi) */}
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      <GitPullRequestArrow className="h-3.5 w-3.5" aria-hidden />
+                      Change Request ({detailCrs.length})
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openCrDialog}
+                      aria-label="Ajukan change request baru"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden /> Ajukan Change Request
+                    </Button>
+                  </div>
+                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+                    {detailCrs.length === 0 ? (
+                      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+                        Belum ada change request untuk project ini.
+                      </div>
+                    ) : (
+                      detailCrs.map((cr) => {
+                        const meta = crMeta(cr.status);
+                        return (
+                          <div key={cr.id} className="rounded-lg border bg-white p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-[11px] text-zinc-500">{cr.number}</span>
+                              <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>
+                                {meta.label}
+                              </Badge>
+                            </div>
+                            <p className="mt-1.5 text-sm font-semibold text-zinc-900">{cr.title}</p>
+                            <p className="mt-0.5 text-xs text-zinc-500">{cr.description}</p>
+                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                              <span className="font-semibold tabular-nums text-emerald-700">
+                                +{formatCurrency(cr.additionalCost)}
+                              </span>
+                              <span className="inline-flex items-center gap-1">
+                                <CalendarClock className="h-3.5 w-3.5 text-zinc-500" aria-hidden />
+                                {cr.additionalDays} hari tambahan
+                              </span>
+                              <span>Diajukan oleh {cr.requestedBy}</span>
+                              <span>{timeAgo(cr.createdAt)}</span>
+                            </div>
+                            {cr.status !== "pending" ? (
+                              <div className="mt-2 border-t border-zinc-100 pt-2">
+                                <p className="text-[11px] text-zinc-500">
+                                  Diputuskan oleh {cr.decidedBy ?? "-"}
+                                  {cr.decidedAt ? ` · ${timeAgo(cr.decidedAt)}` : ""}
+                                </p>
+                                {cr.decisionNote ? (
+                                  <p className="mt-0.5 text-[11px] italic text-zinc-500">“{cr.decisionNote}”</p>
+                                ) : null}
+                                {cr.status === "approved" && cr.invoiceId ? (
+                                  <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                                    <ReceiptText className="h-3 w-3" aria-hidden /> Invoice tambahan diterbitkan
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {cr.status === "pending" && canDecideCr ? (
+                              <div className="mt-2.5 flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                                  onClick={() => openDecide(cr, "approve")}
+                                  aria-label={`Setujui change request ${cr.number}`}
+                                >
+                                  <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                  onClick={() => openDecide(cr, "reject")}
+                                  aria-label={`Tolak change request ${cr.number}`}
+                                >
+                                  <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
                 {/* Update status & progress */}
                 <form onSubmit={saveDetail} className="space-y-3 rounded-xl border bg-zinc-50 p-4">
                   <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -457,6 +680,139 @@ export default function ProjectsModule() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      {/* Dialog pengajuan change request */}
+      <Dialog open={crDialogOpen} onOpenChange={setCrDialogOpen}>
+        <DialogContent className="sm:max-w-md" aria-label="Form pengajuan change request">
+          <DialogHeader>
+            <DialogTitle>Ajukan Change Request</DialogTitle>
+            <DialogDescription>
+              Usulkan perubahan scope untuk {detail?.code ?? "project"}. Setelah klien menyetujui, nilai kontrak &amp;
+              deadline project otomatis diperbarui dan invoice tambahan dibuat.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitCreateCr} className="space-y-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="cr-title">Judul</Label>
+              <Input
+                id="cr-title"
+                value={crTitle}
+                onChange={(e) => setCrTitle(e.target.value)}
+                placeholder="Contoh: Tambahan halaman landing page"
+                required
+                aria-label="Judul change request"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="cr-desc">Deskripsi perubahan scope</Label>
+              <Textarea
+                id="cr-desc"
+                value={crDesc}
+                onChange={(e) => setCrDesc(e.target.value)}
+                placeholder="Jelaskan perubahan scope yang diminta…"
+                rows={3}
+                required
+                aria-label="Deskripsi perubahan scope"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="cr-cost">Biaya tambahan (IDR)</Label>
+                <Input
+                  id="cr-cost"
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={crCost}
+                  onChange={(e) => setCrCost(e.target.value)}
+                  placeholder="0"
+                  aria-label="Biaya tambahan dalam rupiah"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="cr-days">Perpanjangan deadline (hari)</Label>
+                <Input
+                  id="cr-days"
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={crDays}
+                  onChange={(e) => setCrDays(e.target.value)}
+                  placeholder="0"
+                  aria-label="Perpanjangan deadline dalam hari"
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Diajukan oleh {user?.name ?? "-"} — menunggu persetujuan Direktur, Super Admin, atau klien.
+            </p>
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCrDialogOpen(false)}
+                disabled={crSaving}
+                aria-label="Batal ajukan change request"
+              >
+                Batal
+              </Button>
+              <Button type="submit" disabled={crSaving} aria-label="Kirim pengajuan change request">
+                {crSaving ? "Mengirim…" : "Ajukan Change Request"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* AlertDialog konfirmasi keputusan change request */}
+      <AlertDialog
+        open={decideTarget !== null}
+        onOpenChange={(open) => { if (!open) setDecideTarget(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {decideTarget?.decision === "approve" ? "Setujui change request?" : "Tolak change request?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {decideTarget
+                ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
+                : ""}
+              {decideTarget?.decision === "approve"
+                ? " Nilai kontrak &amp; deadline project akan diperbarui dan invoice tambahan diterbitkan otomatis."
+                : " Perubahan scope tidak akan diterapkan."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="cr-decision-note">Catatan keputusan (opsional)</Label>
+            <Textarea
+              id="cr-decision-note"
+              value={decideNote}
+              onChange={(e) => setDecideNote(e.target.value)}
+              placeholder={decideTarget?.decision === "approve" ? "Contoh: Disetujui sesuai diskusi dengan klien" : "Contoh: Scope di luar anggaran tahun ini"}
+              rows={3}
+              aria-label="Catatan keputusan change request"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deciding} aria-label="Batal memutuskan change request">Batal</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deciding}
+              onClick={(e) => { e.preventDefault(); void submitDecision(); }}
+              className={
+                decideTarget?.decision === "approve"
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-rose-600 text-white hover:bg-rose-700"
+              }
+              aria-label={decideTarget?.decision === "approve" ? "Konfirmasi setujui change request" : "Konfirmasi tolak change request"}
+            >
+              {deciding ? "Memproses…" : decideTarget?.decision === "approve" ? "Ya, Setujui" : "Ya, Tolak"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

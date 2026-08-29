@@ -172,6 +172,8 @@ export interface ProjectDTO {
   budgetInternal?: number;
   contractValue?: number;
   milestones?: MilestoneDTO[];
+  /** Daftar change request project (ringkas) — Produksi Fase 2. */
+  changeRequests?: ChangeRequestDTO[];
 }
 
 export interface MilestoneDTO {
@@ -181,6 +183,26 @@ export interface MilestoneDTO {
   order: number;
   status: string;
   dueDate?: string | null;
+}
+
+/** Scope change request (Fase 2 Produksi) — persetujuan klien → invoice tambahan. */
+export interface ChangeRequestDTO {
+  id: string;
+  number: string;
+  projectId: string;
+  project?: { id: string; code: string; name: string; status: string; dueDate?: string | null; brand?: Brand; company?: CompanyRef } | null;
+  title: string;
+  description: string;
+  additionalCost: number;
+  additionalDays: number;
+  status: string; // pending, approved, rejected, cancelled
+  requestedBy: string;
+  decidedBy?: string | null;
+  decidedAt?: string | null;
+  decisionNote?: string | null;
+  invoiceId?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface InvoiceDTO {

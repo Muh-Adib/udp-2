@@ -38,12 +38,14 @@ export async function GET(req: NextRequest) {
   const status = sp.get("status");
   const brandId = sp.get("brandId");
   const opportunityId = sp.get("opportunityId");
+  const companyId = sp.get("companyId");
 
   const quotations = await db.quotation.findMany({
     where: {
       ...(status && status !== "all" ? { status } : {}),
       ...(brandId && brandId !== "all" ? { brandId } : {}),
       ...(opportunityId ? { opportunityId } : {}),
+      ...(companyId ? { companyId } : {}),
     },
     include: {
       brand: true,

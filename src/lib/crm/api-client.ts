@@ -60,11 +60,12 @@ export const api = {
     ),
 
   // Quotations (Fase 2)
-  quotations: (params?: { status?: string; brandId?: string; opportunityId?: string }) => {
+  quotations: (params?: { status?: string; brandId?: string; opportunityId?: string; companyId?: string }) => {
     const sp = new URLSearchParams();
     if (params?.status && params.status !== "all") sp.set("status", params.status);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+    if (params?.companyId) sp.set("companyId", params.companyId);
     return request<{ quotations: import("@/lib/crm/types").QuotationDTO[] }>(`/api/quotations?${sp}`);
   },
   createQuotation: (payload: Record<string, unknown>) =>
@@ -147,6 +148,21 @@ export const api = {
   },
   updateProject: (payload: Record<string, unknown>) =>
     request<{ project: ProjectDTO }>("/api/projects", { method: "PATCH", body: JSON.stringify(payload) }),
+
+  // Change Requests (Fase 2 — Produksi): scope change → persetujuan klien → invoice tambahan
+  changeRequests: (params?: { projectId?: string; companyId?: string; status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.projectId) sp.set("projectId", params.projectId);
+    if (params?.companyId) sp.set("companyId", params.companyId);
+    if (params?.status && params.status !== "all") sp.set("status", params.status);
+    return request<{ changeRequests: import("@/lib/crm/types").ChangeRequestDTO[] }>(`/api/change-requests?${sp}`);
+  },
+  createChangeRequest: (payload: Record<string, unknown>) =>
+    request<{ changeRequest: import("@/lib/crm/types").ChangeRequestDTO }>("/api/change-requests", { method: "POST", body: JSON.stringify(payload) }),
+  decideChangeRequest: (payload: { id: string; decision: "approve" | "reject" | "cancel"; decisionNote?: string; actorName: string; actorRole: string }) =>
+    request<{ changeRequest: import("@/lib/crm/types").ChangeRequestDTO; invoice?: { id: string; number: string } | null }>(
+      "/api/change-requests", { method: "PATCH", body: JSON.stringify(payload) }
+    ),
 
   // Invoices
   invoices: (params?: { status?: string; brandId?: string; companyId?: string }) => {

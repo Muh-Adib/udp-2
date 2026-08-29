@@ -10,6 +10,7 @@ export async function seedDatabase(force = false) {
   if (existing > 0 && !force) return { seeded: false, reason: "data already exists" };
 
   // Clean (order matters)
+  await db.changeRequest.deleteMany();
   await db.approvalRequest.deleteMany();
   await db.estimation.deleteMany();
   await db.quotation.deleteMany();
@@ -361,6 +362,42 @@ export async function seedDatabase(force = false) {
     notes: "Revisi penawaran final — disetujui client via WhatsApp.",
   }});
 
+  // ============ CHANGE REQUESTS (Fase 2 — Produksi) ============
+  const projUms = await db.project.findUnique({ where: { code: "UMS-2025-007" } });
+  const projUcs = await db.project.findUnique({ where: { code: "UCS-2025-014" } });
+  if (projUms && projUcs) {
+    // CR-2026-0001: sudah disetujui — kontrak naik + invoice tambahan draft terkait
+    const cr1Tax = Math.round(12000000 * 0.11);
+    const cr1Invoice = await db.invoice.create({ data: {
+      number: "UMS-2025-INV-009", brandId: projUms.brandId, companyId: projUms.companyId,
+      projectId: projUms.id, opportunityId: projUms.opportunityId,
+      description: "Invoice tambahan — Change Request CR-2026-0001: Tambahan 3 episode subtitle bilingual",
+      amount: 12000000, taxRate: 11, taxAmount: cr1Tax, total: 12000000 + cr1Tax,
+      currency: "IDR", status: "sent", issueDate: ago(6), dueDate: ahead(8),
+      notes: "Dibuat otomatis dari change request CR-2026-0001 (disetujui oleh Sari Wulandari)",
+    }});
+    const cr1 = await db.changeRequest.create({ data: {
+      number: "CR-2026-0001", projectId: projUms.id,
+      title: "Tambahan 3 episode subtitle bilingual",
+      description: "Klien meminta 3 episode tambahan subtitle bahasa Inggris + Spain untuk distribusi internasional. Menambah beban translation & QC 3 hari kerja.",
+      additionalCost: 12000000, additionalDays: 5,
+      status: "approved", requestedBy: "Budi Hartono",
+      decidedBy: "Sari Wulandari", decidedAt: ago(6),
+      decisionNote: "Disetujui via email klien (Kemdikbud). Invoice tambahan diterbitkan.",
+      invoiceId: cr1Invoice.id,
+    }});
+    await db.project.update({ where: { id: projUms.id }, data: { contractValue: { increment: 12000000 }, dueDate: projUms.dueDate ? new Date(projUms.dueDate.getTime() + 5 * DAY) : null } });
+
+    // CR-2026-0002: pending — menunggu persetujuan klien (tampil di Client Portal)
+    await db.changeRequest.create({ data: {
+      number: "CR-2026-0002", projectId: projUcs.id,
+      title: "Tambahan versi bahasa Inggris video corporate",
+      description: "PT Nusantara Digital Raya meminta narasi & grafis versi bahasa Inggris untuk pemirsa regional. Menambah voice over EN + 2 hari editing.",
+      additionalCost: 18500000, additionalDays: 7,
+      status: "pending", requestedBy: "Budi Hartono",
+    }});
+  }
+
   // ============ FOLLOW-UP TEMPLATES ============
   await db.followUpTemplate.createMany({ data: [
     { name: "Follow-up 1 - Konfirmasi diterima", brandId: null, channel: "whatsapp", delayDays: 1, body: "Halo {{contact_name}}, saya {{marketing_name}} dari {{brand_name}}. Pesan Bapak/Ibu terkait {{service_name}} sudah kami terima. Apakah ada waktu 15 menit untuk konsultasi singkat minggu ini?", approved: true },
@@ -378,6 +415,7 @@ export async function seedDatabase(force = false) {
     { actor: "Maya Kusuma", role: "finance", action: "create", entity: "invoice", label: "SGT-2025-INV-002", meta: "Termin 2 (40%) - Milestone Development" },
     { actor: "Andi Saputra", role: "marketing", action: "update", entity: "opportunity", label: "Video AI onboarding karyawan", field: "estimatedValue", oldValue: "95000000", newValue: "88000000" },
     { actor: "Andi Saputra", role: "marketing", action: "stage_change", entity: "opportunity", label: "Animasi campaign antikorupsi", field: "lostReason", oldValue: null, newValue: "Memilih kompetitor" },
+    { actor: "Budi Hartono", role: "production", action: "create", entity: "change_request", label: "CR-2026-0002 — Tambahan versi bahasa Inggris video corporate", meta: "Change request +Rp 18.500.000, +7 hari — menunggu persetujuan klien" },
   ];
   for (let i = 0; i < auditSeeds.length; i++) {
     const a = auditSeeds[i];
@@ -392,7 +430,8 @@ export async function seedDatabase(force = false) {
 
   const counts = {
     brands: 4, users: 7, companies: companies.length, contacts: contacts.length,
-    opportunities: opps.length, projects: wonDefs.length, invoices: invDefs.length,
+    opportunities: opps.length, projects: wonDefs.length, invoices: invDefs.length + 1,
+    changeRequests: 2,
   };
   return { seeded: true, counts };
 }

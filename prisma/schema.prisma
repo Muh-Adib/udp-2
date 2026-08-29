@@ -50,7 +50,7 @@ model User {
 // ============ IDENTITY (company-centric & contact-centric) ============
 
 model Company {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   name            String
   industry        String?
   website         String?
@@ -60,13 +60,13 @@ model Company {
   address         String?
   size            String? // startup, sme, enterprise, government
   taxId           String?
-  defaultCurrency String   @default("IDR")
-  lifetimeValue   Float    @default(0)
-  tags            String   @default("[]") // JSON array
+  defaultCurrency String    @default("IDR")
+  lifetimeValue   Float     @default(0)
+  tags            String    @default("[]") // JSON array
   notes           String?
   deletedAt       DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   contacts      Contact[]
   opportunities Opportunity[]
@@ -108,44 +108,44 @@ model Contact {
 // ============ SALES ============
 
 model Opportunity {
-  id               String    @id @default(cuid())
-  title            String
-  brandId          String
-  brand            Brand     @relation(fields: [brandId], references: [id])
-  companyId        String?
-  company          Company?  @relation(fields: [companyId], references: [id])
-  contactId        String
-  contact          Contact   @relation(fields: [contactId], references: [id])
-  serviceCategory  String? // animation, website, video, immersive...
-  serviceName      String?
-  leadSource       String? // instagram, whatsapp, email, website, referral, event
-  campaign         String?
-  brief            String?
-  requirements     String?
-  targetAudience   String?
-  deliverables     String?
-  targetDeadline   DateTime?
-  estimatedValue   Float?
-  currency         String    @default("IDR")
-  probability      Int       @default(20)
+  id                String    @id @default(cuid())
+  title             String
+  brandId           String
+  brand             Brand     @relation(fields: [brandId], references: [id])
+  companyId         String?
+  company           Company?  @relation(fields: [companyId], references: [id])
+  contactId         String
+  contact           Contact   @relation(fields: [contactId], references: [id])
+  serviceCategory   String? // animation, website, video, immersive...
+  serviceName       String?
+  leadSource        String? // instagram, whatsapp, email, website, referral, event
+  campaign          String?
+  brief             String?
+  requirements      String?
+  targetAudience    String?
+  deliverables      String?
+  targetDeadline    DateTime?
+  estimatedValue    Float?
+  currency          String    @default("IDR")
+  probability       Int       @default(20)
   expectedCloseDate DateTime?
-  ownerName        String?
-  priority         String    @default("medium") // low, medium, high, urgent
-  stage            String    @default("new") // new, contact_attempted, connected, qualified, discovery, estimation, proposal_sent, negotiation, verbal_agreement, won, lost, nurture
-  temperature      String    @default("warm") // hot, warm, cold
-  competitor       String?
-  nextAction       String?
-  nextActionDate   DateTime?
-  lostReason       String?
-  lostNotes        String?
-  lastOfferValue   Float?
-  reactivation     Boolean   @default(false)
-  followUpDate     DateTime?
-  nurtureSegment   String? // reoffer_30, reoffer_90, budget_season, cross_sell, smaller_package, alternative_service
-  crossSellOfId    String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  deletedAt        DateTime?
+  ownerName         String?
+  priority          String    @default("medium") // low, medium, high, urgent
+  stage             String    @default("new") // new, contact_attempted, connected, qualified, discovery, estimation, proposal_sent, negotiation, verbal_agreement, won, lost, nurture
+  temperature       String    @default("warm") // hot, warm, cold
+  competitor        String?
+  nextAction        String?
+  nextActionDate    DateTime?
+  lostReason        String?
+  lostNotes         String?
+  lastOfferValue    Float?
+  reactivation      Boolean   @default(false)
+  followUpDate      DateTime?
+  nurtureSegment    String? // reoffer_30, reoffer_90, budget_season, cross_sell, smaller_package, alternative_service
+  crossSellOfId     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
 
   interactions Interaction[]
   tasks        Task[]
@@ -158,79 +158,81 @@ model Opportunity {
 }
 
 model Interaction {
-  id            String       @id @default(cuid())
-  channel       String // whatsapp, email, instagram, website, phone, meeting, portal
-  direction     String // inbound, outbound
-  brandId       String?
-  externalId    String?
-  senderName    String?
-  recipientName String?
-  subject       String?
-  content       String
-  attachments   String? // JSON array
-  respondedBy   String?
-  respondedAt   DateTime?
+  id             String       @id @default(cuid())
+  channel        String // whatsapp, email, instagram, website, phone, meeting, portal
+  direction      String // inbound, outbound
+  brandId        String?
+  externalId     String?
+  senderName     String?
+  recipientName  String?
+  subject        String?
+  content        String
+  attachments    String? // JSON array
+  respondedBy    String?
+  respondedAt    DateTime?
   deliveryStatus String? // delivered, read, failed
-  opportunityId String?
-  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
-  contactId     String?
-  contact       Contact?     @relation(fields: [contactId], references: [id])
-  companyId     String?
-  brand         Brand?       @relation(fields: [brandId], references: [id])
-  createdAt     DateTime     @default(now())
+  opportunityId  String?
+  opportunity    Opportunity? @relation(fields: [opportunityId], references: [id])
+  contactId      String?
+  contact        Contact?     @relation(fields: [contactId], references: [id])
+  companyId      String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  createdAt      DateTime     @default(now())
 }
 
 model Task {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   title         String
   description   String?
-  type          String    @default("follow_up") // follow_up, meeting, internal, admin
-  priority      String    @default("medium") // low, medium, high
-  status        String    @default("open") // open, done, cancelled
+  type          String       @default("follow_up") // follow_up, meeting, internal, admin
+  priority      String       @default("medium") // low, medium, high
+  status        String       @default("open") // open, done, cancelled
   assigneeName  String?
   dueDate       DateTime?
   opportunityId String?
   opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
   completedAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 }
 
 model Note {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   body          String
   authorName    String
-  type          String   @default("internal") // internal, director_feedback
+  type          String      @default("internal") // internal, director_feedback
   opportunityId String
   opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
-  createdAt     DateTime @default(now())
+  createdAt     DateTime    @default(now())
 }
 
 // ============ FINANCE ============
 
 model Invoice {
-  id            String    @id @default(cuid())
-  number        String    @unique
-  brandId       String
-  brand         Brand     @relation(fields: [brandId], references: [id])
-  companyId     String
-  company       Company   @relation(fields: [companyId], references: [id])
-  projectId     String?
-  project       Project?  @relation(fields: [projectId], references: [id])
-  opportunityId String?
-  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
-  description   String?
-  amount        Float     @default(0)
-  taxRate       Float     @default(11) // PPN %
-  taxAmount     Float     @default(0)
-  total         Float     @default(0)
-  currency      String    @default("IDR")
-  status        String    @default("draft") // draft, sent, partial, paid, overdue, cancelled
-  issueDate     DateTime  @default(now())
-  dueDate       DateTime?
-  notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id              String         @id @default(cuid())
+  number          String         @unique
+  brandId         String
+  brand           Brand          @relation(fields: [brandId], references: [id])
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id])
+  projectId       String?
+  project         Project?       @relation(fields: [projectId], references: [id])
+  changeRequestId String?        @unique
+  changeRequest   ChangeRequest? @relation(fields: [changeRequestId], references: [id])
+  opportunityId   String?
+  opportunity     Opportunity?   @relation(fields: [opportunityId], references: [id])
+  description     String?
+  amount          Float          @default(0)
+  taxRate         Float          @default(11) // PPN %
+  taxAmount       Float          @default(0)
+  total           Float          @default(0)
+  currency        String         @default("IDR")
+  status          String         @default("draft") // draft, sent, partial, paid, overdue, cancelled
+  issueDate       DateTime       @default(now())
+  dueDate         DateTime?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   payments Payment[]
 }
@@ -249,28 +251,29 @@ model Payment {
 // ============ PRODUCTION ============
 
 model Project {
-  id              String    @id @default(cuid())
-  code            String    @unique
+  id              String       @id @default(cuid())
+  code            String       @unique
   name            String
   brandId         String
-  brand           Brand     @relation(fields: [brandId], references: [id])
+  brand           Brand        @relation(fields: [brandId], references: [id])
   companyId       String
-  company         Company   @relation(fields: [companyId], references: [id])
-  opportunityId   String?   @unique
+  company         Company      @relation(fields: [companyId], references: [id])
+  opportunityId   String?      @unique
   opportunity     Opportunity? @relation(fields: [opportunityId], references: [id])
   serviceCategory String?
-  status          String    @default("planning") // planning, in_progress, review, completed, cancelled
-  progress        Int       @default(0)
+  status          String       @default("planning") // planning, in_progress, review, completed, cancelled
+  progress        Int          @default(0)
   pmName          String?
   startDate       DateTime?
   dueDate         DateTime?
-  budgetInternal  Float     @default(0)
-  contractValue   Float     @default(0)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  budgetInternal  Float        @default(0)
+  contractValue   Float        @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
-  milestones Milestone[]
-  invoices   Invoice[]
+  milestones     Milestone[]
+  invoices       Invoice[]
+  changeRequests ChangeRequest[]
 }
 
 model Milestone {
@@ -284,109 +287,129 @@ model Milestone {
   createdAt DateTime  @default(now())
 }
 
+model ChangeRequest {
+  id             String    @id @default(cuid())
+  number         String    @unique // CR-2026-0001
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id])
+  title          String
+  description    String
+  additionalCost Float     @default(0) // tambahan nilai kontrak (net, sebelum PPN)
+  additionalDays Int       @default(0) // perpanjangan deadline (hari kalender)
+  status         String    @default("pending") // pending, approved, rejected, cancelled
+  requestedBy    String
+  decidedBy      String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  invoiceId      String? // invoice tambahan yang dibuat otomatis saat approved
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  invoice        Invoice?
+}
+
 // ============ GOVERNANCE ============
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  actorName String
-  actorRole String?
-  action    String // create, update, delete, stage_change, merge, login, convert
-  entity    String // opportunity, contact, company, task, invoice, project, interaction
-  entityId  String
+  id          String   @id @default(cuid())
+  actorName   String
+  actorRole   String?
+  action      String // create, update, delete, stage_change, merge, login, convert
+  entity      String // opportunity, contact, company, task, invoice, project, interaction
+  entityId    String
   entityLabel String?
-  field     String?
-  oldValue  String?
-  newValue  String?
-  metadata  String?
-  ip        String?
-  userAgent String?
-  createdAt DateTime @default(now())
+  field       String?
+  oldValue    String?
+  newValue    String?
+  metadata    String?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
 }
 
 model FollowUpTemplate {
-  id         String   @id @default(cuid())
-  name       String
-  brandId    String?
-  channel    String   @default("whatsapp")
-  language   String   @default("id")
-  stage      String?
-  delayDays  Int      @default(1)
-  body       String
-  version    Int      @default(1)
-  approved   Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  name      String
+  brandId   String?
+  channel   String   @default("whatsapp")
+  language  String   @default("id")
+  stage     String?
+  delayDays Int      @default(1)
+  body      String
+  version   Int      @default(1)
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ============ FASE 2: KOMERSIAL ============
 
 model Estimation {
-  id            String   @id @default(cuid())
-  opportunityId String   @unique
-  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  id               String      @id @default(cuid())
+  opportunityId    String      @unique
+  opportunity      Opportunity @relation(fields: [opportunityId], references: [id])
   // Cost breakdown kategori (IDR)
-  laborInternal   Float @default(0)
-  vendorFreelance Float @default(0)
-  equipment       Float @default(0)
-  transport       Float @default(0)
-  accommodation   Float @default(0)
-  talent          Float @default(0)
-  locationFee     Float @default(0)
-  softwareLicense Float @default(0)
-  hostingDomain   Float @default(0)
-  contingencyPct   Float @default(5)
-  managementFeePct Float @default(5)
-  discountPct      Float @default(0)
-  taxPct           Float @default(11)
-  targetMarginPct  Float @default(30)
+  laborInternal    Float       @default(0)
+  vendorFreelance  Float       @default(0)
+  equipment        Float       @default(0)
+  transport        Float       @default(0)
+  accommodation    Float       @default(0)
+  talent           Float       @default(0)
+  locationFee      Float       @default(0)
+  softwareLicense  Float       @default(0)
+  hostingDomain    Float       @default(0)
+  contingencyPct   Float       @default(5)
+  managementFeePct Float       @default(5)
+  discountPct      Float       @default(0)
+  taxPct           Float       @default(11)
+  targetMarginPct  Float       @default(30)
   // Hasil kalkulasi (disimpan saat save)
-  totalCost  Float @default(0)
-  contingency Float @default(0)
-  managementFee Float @default(0)
-  revenue   Float @default(0)
-  discountAmount Float @default(0)
-  netRevenue Float @default(0)
-  taxAmount  Float @default(0)
-  grandTotal Float @default(0)
-  margin     Float @default(0)
-  marginPct  Float @default(0)
-  notes      String?
-  status     String   @default("draft") // draft, pending_approval, approved, rejected
-  createdBy  String?
-  approvedBy String?
-  approvedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  totalCost        Float       @default(0)
+  contingency      Float       @default(0)
+  managementFee    Float       @default(0)
+  revenue          Float       @default(0)
+  discountAmount   Float       @default(0)
+  netRevenue       Float       @default(0)
+  taxAmount        Float       @default(0)
+  grandTotal       Float       @default(0)
+  margin           Float       @default(0)
+  marginPct        Float       @default(0)
+  notes            String?
+  status           String      @default("draft") // draft, pending_approval, approved, rejected
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 }
 
 model Quotation {
-  id            String   @id @default(cuid())
-  number        String   @unique
-  brandId       String
-  brand         Brand    @relation(fields: [brandId], references: [id])
-  opportunityId String
-  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
-  companyId     String
-  company       Company  @relation(fields: [companyId], references: [id])
-  items         String   @default("[]") // JSON [{description, qty, unitPrice, subtotal}]
-  subtotal      Float    @default(0)
-  discountPct    Float   @default(0)
-  discountAmount Float   @default(0)
-  taxPct        Float    @default(11)
-  taxAmount     Float    @default(0)
-  total         Float    @default(0)
-  currency      String   @default("IDR")
-  status        String   @default("draft") // draft, sent, accepted, rejected, expired
-  validUntil    DateTime?
-  notes         String?
-  sentAt        DateTime?
-  respondedAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String      @id @default(cuid())
+  number         String      @unique
+  brandId        String
+  brand          Brand       @relation(fields: [brandId], references: [id])
+  opportunityId  String
+  opportunity    Opportunity @relation(fields: [opportunityId], references: [id])
+  companyId      String
+  company        Company     @relation(fields: [companyId], references: [id])
+  items          String      @default("[]") // JSON [{description, qty, unitPrice, subtotal}]
+  subtotal       Float       @default(0)
+  discountPct    Float       @default(0)
+  discountAmount Float       @default(0)
+  taxPct         Float       @default(11)
+  taxAmount      Float       @default(0)
+  total          Float       @default(0)
+  currency       String      @default("IDR")
+  status         String      @default("draft") // draft, sent, accepted, rejected, expired
+  validUntil     DateTime?
+  notes          String?
+  sentAt         DateTime?
+  respondedAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 }
 
 model ApprovalRequest {
-  id            String   @id @default(cuid())
+  id            String       @id @default(cuid())
   entityType    String // estimation, discount, budget
   entityId      String
   entityLabel   String?
@@ -396,9 +419,9 @@ model ApprovalRequest {
   amount        Float?
   discountPct   Float?
   note          String?
-  status        String   @default("pending") // pending, approved, rejected
+  status        String       @default("pending") // pending, approved, rejected
   decidedBy     String?
   decidedAt     DateTime?
   decisionNote  String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime     @default(now())
 }

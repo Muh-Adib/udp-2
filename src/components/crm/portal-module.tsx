@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Building2, CalendarDays, CheckCircle2, CircleDotDashed, CircleDashed, Eye, FolderKanban,
-  Info, Lock, RefreshCw, ReceiptText, type LucideIcon,
+  Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Eye, FileSignature, FolderKanban,
+  GitPullRequestArrow, Info, Lock, RefreshCw, ReceiptText, X, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -17,10 +21,13 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
-import type { CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
-import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
+import type {
+  ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDTO, QuotationDTO, QuotationItemDTO,
+} from "@/lib/crm/types";
+import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 
 // ============ Meta ============
 
@@ -39,6 +46,21 @@ const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
   completed: { label: "Selesai", cls: "bg-emerald-100 text-emerald-700" },
 };
 
+const CR_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: "Menunggu Persetujuan Anda", cls: "bg-amber-100 text-amber-700" },
+  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+  cancelled: { label: "Dibatalkan", cls: "bg-zinc-100 text-zinc-600" },
+};
+
+const QUOTATION_STATUS: Record<string, { label: string; cls: string }> = {
+  draft: { label: "Draft", cls: "bg-zinc-100 text-zinc-600" },
+  sent: { label: "Terkirim", cls: "bg-violet-100 text-violet-700" },
+  accepted: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+  expired: { label: "Kedaluwarsa", cls: "bg-zinc-100 text-zinc-600" },
+};
+
 const MILESTONE_ICON: Record<string, LucideIcon> = {
   done: CheckCircle2,
   in_progress: CircleDotDashed,
@@ -47,6 +69,19 @@ const MILESTONE_ICON: Record<string, LucideIcon> = {
 
 function invStatus(s: string) { return INVOICE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
 function projStatus(s: string) { return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+function crStatus(s: string) { return CR_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+function quoteStatus(s: string) { return QUOTATION_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+
+/** Parse item quotation defensif — items bisa JSON string atau array. */
+function parseQuoteItems(items: string | QuotationItemDTO[]): QuotationItemDTO[] {
+  if (Array.isArray(items)) return items;
+  try {
+    const parsed: unknown = JSON.parse(items);
+    return Array.isArray(parsed) ? (parsed as QuotationItemDTO[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Domain dari URL/email sederhana, untuk mencocokkan akun client dengan perusahaannya. */
 function domainOf(raw?: string | null): string | null {
@@ -113,6 +148,98 @@ function PortalSkeleton() {
         {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-52 rounded-xl" />)}
       </div>
       <Skeleton className="h-48 rounded-xl" />
+      <Skeleton className="h-40 rounded-xl" />
+      <Skeleton className="h-40 rounded-xl" />
+    </div>
+  );
+}
+
+/** Isi sheet detail quotation — hanya lihat (meta, item, total, catatan). */
+function QuotationDetailBody({ quote }: { quote: QuotationDTO }) {
+  const items = parseQuoteItems(quote.items);
+  const hasDiscount = quote.discountPct > 0 || quote.discountAmount > 0;
+  return (
+    <div className="mt-4 space-y-5 px-4 pb-8">
+      <div className="flex items-center justify-between gap-2">
+        <Badge variant="outline" className={`border-transparent px-1.5 ${quoteStatus(quote.status).cls}`}>
+          {quoteStatus(quote.status).label}
+        </Badge>
+        <span className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(quote.total, quote.currency)}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <p className="text-xs text-zinc-500">Dibuat</p>
+          <p className="mt-0.5 text-zinc-800">{formatDateTime(quote.createdAt)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Dikirim</p>
+          <p className="mt-0.5 text-zinc-800">{quote.sentAt ? formatDateTime(quote.sentAt) : "-"}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Berlaku s.d.</p>
+          <p className="mt-0.5 text-zinc-800">{formatDate(quote.validUntil)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Peluang</p>
+          <p className="mt-0.5 truncate text-zinc-800">{quote.opportunity?.title ?? "-"}</p>
+        </div>
+      </div>
+      <div>
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          Rincian Item ({items.length})
+        </p>
+        {items.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-400">
+            Tidak ada item pada quotation ini.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-left text-zinc-400">
+                  <th scope="col" className="py-1.5 pr-2 font-medium">Item</th>
+                  <th scope="col" className="py-1.5 pr-2 text-right font-medium">Qty</th>
+                  <th scope="col" className="py-1.5 pr-2 text-right font-medium">Harga</th>
+                  <th scope="col" className="py-1.5 text-right font-medium">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {items.map((it, idx) => (
+                  <tr key={idx} className="align-top">
+                    <td className="py-2 pr-2 text-zinc-800">{it.description ?? "-"}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums text-zinc-600">{it.qty ?? 0}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums text-zinc-600">{formatCurrencyFull(it.unitPrice, quote.currency)}</td>
+                    <td className="py-2 text-right tabular-nums font-medium text-zinc-900">{formatCurrencyFull(it.subtotal, quote.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="space-y-1.5 border-t border-zinc-100 pt-3 text-sm">
+        <div className="flex items-center justify-between gap-2 text-zinc-600">
+          <span>Subtotal</span>
+          <span className="tabular-nums">{formatCurrencyFull(quote.subtotal, quote.currency)}</span>
+        </div>
+        {hasDiscount ? (
+          <div className="flex items-center justify-between gap-2 text-zinc-600">
+            <span>Diskon{quote.discountPct > 0 ? ` ${quote.discountPct}%` : ""}</span>
+            <span className="tabular-nums text-emerald-600">-{formatCurrencyFull(quote.discountAmount, quote.currency)}</span>
+          </div>
+        ) : null}
+        <div className="flex items-center justify-between gap-2 text-zinc-600">
+          <span>PPN {quote.taxPct}%</span>
+          <span className="tabular-nums">{formatCurrencyFull(quote.taxAmount, quote.currency)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-zinc-100 pt-2 text-base font-bold text-zinc-900">
+          <span>Total</span>
+          <span className="tabular-nums">{formatCurrencyFull(quote.total, quote.currency)}</span>
+        </div>
+      </div>
+      {quote.notes ? (
+        <blockquote className="border-l-2 border-zinc-200 pl-3 text-xs italic text-zinc-500">{quote.notes}</blockquote>
+      ) : null}
     </div>
   );
 }
@@ -130,10 +257,16 @@ export default function PortalModule() {
 
   const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
   const [invoices, setInvoices] = useState<InvoiceDTO[] | null>(null);
+  const [changeRequests, setChangeRequests] = useState<ChangeRequestDTO[] | null>(null);
+  const [quotations, setQuotations] = useState<QuotationDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<InvoiceDTO | null>(null);
+  const [quoteDetail, setQuoteDetail] = useState<QuotationDTO | null>(null);
+  const [crDecision, setCrDecision] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" } | null>(null);
+  const [decisionNote, setDecisionNote] = useState("");
+  const [savingDecide, setSavingDecide] = useState<string | null>(null);
 
   /** Untuk role client: cari perusahaan miliknya ( companyName → fallback domain email vs website perusahaan). */
   const resolveClientCompany = useCallback(async (): Promise<CompanyRef | null> => {
@@ -156,12 +289,16 @@ export default function PortalModule() {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const [projRes, invRes] = await Promise.all([
+      const [projRes, invRes, crRes, quoteRes] = await Promise.all([
         api.projects({ companyId }),
         api.invoices({ companyId }),
+        api.changeRequests({ companyId }),
+        api.quotations({ companyId }),
       ]);
       setProjects(projRes.projects);
       setInvoices(invRes.invoices);
+      setChangeRequests(crRes.changeRequests);
+      setQuotations(quoteRes.quotations);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat data portal");
       if (!silent) toast.error("Gagal memuat data portal klien");
@@ -212,7 +349,63 @@ export default function PortalModule() {
     setSelectedCompanyId(id);
     setProjects(null);
     setInvoices(null);
+    setChangeRequests(null);
+    setQuotations(null);
+    setDetail(null);
+    setQuoteDetail(null);
     void loadCompanyData(id);
+  }
+
+  const canDecide = isClient || canPreview; // client / director / super_admin
+
+  const crSummary = useMemo(() => {
+    const list = changeRequests ?? [];
+    const approved = list.filter((c) => c.status === "approved");
+    return {
+      pendingCount: list.filter((c) => c.status === "pending").length,
+      approvedCount: approved.length,
+      approvedValue: approved.reduce((s, c) => s + (c.additionalCost ?? 0), 0),
+    };
+  }, [changeRequests]);
+
+  /** Brand unik dari project yang dimuat — strip identitas agency di header konten. */
+  const brandStrip = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; color: string; count: number }>();
+    for (const p of projects ?? []) {
+      if (!p.brand) continue;
+      const cur = map.get(p.brand.id) ?? { id: p.brand.id, name: p.brand.name, color: p.brand.color, count: 0 };
+      cur.count += 1;
+      map.set(p.brand.id, cur);
+    }
+    return [...map.values()];
+  }, [projects]);
+
+  async function confirmDecision() {
+    const target = crDecision;
+    if (!target || !user) return;
+    const { cr, decision } = target;
+    setSavingDecide(cr.id);
+    try {
+      const res = await api.decideChangeRequest({
+        id: cr.id,
+        decision,
+        decisionNote: decisionNote.trim() || undefined,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      if (decision === "approve") {
+        toast.success(res.invoice?.number ? `Perubahan disetujui — invoice ${res.invoice.number} diterbitkan` : "Perubahan disetujui");
+      } else {
+        toast.info("Perubahan ditolak — tim kami akan mengikuti scope awal");
+      }
+      setCrDecision(null);
+      setDecisionNote("");
+      if (activeCompany) void loadCompanyData(activeCompany.id, true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memutuskan permintaan perubahan");
+    } finally {
+      setSavingDecide(null);
+    }
   }
 
   if (loading && projects === null && !isClient) return <PortalSkeleton />;
@@ -297,6 +490,19 @@ export default function PortalModule() {
             </p>
           </div>
 
+          {/* Strip brand yang mengerjakan project klien */}
+          {brandStrip.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2" role="list" aria-label="Brand yang mengerjakan project Anda">
+              {brandStrip.map((b) => (
+                <span key={b.id} role="listitem" className="flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-1 text-xs text-zinc-700">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+                  <span className="font-medium">{b.name}</span>
+                  <span className="text-zinc-400">· {b.count} project</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+
           {/* Ringkasan invoice */}
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
             <div className="rounded-xl border bg-white p-4 shadow-sm">
@@ -331,6 +537,141 @@ export default function PortalModule() {
             ) : (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {projects.map((p) => <PortalProjectCard key={p.id} project={p} />)}
+              </div>
+            )}
+          </section>
+
+          {/* Permintaan Perubahan (Change Request) — persetujuan klien */}
+          <section aria-label="Permintaan perubahan scope" className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              <GitPullRequestArrow className="h-4 w-4 text-zinc-400" aria-hidden /> Permintaan Perubahan (Change Request)
+            </h2>
+            {(crSummary.pendingCount > 0 || crSummary.approvedCount > 0 || crSummary.approvedValue > 0) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {crSummary.pendingCount > 0 ? (
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                    {crSummary.pendingCount} menunggu persetujuan
+                  </span>
+                ) : null}
+                {crSummary.approvedCount > 0 ? (
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                    {crSummary.approvedCount} disetujui
+                  </span>
+                ) : null}
+                {crSummary.approvedValue > 0 ? (
+                  <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium tabular-nums text-zinc-600">
+                    Total nilai tambah {formatCurrency(crSummary.approvedValue)}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {changeRequests === null ? (
+              <Skeleton className="h-40 rounded-xl" aria-hidden />
+            ) : changeRequests.length === 0 ? (
+              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+                Tidak ada permintaan perubahan scope.
+              </div>
+            ) : (
+              <div className="max-h-96 space-y-3 overflow-y-auto crm-scroll pr-1">
+                {changeRequests.map((cr) => {
+                  const st = crStatus(cr.status);
+                  return (
+                    <div key={cr.id} className="rounded-xl border bg-white p-4 shadow-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-mono text-sm font-semibold text-zinc-900">{cr.number}</p>
+                        <Badge variant="outline" className={`border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+                        {cr.project?.code ? (
+                          <span className="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] text-zinc-500">{cr.project.code}</span>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-zinc-900">{cr.title}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{cr.description}</p>
+                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+                        <span className="font-bold tabular-nums text-emerald-600">+{formatCurrency(cr.additionalCost)}</span>
+                        {cr.additionalDays > 0 ? (
+                          <span className="flex items-center gap-1 text-zinc-600">
+                            <CalendarClock className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> +{cr.additionalDays} hari deadline
+                          </span>
+                        ) : null}
+                        <span className="text-zinc-400">
+                          Diajukan {timeAgo(cr.createdAt)}{cr.requestedBy ? ` oleh ${cr.requestedBy}` : ""}
+                        </span>
+                      </div>
+                      {cr.status !== "pending" && cr.decidedBy ? (
+                        <div className="mt-2 border-t border-zinc-100 pt-2 text-xs text-zinc-500">
+                          <p>Diputuskan oleh {cr.decidedBy}</p>
+                          {cr.decisionNote ? <p className="mt-0.5 italic">“{cr.decisionNote}”</p> : null}
+                        </div>
+                      ) : null}
+                      {cr.status === "pending" && canDecide ? (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="bg-zinc-900 text-white hover:bg-zinc-800"
+                            disabled={savingDecide === cr.id}
+                            onClick={() => { setDecisionNote(""); setCrDecision({ cr, decision: "approve" }); }}
+                            aria-label={`Setujui permintaan perubahan ${cr.number}`}
+                          >
+                            <Check className="h-3.5 w-3.5" aria-hidden /> Setujui Perubahan
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                            disabled={savingDecide === cr.id}
+                            onClick={() => { setDecisionNote(""); setCrDecision({ cr, decision: "reject" }); }}
+                            aria-label={`Tolak permintaan perubahan ${cr.number}`}
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Quotation perusahaan */}
+          <section aria-label="Quotation perusahaan" className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              <FileSignature className="h-4 w-4 text-zinc-400" aria-hidden /> Quotation
+            </h2>
+            {quotations === null ? (
+              <Skeleton className="h-40 rounded-xl" aria-hidden />
+            ) : quotations.length === 0 ? (
+              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+                Belum ada quotation untuk perusahaan ini.
+              </div>
+            ) : (
+              <div className="max-h-96 space-y-3 overflow-y-auto crm-scroll pr-1">
+                {quotations.map((q) => {
+                  const st = quoteStatus(q.status);
+                  return (
+                    <div key={q.id} className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-mono text-sm font-semibold text-zinc-900">{q.number}</p>
+                          <Badge variant="outline" className={`border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+                          {q.brand ? (
+                            <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+                              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: q.brand.color }} aria-hidden />
+                              {q.brand.name}
+                            </span>
+                          ) : null}
+                        </div>
+                        {q.validUntil ? <p className="mt-1 text-xs text-zinc-500">Berlaku s.d. {formatDate(q.validUntil)}</p> : null}
+                      </div>
+                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+                        <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(q.total, q.currency)}</p>
+                        <Button variant="outline" size="sm" onClick={() => setQuoteDetail(q)} aria-label={`Lihat detail quotation ${q.number}`}>
+                          <Eye className="h-3.5 w-3.5" aria-hidden /> Lihat
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -441,6 +782,71 @@ export default function PortalModule() {
                   Pertanyaan tentang invoice ini? Hubungi tim account manager Anda — pembayaran diproses melalui tim keuangan.
                 </p>
               </div>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+
+      {/* AlertDialog keputusan change request (approve / reject) */}
+      <AlertDialog
+        open={crDecision !== null}
+        onOpenChange={(open) => { if (!open) { setCrDecision(null); setDecisionNote(""); } }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {crDecision?.decision === "approve"
+                ? `Setujui ${crDecision.cr.number}?`
+                : `Tolak ${crDecision?.cr.number ?? ""}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div>
+                <p>
+                  {crDecision?.decision === "approve" ? (
+                    <>
+                      Menyetujui berarti menambah nilai kontrak sebesar{" "}
+                      <span className="font-semibold text-emerald-700">{formatCurrency(crDecision.cr.additionalCost)}</span>{" "}
+                      dan memperpanjang deadline {crDecision.cr.additionalDays} hari. Invoice tambahan akan diterbitkan.
+                    </>
+                  ) : (
+                    "Menolak berarti permintaan perubahan ini tidak diterapkan — scope, nilai kontrak, dan deadline tetap mengikuti kesepakatan awal."
+                  )}
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Textarea
+            value={decisionNote}
+            onChange={(e) => setDecisionNote(e.target.value)}
+            placeholder="Catatan untuk tim (opsional)…"
+            rows={3}
+            aria-label="Catatan keputusan (opsional)"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={savingDecide !== null}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className={crDecision?.decision === "approve" ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-rose-600 text-white hover:bg-rose-700"}
+              disabled={savingDecide !== null}
+              onClick={(e) => { e.preventDefault(); void confirmDecision(); }}
+            >
+              {savingDecide !== null ? "Memproses…" : crDecision?.decision === "approve" ? "Ya, Setujui" : "Ya, Tolak"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Sheet detail quotation — khusus lihat saja */}
+      <Sheet open={quoteDetail !== null} onOpenChange={(open) => { if (!open) setQuoteDetail(null); }}>
+        <SheetContent className="w-full overflow-y-auto crm-scroll sm:max-w-md">
+          {quoteDetail ? (
+            <>
+              <SheetHeader>
+                <SheetTitle className="font-mono">{quoteDetail.number}</SheetTitle>
+                <SheetDescription>
+                  {quoteDetail.company?.name ?? "-"} · {quoteDetail.brand?.name ?? "-"}
+                </SheetDescription>
+              </SheetHeader>
+              <QuotationDetailBody quote={quoteDetail} />
             </>
           ) : null}
         </SheetContent>

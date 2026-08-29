@@ -14,7 +14,10 @@ export async function GET(req: NextRequest) {
       ...(companyId ? { companyId } : {}),
       ...(brandId && brandId !== "all" ? { brandId } : {}),
     },
-    include: { brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true },
+    include: {
+      brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
+      changeRequests: { orderBy: { createdAt: "desc" } },
+    },
     orderBy: { createdAt: "desc" },
   });
   return ok({ projects });
