@@ -53,6 +53,15 @@ const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
   { label: "Sistem", modules: ["channels", "brands", "users", "audit"] },
 ];
 
+// 4 slot modul bottom-nav mobile + 1 tombol "Menu" (membuka Sheet hamburger).
+// Item difilter canAccess agar role terbatas (mis. client) tidak melihat tombol mati.
+const MOBILE_NAV: { key: ModuleKey; label: string }[] = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "inbox", label: "Inbox" },
+  { key: "contacts", label: "Kontak" },
+  { key: "pipeline", label: "Pipeline" },
+];
+
 function roleLabel(role: string) {
   return ROLES.find((r) => r.key === role)?.label ?? role;
 }
@@ -98,6 +107,59 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
           </div>
         );
       })}
+    </nav>
+  );
+}
+
+function MobileNav({ onOpenMenu }: { onOpenMenu: () => void }) {
+  const { user, activeModule, setActiveModule } = useCrmStore();
+  if (!user) return null;
+  const items = MOBILE_NAV.filter((m) => canAccess(m.key, user.role));
+  return (
+    <nav
+      aria-label="Navigasi bawah"
+      className="fixed inset-x-0 bottom-0 z-40 flex border-t border-zinc-200 bg-white/95 backdrop-blur lg:hidden"
+      style={{ paddingBottom: "max(0.25rem, env(safe-area-inset-bottom))" }}
+    >
+      {items.map((m) => {
+        const Icon = MODULE_ICONS[m.key];
+        const active = activeModule === m.key;
+        return (
+          <button
+            key={m.key}
+            type="button"
+            onClick={() => setActiveModule(m.key)}
+            aria-current={active ? "page" : undefined}
+            aria-label={`Modul ${m.label}`}
+            className={cn(
+              "relative flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] transition-colors",
+              active ? "font-semibold text-zinc-900" : "text-zinc-500"
+            )}
+          >
+            {active && <span className="absolute top-0 left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-zinc-900" aria-hidden />}
+            <span className="relative">
+              <Icon className="size-5" aria-hidden />
+              {m.key === "inbox" && activeModule !== "inbox" && (
+                <span
+                  className="absolute -right-1.5 -top-1 size-2 rounded-full bg-rose-600"
+                  title="Ada lead baru menunggu respons"
+                  aria-label="Ada lead baru di inbox"
+                />
+              )}
+            </span>
+            <span>{m.label}</span>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        onClick={onOpenMenu}
+        aria-label="Buka menu navigasi"
+        className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] text-zinc-500 transition-colors"
+      >
+        <Menu className="size-5" aria-hidden />
+        <span>Menu</span>
+      </button>
     </nav>
   );
 }
@@ -150,11 +212,11 @@ export default function AppShell() {
         <BrandStrip />
       </aside>
 
-      {/* Konten */}
-      <div className="flex min-h-screen w-full flex-col lg:pl-64">
+      {/* Konten (pb-16 agar footer tidak tertutup bottom-nav mobile) */}
+      <div className="flex min-h-screen w-full flex-col pb-16 lg:pb-0 lg:pl-64">
         {/* Header */}
         <header className="sticky top-0 z-30 border-b border-zinc-200 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/75">
-          <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
+          <div className="flex h-14 items-center gap-2 px-4 sm:gap-3 lg:px-6">
             {/* Hamburger mobile */}
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
               <SheetTrigger asChild>
@@ -178,7 +240,7 @@ export default function AppShell() {
 
             {/* Filter brand global */}
             <Select value={activeBrandFilter} onValueChange={setActiveBrandFilter}>
-              <SelectTrigger className="w-[150px] sm:w-[170px]" aria-label="Filter brand global">
+              <SelectTrigger className="w-[110px] shrink-0 sm:w-[170px]" aria-label="Filter brand global">
                 <SelectValue placeholder="Semua Brand" />
               </SelectTrigger>
               <SelectContent>
@@ -273,6 +335,9 @@ export default function AppShell() {
           </div>
         </footer>
       </div>
+
+      {/* Navigasi bawah khusus mobile */}
+      <MobileNav onOpenMenu={() => setMobileOpen(true)} />
     </div>
   );
 }

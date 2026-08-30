@@ -13,7 +13,9 @@ import {
   Banknote,
   Briefcase,
   Building2,
+  Check,
   CheckCircle2,
+  CheckCheck,
   ChevronDown,
   Clock,
   CopyX,
@@ -33,6 +35,7 @@ import {
   MailPlus,
   MapPin,
   MessageCircle,
+  MessagesSquare,
   Music2,
   Pencil,
   Phone,
@@ -101,9 +104,10 @@ import type {
   ImportCommitResponseDTO,
   ImportPreviewResponseDTO,
   ImportPreviewRowDTO,
+  InteractionDTO,
   MatchCandidateDTO,
 } from "@/lib/crm/types";
-import { formatCurrency, initials, parseJsonArray } from "@/lib/crm/utils";
+import { formatCurrency, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
 // ---------- Tipe lokal ----------
@@ -194,6 +198,16 @@ const CHANNEL_ICONS: Record<string, LucideIcon> = {
   phone: Phone,
   meeting: Video,
   portal: LayoutDashboard,
+};
+
+/** Warna badge kanal pada header riwayat percakapan (tanpa indigo/blue). */
+const CHANNEL_BADGE_CLASS: Record<string, string> = {
+  whatsapp: "bg-emerald-100 text-emerald-700",
+  email: "bg-amber-100 text-amber-700",
+  instagram: "bg-rose-100 text-rose-700",
+  website: "bg-violet-100 text-violet-700",
+  phone: "bg-cyan-100 text-cyan-700",
+  meeting: "bg-zinc-200 text-zinc-700",
 };
 
 const LANGUAGE_LABELS: Record<string, string> = { id: "Bahasa Indonesia", en: "English" };
@@ -536,6 +550,14 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
           <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
           <span className="truncate">{contact.whatsapp || "—"}</span>
         </p>
+        {typeof contact._count?.interactions === "number" && contact._count.interactions > 0 && (
+          <p className="flex items-center gap-1.5">
+            <MessagesSquare className="size-3.5 shrink-0 text-zinc-400" />
+            <span className="truncate">
+              {contact._count.interactions} pesan percakapan
+            </span>
+          </p>
+        )}
       </div>
 
       {tags.length > 0 && (
@@ -683,6 +705,205 @@ function ContactFormFields({
         </FormField>
       </div>
     </div>
+  );
+}
+
+// ---------- Riwayat percakapan (Task 24-b): timeline chat bubble per kontak ----------
+
+/** Tick status kirim pesan outbound: read/delivered emerald, sent zinc, failed rose. */
+function DeliveryTick({ status }: { status?: string | null }) {
+  if (!status) return null;
+  const s = status.toLowerCase();
+  const meta =
+    s === "read" || s === "delivered"
+      ? { Icon: CheckCheck, cls: "text-emerald-400", label: "Pesan dibaca" }
+      : s === "sent"
+        ? { Icon: Check, cls: "text-zinc-400", label: "Pesan terkirim" }
+        : s === "failed"
+          ? { Icon: AlertTriangle, cls: "text-rose-400", label: "Pesan gagal terkirim" }
+          : null;
+  if (!meta) return null;
+  const { Icon, cls, label } = meta;
+  return <Icon className={cn("size-3.5 shrink-0", cls)} role="img" aria-label={label} />;
+}
+
+/** Satu gelembung chat: inbound rata kiri (zinc-100), outbound rata kanan (zinc-900). */
+function ConversationBubble({ item, contactName }: { item: InteractionDTO; contactName: string }) {
+  const outbound = item.direction === "outbound";
+  const ChannelIcon = CHANNEL_ICONS[item.channel] ?? Globe;
+  const author = outbound ? item.respondedBy || "Tim CRM" : item.senderName || contactName || "Kontak";
+  const isReply = Boolean(outbound && item.externalId?.startsWith("inbox-reply:"));
+  const hasOpp = Boolean(item.opportunity);
+
+  return (
+    <li className={cn("flex max-w-[85%] flex-col", outbound ? "self-end items-end" : "self-start items-start")}>
+      <div
+        className={cn(
+          "min-w-0 space-y-1 rounded-2xl px-3.5 py-2.5",
+          outbound ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-900"
+        )}
+      >
+        <p
+          className={cn(
+            "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-medium",
+            outbound ? "text-zinc-400" : "text-zinc-500"
+          )}
+        >
+          <span className={cn("truncate", outbound ? "text-zinc-200" : "text-zinc-700")}>{author}</span>
+          <ChannelIcon className="size-3 shrink-0 opacity-70" aria-label={`Kanal ${channelLabel(item.channel)}`} />
+          <span>{formatDateTime(item.createdAt)}</span>
+          {outbound && <DeliveryTick status={item.deliveryStatus} />}
+        </p>
+        {item.subject && (
+          <p className={cn("truncate text-xs font-semibold", outbound ? "text-zinc-300" : "text-zinc-600")}>
+            {item.subject}
+          </p>
+        )}
+        <p className="whitespace-pre-wrap text-sm leading-relaxed">{item.content}</p>
+        {isReply && (
+          <p>
+            <span className="inline-block rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300">
+              Balasan inbox
+            </span>
+          </p>
+        )}
+      </div>
+      {hasOpp && (
+        <span
+          className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600"
+          aria-label={`Terkait opportunity: ${item.opportunity?.title ?? ""}`}
+        >
+          {item.brand?.color && (
+            <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: item.brand.color }} aria-hidden="true" />
+          )}
+          <span className="truncate">Opp: {item.opportunity?.title}</span>
+        </span>
+      )}
+    </li>
+    );
+}
+
+function ConversationSkeleton() {
+  return (
+    <div className="space-y-3" aria-hidden="true">
+      {["self-start w-3/4", "self-end w-2/3", "self-start w-2/3"].map((pos, i) => (
+        <div key={i} className={cn("flex flex-col", pos)}>
+          <Skeleton className="h-3 w-1/3 rounded-full" />
+          <Skeleton className="mt-1.5 h-10 rounded-2xl" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Seksi "Riwayat Percakapan" pada detail kontak — menggabungkan log interaksi
+ * lintas kanal (WhatsApp/Instagram/Email/Website/Telepon/Meeting) satu kontak.
+ * Urutan tampil: terbaru di atas (API orderBy createdAt desc).
+ */
+function ConversationHistorySection({ contactId, contactName }: { contactId: string; contactName: string }) {
+  const [items, setItems] = useState<InteractionDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    // Komponen di-remount per kontak (key=contact.id) → loading awal cukup dari useState.
+    // Reset loading/error saat "Muat ulang" dilakukan lewat handler reload() (bukan di sini).
+    let alive = true; // guard race: respons fetch lama diabaikan setelah unmount/ganti kontak
+    api
+      .interactions({ contactId })
+      .then((res) => {
+        if (!alive) return;
+        setItems(res.interactions);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (!alive) return;
+        setError(err instanceof Error ? err.message : "Gagal memuat riwayat percakapan");
+        setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [contactId, reloadKey]);
+
+  function reload() {
+    setLoading(true);
+    setError(null);
+    setReloadKey((k) => k + 1);
+  }
+
+  const uniqueChannels = useMemo(
+    () => Array.from(new Set(items.map((i) => i.channel).filter((ch): ch is string => Boolean(ch)))),
+    [items]
+  );
+
+  return (
+    <section aria-label="Riwayat percakapan">
+      <div className="flex flex-wrap items-center gap-2">
+        <MessagesSquare className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Riwayat Percakapan</h3>
+        <Badge variant="secondary" className="border-transparent bg-zinc-100 text-[11px] font-normal text-zinc-600">
+          {loading ? "…" : `${items.length} pesan`}
+        </Badge>
+        {uniqueChannels.map((ch) => {
+          const Icon = CHANNEL_ICONS[ch] ?? Globe;
+          return (
+            <Badge
+              key={ch}
+              variant="secondary"
+              className={cn(
+                "border-transparent px-1.5 text-[10px]",
+                CHANNEL_BADGE_CLASS[ch] ?? "bg-zinc-100 text-zinc-600"
+              )}
+              aria-label={`Ada percakapan via ${channelLabel(ch)}`}
+            >
+              <Icon className="size-3" />
+            </Badge>
+          );
+        })}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-7 gap-1 px-2 text-xs text-zinc-500"
+          onClick={reload}
+          disabled={loading}
+          aria-label="Muat ulang riwayat percakapan"
+        >
+          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} /> Muat ulang
+        </Button>
+      </div>
+
+      <div className="crm-scroll mt-2 max-h-96 overflow-y-auto rounded-xl border bg-white p-3 shadow-sm">
+        {loading ? (
+          <ConversationSkeleton />
+        ) : error ? (
+          <div className="flex flex-col items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-6 text-center">
+            <AlertTriangle className="size-4 text-rose-600" />
+            <p className="text-xs text-rose-700">{error}</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={reload}
+              aria-label="Coba muat ulang riwayat percakapan"
+            >
+              <RefreshCw className="size-3.5" /> Coba lagi
+            </Button>
+          </div>
+        ) : items.length === 0 ? (
+          <p className="py-4 text-center text-xs text-zinc-400">Belum ada percakapan tercatat untuk kontak ini.</p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {items.map((item) => (
+              <ConversationBubble key={item.id} item={item} contactName={contactName} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -892,6 +1113,8 @@ function ContactDetailBody({
             </div>
           </section>
         )}
+
+        <ConversationHistorySection contactId={contact.id} contactName={contact.fullName} />
 
         <section aria-label="Tag contact">
           <SectionTitle>Tag</SectionTitle>
@@ -2885,7 +3108,7 @@ export default function ContactsModule() {
 
       {/* Dialog merge pasca-create */}
       <Dialog open={!!mergeState} onOpenChange={(o) => !o && setMergeState(null)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[92dvh] overflow-y-auto crm-scroll sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <GitMerge className="size-5 text-zinc-900" /> Mungkin duplikat?

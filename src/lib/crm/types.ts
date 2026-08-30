@@ -159,6 +159,38 @@ export interface MatchCandidateDTO {
   contact?: ContactRef;
 }
 
+/** Ronde 24 — satu pesan dalam thread percakapan per kontak (inbound & outbound). */
+export interface ThreadMessageDTO {
+  id: string;
+  channel: string;
+  direction: string;
+  subject?: string | null;
+  content: string;
+  senderName?: string | null;
+  recipientName?: string | null;
+  respondedBy?: string | null;
+  deliveryStatus?: string | null;
+  externalId?: string | null;
+  createdAt: string;
+}
+
+/** Ronde 24 — thread percakapan: semua pesan dari identitas pengirim yang sama lintas kanal. */
+export interface ConversationThreadDTO {
+  key: string;
+  messageCount: number;
+  channels: string[];
+  lastMessageAt: string;
+  messages: ThreadMessageDTO[];
+}
+
+/** Ronde 24 — lead inbox dengan thread percakapan terlampir. */
+export type InboxLeadDTO = InteractionDTO & {
+  slaHours: number;
+  candidates: MatchCandidateDTO[];
+  threadKey: string;
+  thread: ConversationThreadDTO;
+};
+
 export interface ProjectDTO {
   id: string;
   code: string;

@@ -1,0 +1,1891 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     4→import type { LucideIcon } from "lucide-react";
+     5→import {
+     6→  AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, ClipboardList, Clock, Copy,
+     7→  Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone,
+     8→  PlugZap, RefreshCw, Reply, Send, ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
+     9→} from "lucide-react";
+    10→import { toast } from "sonner";
+    11→import { api, channelsApi } from "@/lib/crm/api-client";
+    12→import { canAccess, useCrmStore } from "@/lib/crm/store";
+    13→import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
+    14→import { CHANNEL_TYPES } from "@/lib/crm/channels";
+    15→import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
+    16→import type { FollowUpTemplateDTO, InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
+    17→import { cn } from "@/lib/utils";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Button } from "@/components/ui/button";
+    20→import { Input } from "@/components/ui/input";
+    21→import { Label } from "@/components/ui/label";
+    22→import { Skeleton } from "@/components/ui/skeleton";
+    23→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    24→import {
+    25→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    26→} from "@/components/ui/dialog";
+    27→import { Textarea } from "@/components/ui/textarea";
+    28→
+    29→// ============ Tipe lokal ============
+    30→
+    31→type InboxLead = InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] };
+    32→
+    33→/** Lead sudah direspons (respondedAt terisi dari alur Respons & Catat Fase 3). */
+    34→function isResponded(lead: InboxLead): boolean {
+    35→  return Boolean(lead.respondedAt);
+    36→}
+    37→
+    38→interface ContactFormState {
+    39→  firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
+    40→  /** Ronde 23 — jabatan di perusahaan + handle Instagram (lead kerap datang dari IG). */
+    41→  position: string; instagram: string;
+    42→}
+    43→interface OpportunityFormState {
+    44→  brandId: string; title: string; serviceCategory: string; serviceName: string;
+    45→  estimatedValue: string; ownerName: string; priority: string;
+    46→}
+    47→
+    48→const EMPTY_CONTACT_FORM: ContactFormState = {
+    49→  firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
+    50→};
+    51→const EMPTY_OPP_FORM: OpportunityFormState = {
+    52→  brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", ownerName: "", priority: "medium",
+    53→};
+    54→
+    55→// ============ Mapping kanal (tanpa indigo/blue) ============
+    56→
+    57→const CHANNEL_STYLE: Record<string, { icon: LucideIcon; circle: string; badge: string }> = {
+    58→  whatsapp: { icon: MessageCircle, circle: "bg-emerald-100 text-emerald-600", badge: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+    59→  email: { icon: Mail, circle: "bg-amber-100 text-amber-600", badge: "border-amber-200 bg-amber-50 text-amber-700" },
+    60→  instagram: { icon: Instagram, circle: "bg-rose-100 text-rose-600", badge: "border-rose-200 bg-rose-50 text-rose-700" },
+    61→  website: { icon: Globe, circle: "bg-violet-100 text-violet-600", badge: "border-violet-200 bg-violet-50 text-violet-700" },
+    62→  phone: { icon: Phone, circle: "bg-cyan-100 text-cyan-600", badge: "border-cyan-200 bg-cyan-50 text-cyan-700" },
+    63→  meeting: { icon: Video, circle: "bg-zinc-200 text-zinc-700", badge: "border-zinc-200 bg-zinc-100 text-zinc-700" },
+    64→  portal: { icon: LayoutDashboard, circle: "bg-orange-100 text-orange-600", badge: "border-orange-200 bg-orange-50 text-orange-700" },
+    65→};
+    66→
+    67→function channelMeta(channel: string) {
+    68→  return CHANNEL_STYLE[channel] ?? { icon: Inbox, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" };
+    69→}
+    70→function channelLabel(channel: string): string {
+    71→  return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
+    72→}
+    73→
+    74→/**
+    75→ * Task 17-c — indikator status pengiriman pesan outbound (tick gaya WhatsApp).
+    76→ * read → CheckCheck emerald, delivered → CheckCheck zinc, sent → Check zinc,
+    77→ * failed → AlertTriangle merah; outbound WhatsApp tanpa status → Clock "Menunggu status".
+    78→ * Baris inbound TIDAK menampilkan tick.
+    79→ */
+    80→function DeliveryTick({ status, channel }: { status?: string | null; channel?: string | null }) {
+    81→  const label =
+    82→    status === "read" ? "Dibaca"
+    83→    : status === "delivered" ? "Terkirim"
+    84→    : status === "sent" ? "Terkirim"
+    85→    : status === "failed" ? "Gagal terkirim"
+    86→    : channel === "whatsapp" ? "Menunggu status"
+    87→    : null;
+    88→  if (!label) return null;
+    89→  const Icon =
+    90→    status === "read" || status === "delivered" ? CheckCheck
+    91→    : status === "sent" ? Check
+    92→    : status === "failed" ? AlertTriangle
+    93→    : Clock;
+    94→  const tone =
+    95→    status === "read" ? "text-emerald-600"
+    96→    : status === "failed" ? "text-red-600"
+    97→    : status === "sent" || status === "delivered" ? "text-zinc-400"
+    98→    : "text-zinc-300";
+    99→  return (
+   100→    <span role="img" aria-label={label} title={label} className="inline-flex shrink-0 items-center">
+   101→      <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+   102→    </span>
+   103→  );
+   104→}
+   105→type SlaTone = "ok" | "warning" | "breach";
+   106→
+   107→/** Fase 3 — SLA countdown per brand: sisa = SLA brand − jam tunggu (slaHours dari API). */
+   108→function slaBadgeInfo(brandSlaHours: number, waitHours: number): {
+   109→  label: string; className: string; tone: SlaTone;
+   110→} {
+   111→  const split = (hours: number) => {
+   112→    let h = Math.floor(hours);
+   113→    let m = Math.round((hours - h) * 60);
+   114→    if (m >= 60) { h += 1; m = 0; }
+   115→    return { h, m };
+   116→  };
+   117→  const fmt = (hours: number, prefix: string) => {
+   118→    const { h, m } = split(hours);
+   119→    if (h < 1) return `${prefix}${m}m`;
+   120→    if (m === 0) return `${prefix}${h}j`;
+   121→    return `${prefix}${h}j ${m}m`;
+   122→  };
+   123→
+   124→  const remaining = brandSlaHours - waitHours;
+   125→  if (remaining <= 0) {
+   126→    return {
+   127→      label: fmt(Math.abs(remaining), "Terlambat "),
+   128→      className: "border-rose-200 bg-rose-50 text-rose-700",
+   129→      tone: "breach" as const,
+   130→    };
+   131→  }
+   132→  if (remaining <= brandSlaHours * 0.5) {
+   133→    return {
+   134→      label: fmt(remaining, "Segera: "),
+   135→      className: "border-amber-200 bg-amber-50 text-amber-700",
+   136→      tone: "warning" as const,
+   137→    };
+   138→  }
+   139→  return {
+   140→    label: fmt(remaining, "Sisa "),
+   141→    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+   142→    tone: "ok" as const,
+   143→  };
+   144→}
+   145→
+   146→const SLA_TONE_ICON: Record<SlaTone, LucideIcon> = {
+   147→  ok: Timer,
+   148→  warning: AlarmClock,
+   149→  breach: TimerOff,
+   150→};
+   151→
+   152→/** Badge SLA dengan ikon + countdown, dipakai di kartu lead & panel detail. */
+   153→function SlaBadge({ brandSlaHours, waitHours, respondedAt }: { brandSlaHours: number; waitHours: number; respondedAt?: string | null }) {
+   154→  // Sudah direspons → SLA terpenuhi, tampilkan status emerald alih-alih countdown
+   155→  if (respondedAt) {
+   156→    return (
+   157→      <Badge variant="outline" className="border border-emerald-200 bg-emerald-50 text-emerald-700" aria-label="Lead sudah direspons">
+   158→        <Reply aria-hidden="true" />
+   159→        {`Direspons ${timeAgo(respondedAt)}`}
+   160→      </Badge>
+   161→    );
+   162→  }
+   163→  const sla = slaBadgeInfo(brandSlaHours, waitHours);
+   164→  const Icon = SLA_TONE_ICON[sla.tone];
+   165→  return (
+   166→    <Badge variant="outline" className={cn("border", sla.className)} aria-label={`Status SLA: ${sla.label}`}>
+   167→      <Icon aria-hidden="true" />
+   168→      {sla.label}
+   169→    </Badge>
+   170→  );
+   171→}
+   172→function scoreTone(score: number): { bar: string; text: string } {
+   173→  if (score >= 75) return { bar: "bg-emerald-500", text: "text-emerald-600" };
+   174→  if (score >= 50) return { bar: "bg-amber-500", text: "text-amber-600" };
+   175→  return { bar: "bg-zinc-400", text: "text-zinc-500" };
+   176→}
+   177→
+   178→const PRIORITY_LABELS: Record<string, string> = { low: "Rendah", medium: "Sedang", high: "Tinggi", urgent: "Urgent" };
+   179→const SERVICE_CATEGORY_LABELS: Record<string, string> = {
+   180→  animation: "Animasi", website: "Website", video: "Video",
+   181→  immersive: "Immersive / AR-VR", digital_marketing: "Digital Marketing",
+   182→};
+   183→
+   184→// ============ Sub-komponen internal ============
+   185→
+   186→function ChannelAvatar({ channel, size = "md" }: { channel: string; size?: "sm" | "md" }) {
+   187→  const meta = channelMeta(channel);
+   188→  const Icon = meta.icon;
+   189→  return (
+   190→    <span
+   191→      className={cn(
+   192→        "flex shrink-0 items-center justify-center rounded-full",
+   193→        size === "md" ? "size-10" : "size-9",
+   194→        meta.circle
+   195→      )}
+   196→      aria-hidden="true"
+   197→    >
+   198→      <Icon className="size-4.5" />
+   199→    </span>
+   200→  );
+   201→}
+   202→
+   203→function BrandChip({ name, color }: { name: string; color: string }) {
+   204→  return (
+   205→    <span className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600">
+   206→      <span className="size-2 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+   207→      {name}
+   208→    </span>
+   209→  );
+   210→}
+   211→
+   212→function StatCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: number; tone: "zinc" | "amber" | "rose" }) {
+   213→  const tones: Record<string, string> = {
+   214→    zinc: "bg-zinc-100 text-zinc-600",
+   215→    amber: "bg-amber-100 text-amber-600",
+   216→    rose: "bg-rose-100 text-rose-600",
+   217→  };
+   218→  return (
+   219→    <div className="flex items-center gap-3 rounded-xl border bg-white p-4 shadow-sm">
+   220→      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", tones[tone])} aria-hidden="true">
+   221→        <Icon className="size-4" />
+   222→      </span>
+   223→      <div className="min-w-0">
+   224→        <p className="truncate text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+   225→        <p className="text-lg font-bold leading-tight text-zinc-900">{value}</p>
+   226→      </div>
+   227→    </div>
+   228→  );
+   229→}
+   230→
+   231→function LeadCard({
+   232→  lead, escalated, selected, onSelect, onEscalate,
+   233→}: {
+   234→  lead: InboxLead;
+   235→  escalated: boolean;
+   236→  selected: boolean;
+   237→  onSelect: (lead: InboxLead) => void;
+   238→  onEscalate: (lead: InboxLead) => void;
+   239→}) {
+   240→  const sender = (lead.senderName ?? "").trim() || "Tanpa nama";
+   241→  const responded = isResponded(lead);
+   242→  const sla = slaBadgeInfo(lead.brand?.slaHours ?? 24, lead.slaHours);
+   243→  const breached = sla.tone === "breach" && !responded;
+   244→  const meta = channelMeta(lead.channel);
+   245→  return (
+   246→    <div
+   247→      role="button"
+   248→      tabIndex={0}
+   249→      onClick={() => onSelect(lead)}
+   250→      onKeyDown={(e) => {
+   251→        if (e.key === "Enter" || e.key === " ") {
+   252→          e.preventDefault();
+   253→          onSelect(lead);
+   254→        }
+   255→      }}
+   256→      aria-label={`Buka detail lead dari ${sender}`}
+   257→      className={cn(
+   258→        "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+   259→        breached ? "border-l-4 border-l-rose-500" : responded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
+   260→        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
+   261→        selected && breached && "ring-1 ring-rose-500"
+   262→      )}
+   263→    >
+   264→      <div className="flex items-start gap-3">
+   265→        <ChannelAvatar channel={lead.channel} />
+   266→        <div className="min-w-0 flex-1">
+   267→          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+   268→            <span className="truncate text-sm font-semibold text-zinc-900">{sender}</span>
+   269→            <span className="text-xs text-zinc-300" aria-hidden="true">·</span>
+   270→            <span className="text-xs text-zinc-500">{formatDateTime(lead.createdAt)}</span>
+   271→            <span className="text-xs text-zinc-300" aria-hidden="true">·</span>
+   272→            <span className="text-xs text-zinc-400">{timeAgo(lead.createdAt)}</span>
+   273→          </div>
+   274→          <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-zinc-600">{lead.content}</p>
+   275→          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   276→            <Badge variant="outline" className={cn("border", meta.badge)}>{channelLabel(lead.channel)}</Badge>
+   277→            {lead.brand ? <BrandChip name={lead.brand.name} color={lead.brand.color} /> : null}
+   278→            <SlaBadge brandSlaHours={lead.brand?.slaHours ?? 24} waitHours={lead.slaHours} respondedAt={lead.respondedAt} />
+   279→            {lead.candidates.length > 0 ? (
+   280→              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+   281→                <AlertTriangle aria-hidden="true" />
+   282→                {`Duplikat? ${lead.candidates.length} kandidat`}
+   283→              </Badge>
+   284→            ) : null}
+   285→            {escalated ? (
+   286→              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
+   287→                <CheckCircle2 aria-hidden="true" />
+   288→                Sudah dieskalasi
+   289→              </Badge>
+   290→            ) : null}
+   291→          </div>
+   292→          <div className="mt-3 flex items-center justify-end">
+   293→            <Button
+   294→              type="button"
+   295→              size="sm"
+   296→              variant="outline"
+   297→              disabled={escalated || responded}
+   298→              className={cn(
+   299→                "h-7 px-2.5 text-xs",
+   300→                breached && !escalated
+   301→                  ? "border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   302→                  : "text-zinc-600"
+   303→              )}
+   304→              onClick={(e) => {
+   305→                e.stopPropagation();
+   306→                onEscalate(lead);
+   307→              }}
+   308→              aria-label={`Eskalasi lead dari ${sender}`}
+   309→            >
+   310→              <ShieldAlert className="size-3.5" aria-hidden="true" />
+   311→              Eskalasi
+   312→            </Button>
+   313→          </div>
+   314→        </div>
+   315→      </div>
+   316→    </div>
+   317→  );
+   318→}
+   319→
+   320→function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCandidateDTO; selected: boolean; onToggle: () => void }) {
+   321→  const tone = scoreTone(candidate.score);
+   322→  const contact = candidate.contact;
+   323→  const label = contact?.fullName?.trim() || `Contact #${candidate.contactId.slice(0, 8)}`;
+   324→  return (
+   325→    <div className={cn("rounded-lg border p-3 transition-colors", selected ? "border-emerald-300 bg-emerald-50/60" : "border-zinc-200 bg-white")}>
+   326→      <div className="flex items-center gap-2.5">
+   327→        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-bold text-zinc-600" aria-hidden="true">
+   328→          {initials(contact?.fullName ?? label)}
+   329→        </span>
+   330→        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{label}</span>
+   331→        <span className={cn("text-xs font-bold", tone.text)}>{candidate.score}%</span>
+   332→      </div>
+   333→      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100" role="progressbar" aria-valuenow={candidate.score} aria-valuemin={0} aria-valuemax={100} aria-label={`Skor kemiripan ${candidate.score} persen`}>
+   334→        <div className={cn("h-full rounded-full transition-all", tone.bar)} style={{ width: `${Math.min(100, Math.max(0, candidate.score))}%` }} />
+   335→      </div>
+   336→      {candidate.reasons.length > 0 ? (
+   337→        <ul className="mt-2 space-y-0.5">
+   338→          {candidate.reasons.map((reason) => (
+   339→            <li key={reason} className="text-xs text-zinc-500">• {reason}</li>
+   340→          ))}
+   341→        </ul>
+   342→      ) : null}
+   343→      <div className="mt-2 space-y-1 text-xs text-zinc-600">
+   344→        {contact?.position ? (
+   345→          <p className="flex items-center gap-1.5"><User className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.position}</p>
+   346→        ) : null}
+   347→        {contact?.company?.name ? (
+   348→          <p className="flex items-center gap-1.5"><Building2 className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.company.name}</p>
+   349→        ) : null}
+   350→        {contact?.email ? (
+   351→          <p className="flex items-center gap-1.5"><Mail className="size-3 shrink-0 text-zinc-400" aria-hidden="true" /><span className="truncate">{contact.email}</span></p>
+   352→        ) : null}
+   353→        {contact?.whatsapp ? (
+   354→          <p className="flex items-center gap-1.5"><MessageCircle className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.whatsapp}</p>
+   355→        ) : null}
+   356→      </div>
+   357→      <Button
+   358→        type="button"
+   359→        size="sm"
+   360→        variant={selected ? "default" : "outline"}
+   361→        className="mt-3 w-full"
+   362→        onClick={onToggle}
+   363→      >
+   364→        {selected ? (
+   365→          <><Check className="size-3.5" aria-hidden="true" /> Dipilih — akan digabung ke contact ini</>
+   366→        ) : (
+   367→          "Gabungkan ke Contact Ini"
+   368→        )}
+   369→      </Button>
+   370→    </div>
+   371→  );
+   372→}
+   373→
+   374→/** Ronde 23 — chip status satu data identitas: Check emerald bila terisi, CircleDashed amber + "kurang" bila kosong. */
+   375→function IdentityChip({ label, filled }: { label: string; filled: boolean }) {
+   376→  if (filled) {
+   377→    return (
+   378→      <Badge
+   379→        variant="outline"
+   380→        className="gap-1 border-emerald-300 bg-emerald-50 text-emerald-700"
+   381→        aria-label={`${label}: sudah ada`}
+   382→      >
+   383→        <Check className="size-3" aria-hidden="true" />
+   384→        {label}
+   385→      </Badge>
+   386→    );
+   387→  }
+   388→  return (
+   389→    <Badge
+   390→      variant="outline"
+   391→      className="gap-1 border-amber-300 bg-amber-50 text-amber-700"
+   392→      aria-label={`${label}: kurang`}
+   393→    >
+   394→      <CircleDashed className="size-3" aria-hidden="true" />
+   395→      {`${label} · kurang`}
+   396→    </Badge>
+   397→  );
+   398→}
+   399→
+   400→/**
+   401→ * Ronde 23 — seksi "Kelengkapan Identitas": chips status 5 data kontak (Nama, Perusahaan,
+   402→ * Jabatan, Email, WhatsApp) yang reaktif terhadap ketikan form konversi, teks bantu
+   403→ * follow-up awal, dan tombol salin "Pesan Identifikasi" yang hanya meminta field yang
+   404→ * masih kurang (siap ditempel ke chat WhatsApp/Instagram).
+   405→ * Mode link (contact kandidat terpilih) → data form tidak dinilai, tampil teks singkat.
+   406→ */
+   407→function IdentityReadinessCard({
+   408→  lead,
+   409→  contactForm,
+   410→  linkMode,
+   411→}: {
+   412→  lead: InboxLead;
+   413→  contactForm: ContactFormState;
+   414→  linkMode: boolean;
+   415→}) {
+   416→  const rawSender = (lead.senderName ?? "").trim();
+   417→  // Lead IG dengan handle → pesan menyapa pakai handle (nama belum tentu diketahui).
+   418→  const igHandle = lead.channel === "instagram" && isSocialHandle(rawSender) ? rawSender : null;
+   419→
+   420→  const fields = [
+   421→    { key: "nama", label: "Nama", messageLabel: "Nama lengkap", filled: contactForm.firstName.trim() !== "" },
+   422→    { key: "perusahaan", label: "Perusahaan", messageLabel: "Nama perusahaan", filled: contactForm.companyName.trim() !== "" },
+   423→    { key: "jabatan", label: "Jabatan", messageLabel: "Jabatan di perusahaan", filled: contactForm.position.trim() !== "" },
+   424→    { key: "email", label: "Email", messageLabel: "Email aktif", filled: contactForm.email.trim() !== "" },
+   425→    { key: "whatsapp", label: "WhatsApp", messageLabel: "Nomor WhatsApp aktif", filled: contactForm.whatsapp.trim() !== "" },
+   426→  ];
+   427→  const missing = fields.filter((f) => !f.filled);
+   428→  const complete = missing.length === 0;
+   429→
+   430→  const greetingName = igHandle ?? contactForm.firstName.trim();
+   431→  const brandName = lead.brand?.name ?? "tim kami";
+   432→  const identityMessage = [
+   433→    `Halo${greetingName ? ` ${greetingName}` : ""}! Terima kasih sudah menghubungi ${brandName}. Sebelum kami lanjut, boleh dibantu lengkapi info berikut:`,
+   434→    ...missing.map((f) => `- ${f.messageLabel}`),
+   435→  ].join("\n");
+   436→
+   437→  // Fallback: bila clipboard ditolak browser (izin/konteks non-secure), tampilkan pesan
+   438→  // di dialog agar tetap bisa disalin manual — fitur tidak pernah buntu.
+   439→  const [manualCopy, setManualCopy] = useState(false);
+   440→
+   441→  async function handleCopyMessage() {
+   442→    const legacyCopy = () => {
+   443→      try {
+   444→        const ta = document.createElement("textarea");
+   445→        ta.value = identityMessage;
+   446→        ta.setAttribute("readonly", "");
+   447→        ta.style.position = "fixed";
+   448→        ta.style.opacity = "0";
+   449→        document.body.appendChild(ta);
+   450→        ta.select();
+   451→        const ok = document.execCommand("copy");
+   452→        document.body.removeChild(ta);
+   453→        return ok;
+   454→      } catch {
+   455→        return false;
+   456→      }
+   457→    };
+   458→    try {
+   459→      await navigator.clipboard.writeText(identityMessage);
+   460→      toast.success("Pesan identifikasi disalin — tempel di chat klien");
+   461→    } catch {
+   462→      if (legacyCopy()) {
+   463→        toast.success("Pesan identifikasi disalin — tempel di chat klien");
+   464→      } else {
+   465→        setManualCopy(true);
+   466→      }
+   467→    }
+   468→  }
+   469→
+   470→  return (
+   471→    <div className="border-t border-zinc-200 p-4">
+   472→      <div className="flex items-center justify-between gap-2">
+   473→        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+   474→          <ClipboardList className="size-4 text-zinc-500" aria-hidden="true" />
+   475→          Kelengkapan Identitas
+   476→        </div>
+   477→        {!linkMode ? (
+   478→          <Badge
+   479→            variant="outline"
+   480→            className={cn(
+   481→              "border",
+   482→              complete
+   483→                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+   484→                : "border-amber-300 bg-amber-50 text-amber-700"
+   485→            )}
+   486→          >
+   487→            {`${fields.length - missing.length}/${fields.length} lengkap`}
+   488→          </Badge>
+   489→        ) : null}
+   490→      </div>
+   491→
+   492→      {linkMode ? (
+   493→        <p className="mt-3 text-xs text-zinc-500">
+   494→          Pakai contact terpilih — kelengkapan data mengikuti kontak yang digabungkan, bukan form ini.
+   495→        </p>
+   496→      ) : (
+   497→        <>
+   498→          <div className="mt-3 flex flex-wrap items-center gap-1.5" aria-label="Status kelengkapan 5 data identitas">
+   499→            {fields.map((f) => (
+   500→              <IdentityChip key={f.key} label={f.label} filled={f.filled} />
+   501→            ))}
+   502→          </div>
+   503→          <p className="mt-2.5 text-xs leading-relaxed text-zinc-500">
+   504→            Follow-up awal = identifikasi: lengkapi data kontak supaya log percakapan dari semua kanal mudah tergabung dengan lead ini.
+   505→          </p>
+   506→          <Button
+   507→            type="button"
+   508→            variant="outline"
+   509→            size="sm"
+   510→            className="mt-3"
+   511→            disabled={complete}
+   512→            onClick={() => void handleCopyMessage()}
+   513→            aria-label={complete ? "Data kontak sudah lengkap" : "Salin pesan identifikasi untuk dikirim ke klien"}
+   514→          >
+   515→            {complete ? (
+   516→              <><CheckCircle2 className="size-4" aria-hidden="true" /> Data lengkap</>
+   517→            ) : (
+   518→              <><Copy className="size-4" aria-hidden="true" /> Salin Pesan Identifikasi</>
+   519→            )}
+   520→          </Button>
+   521→          <Dialog open={manualCopy} onOpenChange={setManualCopy}>
+   522→            <DialogContent className="sm:max-w-md" aria-label="Salin pesan identifikasi secara manual">
+   523→              <DialogHeader>
+   524→                <DialogTitle className="flex items-center gap-2 text-base">
+   525→                  <Copy className="size-4 text-zinc-500" aria-hidden="true" /> Salin Manual Pesan Identifikasi
+   526→                </DialogTitle>
+   527→                <DialogDescription>
+   528→                  Browser menolak akses clipboard — salin teks di bawah secara manual (blok semua lalu Ctrl/Cmd+C).
+   529→                </DialogDescription>
+   530→              </DialogHeader>
+   531→              <Textarea
+   532→                readOnly
+   533→                rows={7}
+   534→                value={identityMessage}
+   535→                onFocus={(e) => e.currentTarget.select()}
+   536→                aria-label="Teks pesan identifikasi"
+   537→                className="text-sm"
+   538→              />
+   539→              <DialogFooter>
+   540→                <Button type="button" variant="outline" size="sm" onClick={() => setManualCopy(false)}>
+   541→                  Tutup
+   542→                </Button>
+   543→              </DialogFooter>
+   544→            </DialogContent>
+   545→          </Dialog>
+   546→        </>
+   547→      )}
+   548→    </div>
+   549→  );
+   550→}
+   551→
+   552→function ListSkeleton() {
+   553→  return (
+   554→    <div className="space-y-3" aria-hidden="true">
+   555→      {[0, 1, 2, 3].map((i) => (
+   556→        <div key={i} className="rounded-xl border bg-white p-4 shadow-sm">
+   557→          <div className="flex gap-3">
+   558→            <Skeleton className="size-10 rounded-full" />
+   559→            <div className="flex-1 space-y-2">
+   560→              <Skeleton className="h-4 w-1/3" />
+   561→              <Skeleton className="h-3 w-2/3" />
+   562→              <Skeleton className="h-3 w-1/2" />
+   563→            </div>
+   564→          </div>
+   565→        </div>
+   566→      ))}
+   567→    </div>
+   568→  );
+   569→}
+   570→
+   571→// ============ Respons & Catat (Fase 3): balas lead dengan template ============
+   572→
+   573→const RESPOND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
+   574→  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+   575→  { key: "email", label: "Email", icon: Mail },
+   576→  { key: "phone", label: "Telepon", icon: Phone },
+   577→];
+   578→
+   579→/** Ganti placeholder template untuk konteks lead inbox. */
+   580→function renderLeadTemplate(body: string, vars: Record<string, string>): string {
+   581→  return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => vars[key] ?? full);
+   582→}
+   583→
+   584→function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onResponded }: {
+   585→  lead: InboxLead | null;
+   586→  /** Kontak terpilih di panel detail (identifikasi) — dipakai sebagai pilihan awal bila ada di kandidat. */
+   587→  linkedContactId: string | null;
+   588→  linkedContactName: string | null;
+   589→  onClose: () => void;
+   590→  onResponded: (updated: InboxLead) => void;
+   591→}) {
+   592→  const user = useCrmStore((s) => s.user);
+   593→  const [templates, setTemplates] = useState<FollowUpTemplateDTO[]>([]);
+   594→  const [loadingTpl, setLoadingTpl] = useState(false);
+   595→  const [channel, setChannel] = useState("whatsapp");
+   596→  const [templateId, setTemplateId] = useState<string>("blank");
+   597→  const [body, setBody] = useState("");
+   598→  const [sending, setSending] = useState(false);
+   599→  // Task 15-c — kontak yang ditautkan ke respons (null = "Tidak menautkan")
+   600→  const [contactChoice, setContactChoice] = useState<string | null>(null);
+   601→
+   602→  const senderDisplay = (lead?.senderName ?? "").trim() || "Tanpa nama";
+   603→  // Opsi = kandidat identifikasi yang punya contactId
+   604→  const candidates = useMemo(
+   605→    () => (lead?.candidates ?? []).filter((c) => Boolean(c.contactId)),
+   606→    [lead?.candidates]
+   607→  );
+   608→
+   609→  // Muat template + set kanal & kontak default saat dialog dibuka
+   610→  useEffect(() => {
+   611→    if (!lead) return;
+   612→    let alive = true;
+   613→    setLoadingTpl(true);
+   614→    setTemplates([]);
+   615→    setTemplateId("blank");
+   616→    setBody("");
+   617→    setChannel(["whatsapp", "email", "phone"].includes(lead.channel) ? lead.channel : "whatsapp");
+   618→    const cands = lead.candidates.filter((c) => Boolean(c.contactId));
+   619→    // Default: pilihan di panel detail bila cocok, jika tidak → kandidat pertama
+   620→    setContactChoice(
+   621→      linkedContactId && cands.some((c) => c.contactId === linkedContactId)
+   622→        ? linkedContactId
+   623→        : cands[0]?.contactId ?? null
+   624→    );
+   625→    (async () => {
+   626→      try {
+   627→        const res = await api.followUpTemplates("all");
+   628→        if (!alive) return;
+   629→        setTemplates(
+   630→          res.templates
+   631→            .filter((t) => !t.brandId || t.brandId === lead.brandId)
+   632→            .sort((a, b) => a.delayDays - b.delayDays)
+   633→        );
+   634→      } catch {
+   635→        if (alive) toast.error("Gagal memuat template follow-up");
+   636→      } finally {
+   637→        if (alive) setLoadingTpl(false);
+   638→      }
+   639→    })();
+   640→    return () => { alive = false; };
+   641→  }, [lead, linkedContactId]);
+   642→
+   643→  const selectedCandidate = useMemo(
+   644→    () => candidates.find((c) => c.contactId === contactChoice) ?? null,
+   645→    [candidates, contactChoice]
+   646→  );
+   647→  const respondContactName = selectedCandidate?.contact?.fullName?.trim() || linkedContactName || null;
+   648→
+   649→  const vars = useMemo<Record<string, string>>(() => ({
+   650→    contact_name: respondContactName ?? senderDisplay,
+   651→    company_name: "perusahaan Bapak/Ibu",
+   652→    brand_name: lead?.brand?.name ?? "tim kami",
+   653→    marketing_name: user?.name ?? "Tim Sales",
+   654→  }), [lead?.brand?.name, respondContactName, senderDisplay, user?.name]);
+   655→
+   656→  function pickTemplate(id: string) {
+   657→    setTemplateId(id);
+   658→    if (id === "blank") { setBody(""); return; }
+   659→    const tpl = templates.find((t) => t.id === id);
+   660→    if (!tpl) return;
+   661→    setChannel(tpl.channel);
+   662→    setBody(renderLeadTemplate(tpl.body, vars));
+   663→  }
+   664→
+   665→  const unknownPlaceholders = useMemo(() => {
+   666→    const found = body.match(/{{\s*(\w+)\s*}}/g) ?? [];
+   667→    return Array.from(new Set(found));
+   668→  }, [body]);
+   669→
+   670→  async function handleSend() {
+   671→    if (!lead || !user) return;
+   672→    const content = body.trim();
+   673→    if (!content) { toast.error("Isi respons tidak boleh kosong"); return; }
+   674→    setSending(true);
+   675→    try {
+   676→      const res = await api.inboxRespond({
+   677→        interactionId: lead.id,
+   678→        channel,
+   679→        content,
+   680→        subject: channel === "email" ? `Re: ${lead.subject ?? "permintaan Anda"}` : undefined,
+   681→        contactId: contactChoice ?? undefined,
+   682→        actorName: user.name,
+   683→        actorRole: user.role,
+   684→      });
+   685→      // Ronde 21 — sampaikan hasil pengiriman NYATA dengan jujur.
+   686→      const st = res.reply?.deliveryStatus;
+   687→      if (st === "failed") {
+   688→        toast.error("Email GAGAL terkirim", { description: res.reply?.deliveryNote ?? "Periksa koneksi kanal email", duration: 8000 });
+   689→      } else if (st === "sent") {
+   690→        toast.success("Email terkirim nyata via SMTP", { description: res.reply?.deliveryNote ?? undefined });
+   691→      } else if (st === "simulated") {
+   692→        toast.info("Respons tercatat (simulasi — email tidak terkirim)", {
+   693→          description: res.reply?.deliveryNote ?? "Hubungkan email asli di Saluran & Integrasi agar terkirim nyata",
+   694→          duration: 7000,
+   695→        });
+   696→      } else {
+   697→        toast.success(`Respons ${channel === "email" ? "email" : channel} tercatat`, {
+   698→          description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
+   699→        });
+   700→      }
+   701→      onResponded({ ...lead, ...res.lead, slaHours: lead.slaHours, candidates: lead.candidates });
+   702→      onClose();
+   703→    } catch (err) {
+   704→      toast.error(err instanceof Error ? err.message : "Gagal mencatat respons");
+   705→    } finally {
+   706→      setSending(false);
+   707→    }
+   708→  }
+   709→
+   710→  const chMeta = (key: string) => RESPOND_CHANNELS.find((c) => c.key === key) ?? RESPOND_CHANNELS[0];
+   711→  const ChIcon = chMeta(channel).icon;
+   712→
+   713→  return (
+   714→    <Dialog open={lead !== null} onOpenChange={(open) => { if (!open && !sending) onClose(); }}>
+   715→      <DialogContent className="max-h-[92vh] overflow-y-auto crm-scroll sm:max-w-xl" aria-label="Respons lead">
+   716→        <DialogHeader>
+   717→          <DialogTitle className="flex items-center gap-2">
+   718→            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden>
+   719→              <Reply className="h-3.5 w-3.5" />
+   720→            </span>
+   721→            Respons &amp; Catat
+   722→          </DialogTitle>
+   723→          <DialogDescription>
+   724→            Balas pesan <span className="font-medium text-zinc-700">{senderDisplay}</span> — tercatat sebagai Interaction outbound dan menghentikan countdown SLA.
+   725→          </DialogDescription>
+   726→        </DialogHeader>
+   727→
+   728→        <div className="space-y-4 py-1">
+   729→          {/* Kutipan pesan masuk */}
+   730→          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+   731→            <p className="line-clamp-3 text-xs leading-relaxed text-zinc-600">{lead?.content}</p>
+   732→            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-zinc-400">
+   733→              <span>{lead ? formatDateTime(lead.createdAt) : ""}</span>
+   734→              {lead?.brand ? (
+   735→                <span className="inline-flex items-center gap-1">
+   736→                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: lead.brand.color }} aria-hidden />
+   737→                  {lead.brand.name}
+   738→                </span>
+   739→              ) : null}
+   740→              {respondContactName ? <span className="font-medium text-emerald-600">≡ {respondContactName}</span> : null}
+   741→            </div>
+   742→          </div>
+   743→
+   744→          {/* Task 15-c — pilih kontak yang ditautkan ke respons (kandidat identifikasi) */}
+   745→          {candidates.length > 0 ? (
+   746→            <div className="space-y-2">
+   747→              <Label className="flex items-center gap-1.5" id="respond-contact-label">
+   748→                <Link2 className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+   749→                Tautkan kontak
+   750→              </Label>
+   751→              <div
+   752→                role="radiogroup"
+   753→                aria-labelledby="respond-contact-label"
+   754→                aria-label="Tautkan kontak ke respons"
+   755→                className="crm-scroll max-h-40 space-y-1.5 overflow-y-auto pr-1"
+   756→              >
+   757→                {candidates.map((c) => {
+   758→                  const label = c.contact?.fullName?.trim() || `Contact #${c.contactId.slice(0, 8)}`;
+   759→                  const selected = contactChoice === c.contactId;
+   760→                  return (
+   761→                    <label
+   762→                      key={c.contactId}
+   763→                      className={cn(
+   764→                        "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-xs transition-colors",
+   765→                        selected
+   766→                          ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900"
+   767→                          : "border-zinc-200 bg-white hover:bg-zinc-50"
+   768→                      )}
+   769→                    >
+   770→                      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600" aria-hidden="true">
+   771→                        {initials(label)}
+   772→                      </span>
+   773→                      <span className="min-w-0 flex-1">
+   774→                        <span className="block truncate font-medium text-zinc-900">{label}</span>
+   775→                        {c.contact?.company?.name ? (
+   776→                          <span className="block truncate text-[10px] text-zinc-400">{c.contact.company.name}</span>
+   777→                        ) : null}
+   778→                      </span>
+   779→                      <span className={cn("shrink-0 text-[10px] font-bold", scoreTone(c.score).text)}>{c.score}%</span>
+   780→                      {selected ? <Check className="size-3.5 shrink-0 text-zinc-900" aria-hidden="true" /> : null}
+   781→                      <input
+   782→                        type="radio"
+   783→                        name="respond-contact-link"
+   784→                        className="sr-only"
+   785→                        checked={selected}
+   786→                        onChange={() => setContactChoice(c.contactId)}
+   787→                        aria-label={`Tautkan kontak ${label}`}
+   788→                      />
+   789→                    </label>
+   790→                  );
+   791→                })}
+   792→                <label
+   793→                  className={cn(
+   794→                    "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-xs transition-colors",
+   795→                    contactChoice === null
+   796→                      ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900"
+   797→                      : "border-zinc-200 bg-white hover:bg-zinc-50"
+   798→                  )}
+   799→                >
+   800→                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed border-zinc-300 bg-white text-zinc-400" aria-hidden="true">
+   801→                    <Link2Off className="h-3 w-3" />
+   802→                  </span>
+   803→                  <span className="min-w-0 flex-1 font-medium text-zinc-700">Tidak menautkan</span>
+   804→                  <input
+   805→                    type="radio"
+   806→                    name="respond-contact-link"
+   807→                    className="sr-only"
+   808→                    checked={contactChoice === null}
+   809→                    onChange={() => setContactChoice(null)}
+   810→                    aria-label="Tidak menautkan kontak"
+   811→                  />
+   812→                </label>
+   813→              </div>
+   814→            </div>
+   815→          ) : null}
+   816→
+   817→          {/* Template */}
+   818→          <div className="space-y-2">
+   819→            <Label className="flex items-center gap-1.5">Template respons</Label>
+   820→            {loadingTpl ? (
+   821→              <Skeleton className="h-16 w-full rounded-lg" />
+   822→            ) : templates.length === 0 ? (
+   823→              <p className="rounded-lg border border-dashed border-zinc-200 p-2.5 text-xs text-zinc-400">
+   824→                Belum ada template untuk brand ini — tulis pesan manual.
+   825→              </p>
+   826→            ) : (
+   827→              <div className="crm-scroll max-h-36 space-y-1.5 overflow-y-auto pr-1">
+   828→                <label className={cn(
+   829→                  "flex cursor-pointer items-center gap-2 rounded-lg border p-2.5 text-xs transition-colors",
+   830→                  templateId === "blank" ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"
+   831→                )}>
+   832→                  <Send className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+   833→                  <span className="font-medium text-zinc-900">Tulis respons sendiri</span>
+   834→                  <input type="radio" className="sr-only" checked={templateId === "blank"} onChange={() => pickTemplate("blank")} aria-label="Tulis respons sendiri" />
+   835→                </label>
+   836→                {templates.map((t) => {
+   837→                  const TplIcon = chMeta(t.channel).icon;
+   838→                  return (
+   839→                    <label key={t.id} className={cn(
+   840→                      "flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors",
+   841→                      templateId === t.id ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"
+   842→                    )}>
+   843→                      <span className="min-w-0">
+   844→                        <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+   845→                          {t.name}
+   846→                          {!t.approved ? <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1 text-[9px] text-amber-700">review</Badge> : null}
+   847→                        </span>
+   848→                        <span className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+   849→                          <span className="inline-flex items-center gap-1"><TplIcon className="h-3 w-3" aria-hidden />{chMeta(t.channel).label}</span>
+   850→                          <span aria-hidden>·</span>
+   851→                          <span>H+{t.delayDays}</span>
+   852→                        </span>
+   853→                      </span>
+   854→                      <input type="radio" className="sr-only" checked={templateId === t.id} onChange={() => pickTemplate(t.id)} aria-label={`Pakai template ${t.name}`} />
+   855→                    </label>
+   856→                  );
+   857→                })}
+   858→              </div>
+   859→            )}
+   860→          </div>
+   861→
+   862→          {/* Kanal + isi */}
+   863→          <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
+   864→            <div className="space-y-2">
+   865→              <Label htmlFor="respond-channel">Kanal respons</Label>
+   866→              <Select value={channel} onValueChange={setChannel}>
+   867→                <SelectTrigger id="respond-channel" className="bg-white"><SelectValue /></SelectTrigger>
+   868→                <SelectContent>
+   869→                  {RESPOND_CHANNELS.map((c) => (
+   870→                    <SelectItem key={c.key} value={c.key}>
+   871→                      <span className="flex items-center gap-2"><c.icon className="h-3.5 w-3.5" aria-hidden /> {c.label}</span>
+   872→                    </SelectItem>
+   873→                  ))}
+   874→                </SelectContent>
+   875→              </Select>
+   876→            </div>
+   877→            <div className="space-y-2">
+   878→              <Label htmlFor="respond-body">Isi respons</Label>
+   879→              <Textarea
+   880→                id="respond-body"
+   881→                value={body}
+   882→                onChange={(e) => setBody(e.target.value)}
+   883→                rows={7}
+   884→                placeholder="Tulis respons untuk lead ini…"
+   885→                className="bg-white text-sm"
+   886→              />
+   887→              {unknownPlaceholders.length > 0 ? (
+   888→                <p className="text-[11px] text-amber-600">
+   889→                  Placeholder belum terisi: {unknownPlaceholders.join(", ")} — lengkapi manual sebelum kirim.
+   890→                </p>
+   891→              ) : null}
+   892→            </div>
+   893→          </div>
+   894→        </div>
+   895→
+   896→        <DialogFooter>
+   897→          <Button variant="outline" onClick={onClose} disabled={sending}>Batal</Button>
+   898→          <Button
+   899→            onClick={() => void handleSend()}
+   900→            disabled={sending || !body.trim()}
+   901→            aria-label="Kirim dan catat respons lead"
+   902→          >
+   903→            {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ChIcon className="h-4 w-4" aria-hidden />}
+   904→            {sending ? "Mencatat…" : `Kirim via ${chMeta(channel).label}`}
+   905→          </Button>
+   906→        </DialogFooter>
+   907→      </DialogContent>
+   908→    </Dialog>
+   909→  );
+   910→}
+   911→
+   912→// ============ Modul utama ============
+   913→
+   914→export default function InboxModule() {
+   915→  const user = useCrmStore((s) => s.user);
+   916→  const brands = useCrmStore((s) => s.brands);
+   917→  const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
+   918→  const setActiveBrandFilter = useCrmStore((s) => s.setActiveBrandFilter);
+   919→
+   920→  const [leads, setLeads] = useState<InboxLead[] | null>(null);
+   921→  const [loading, setLoading] = useState(true);
+   922→  const [error, setError] = useState<string | null>(null);
+   923→  const [channelFilter, setChannelFilter] = useState<string>("all");
+   924→  const [sortBy, setSortBy] = useState<"newest" | "late">("newest");
+   925→  const [selectedId, setSelectedId] = useState<string | null>(null);
+   926→  const [converting, setConverting] = useState(false);
+   927→  const [showNewContact, setShowNewContact] = useState(false);
+   928→  const [linkedContactId, setLinkedContactId] = useState<string | null>(null);
+   929→  const [contactForm, setContactForm] = useState<ContactFormState>(EMPTY_CONTACT_FORM);
+   930→  const [oppForm, setOppForm] = useState<OpportunityFormState>(EMPTY_OPP_FORM);
+   931→  // Fase 3 — eskalasi SLA
+   932→  const [escalateTarget, setEscalateTarget] = useState<InboxLead | null>(null);
+   933→  const [escalateNote, setEscalateNote] = useState("");
+   934→  const [escalating, setEscalating] = useState(false);
+   935→  const [escalatedIds, setEscalatedIds] = useState<Set<string>>(new Set());
+   936→  // Fase 3 — respons & catat lead
+   937→  const [respondTarget, setRespondTarget] = useState<InboxLead | null>(null);
+   938→  const detailRef = useRef<HTMLDivElement | null>(null);
+   939→
+   940→  // Ronde 19 — status koneksi kanal utk banner "kanal belum terhubung"
+   941→  const [connectedChannels, setConnectedChannels] = useState<Set<string> | null>(null);
+   942→  useEffect(() => {
+   943→    let alive = true;
+   944→    (async () => {
+   945→      try {
+   946→        const res = await channelsApi.list();
+   947→        if (!alive) return;
+   948→        setConnectedChannels(new Set(res.configs.filter((c) => c.status === "connected").map((c) => c.channel)));
+   949→      } catch {
+   950→        if (alive) setConnectedChannels(null);
+   951→      }
+   952→    })();
+   953→    return () => { alive = false; };
+   954→  }, []);
+   955→
+   956→  const loadLeads = useCallback(async (silent = false) => {
+   957→    if (!silent) setLoading(true);
+   958→    try {
+   959→      // sweep:1 → picu SLA auto-sweep server (throttle 5 menit di API)
+   960→      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, sweep: true });
+   961→      setLeads(res.leads);
+   962→      setError(null);
+   963→      if (res.autoEscalated && res.autoEscalated > 0) {
+   964→        toast.warning(`${res.autoEscalated} lead dieskalasi otomatis`, {
+   965→          description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
+   966→        });
+   967→      }
+   968→    } catch (err) {
+   969→      setError(err instanceof Error ? err.message : "Terjadi kesalahan tak terduga");
+   970→      if (!silent) toast.error("Gagal memuat lead inbox");
+   971→    } finally {
+   972→      setLoading(false);
+   973→    }
+   974→  }, [channelFilter, activeBrandFilter]);
+   975→
+   976→  useEffect(() => {
+   977→    void loadLeads();
+   978→  }, [loadLeads]);
+   979→
+   980→  // Ronde 21 — tarik email masuk nyata via IMAP (kanal email terhubung & non-demo).
+   981→  const [emailSyncing, setEmailSyncing] = useState(false);
+   982→  async function handleEmailSync() {
+   983→    setEmailSyncing(true);
+   984→    try {
+   985→      const res = await channelsApi.emailSync();
+   986→      if (res.created > 0) {
+   987→        toast.success(`${res.created} email masuk ditarik via IMAP`, {
+   988→          description: `${res.skipped} duplikat dilewati · sejak ${new Date(res.since).toLocaleDateString("id-ID")}`,
+   989→        });
+   990→        await loadLeads(true);
+   991→      } else {
+   992→        toast.info("Tidak ada email baru", { description: `${res.skipped} email sudah pernah disinkron.` });
+   993→      }
+   994→    } catch (err) {
+   995→      toast.error("Sinkron IMAP gagal", { description: err instanceof Error ? err.message : "Cek koneksi email di Saluran & Integrasi" });
+   996→    } finally {
+   997→      setEmailSyncing(false);
+   998→    }
+   999→  }
+  1000→
+  1001→  const stats = useMemo(() => {
+  1002→    const list = leads ?? [];
+  1003→    return {
+  1004→      total: list.length,
+  1005→      // Breach baru (Fase 3): waktu tunggu melewati SLA brand — lead yang sudah direspons tidak dihitung
+  1006→      late: list.filter((l) => !isResponded(l) && (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
+  1007→      duplicate: list.filter((l) => l.candidates.length > 0).length,
+  1008→      responded: list.filter((l) => isResponded(l)).length,
+  1009→    };
+  1010→  }, [leads]);
+  1011→
+  1012→  const sortedLeads = useMemo(() => {
+  1013→    const list = [...(leads ?? [])];
+  1014→    if (sortBy === "late") {
+  1015→      list.sort((a, b) => b.slaHours - a.slaHours);
+  1016→    } else {
+  1017→      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  1018→    }
+  1019→    return list;
+  1020→  }, [leads, sortBy]);
+  1021→
+  1022→  const selectedLead = useMemo(
+  1023→    () => leads?.find((l) => l.id === selectedId) ?? null,
+  1024→    [leads, selectedId]
+  1025→  );
+  1026→
+  1027→  // Task 17-c — riwayat respons outbound utk lead terpilih (match externalId `inbox-reply:<leadId>`)
+  1028→  const [replies, setReplies] = useState<InteractionDTO[]>([]);
+  1029→  const repliesLeadId = selectedLead?.id ?? null;
+  1030→  const repliesLeadContactId = selectedLead?.contactId ?? null;
+  1031→  const repliesRespondedAt = selectedLead?.respondedAt ?? null;
+  1032→  useEffect(() => {
+  1033→    if (!repliesLeadId) {
+  1034→      setReplies([]);
+  1035→      return;
+  1036→    }
+  1037→    let alive = true;
+  1038→    (async () => {
+  1039→      try {
+  1040→        const res = await api.interactions(
+  1041→          repliesLeadContactId ? { contactId: repliesLeadContactId } : undefined
+  1042→        );
+  1043→        if (!alive) return;
+  1044→        const marker = `inbox-reply:${repliesLeadId}`;
+  1045→        setReplies(
+  1046→          res.interactions.filter((i) => i.direction === "outbound" && i.externalId === marker)
+  1047→        );
+  1048→      } catch {
+  1049→        if (alive) setReplies([]);
+  1050→      }
+  1051→    })();
+  1052→    return () => { alive = false; };
+  1053→  }, [repliesLeadId, repliesLeadContactId, repliesRespondedAt]);
+  1054→
+  1055→  const brandOptions = brands.length > 0 ? brands : selectedLead?.brand ? [selectedLead.brand] : [];
+  1056→  const selectedOppBrand = brandOptions.find((b) => b.id === oppForm.brandId);
+  1057→  const serviceNameOptions = selectedOppBrand ? BRAND_SERVICES[selectedOppBrand.slug] ?? [] : [];
+  1058→
+  1059→  const convertMode: "new" | "link" | null = showNewContact ? "new" : linkedContactId ? "link" : null;
+  1060→  const canConvert =
+  1061→    convertMode !== null &&
+  1062→    oppForm.brandId !== "" &&
+  1063→    (convertMode !== "new" || contactForm.firstName.trim().length > 0);
+  1064→
+  1065→  function handleSelectLead(lead: InboxLead) {
+  1066→    setSelectedId(lead.id);
+  1067→    setShowNewContact(false);
+  1068→    setLinkedContactId(null);
+  1069→
+  1070→    const rawSender = (lead.senderName ?? "").trim();
+  1071→    // FIX r22: email hanya diisi bila benar-benar alamat email valid (x@y.tld).
+  1072→    // Handle Instagram seperti "@rani.creativehouse" BUKAN email — jangan diprefill ke kolom email.
+  1073→    const emailCandidate = extractEmailFromText(rawSender);
+  1074→    const looksLikePhone = /^\+?[\d][\d\s\-()+]{5,}$/.test(rawSender);
+  1075→    setContactForm({
+  1076→      ...EMPTY_CONTACT_FORM,
+  1077→      email: emailCandidate ?? "",
+  1078→      whatsapp: looksLikePhone ? rawSender : "",
+  1079→      // Ronde 23: lead IG dgn handle → handle masuk kolom Instagram (perilaku email r22 tetap).
+  1080→      instagram: lead.channel === "instagram" && isSocialHandle(rawSender) ? rawSender : "",
+  1081→    });
+  1082→    setOppForm({
+  1083→      ...EMPTY_OPP_FORM,
+  1084→      brandId: lead.brandId ?? lead.brand?.id ?? "",
+  1085→      title: `Lead ${channelLabel(lead.channel)} — ${rawSender.slice(0, 48) || "Tanpa nama"}`,
+  1086→      ownerName: user?.name ?? "",
+  1087→    });
+  1088→    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+  1089→      window.setTimeout(() => {
+  1090→        detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  1091→      }, 80);
+  1092→    }
+  1093→  }
+  1094→
+  1095→  function handleToggleCandidate(contactId: string) {
+  1096→    setShowNewContact(false);
+  1097→    setLinkedContactId((prev) => (prev === contactId ? null : contactId));
+  1098→  }
+  1099→
+  1100→  function handleToggleNewContact() {
+  1101→    setLinkedContactId(null);
+  1102→    setShowNewContact((prev) => !prev);
+  1103→  }
+  1104→
+  1105→  async function handleConvert() {
+  1106→    if (!selectedLead || !user || !convertMode) return;
+  1107→    if (!oppForm.brandId) {
+  1108→      toast.error("Brand wajib dipilih untuk opportunity.");
+  1109→      return;
+  1110→    }
+  1111→    if (convertMode === "new" && !contactForm.firstName.trim()) {
+  1112→      toast.error("Nama depan contact wajib diisi.");
+  1113→      return;
+  1114→    }
+  1115→
+  1116→    const opportunity: Record<string, unknown> = {
+  1117→      brandId: oppForm.brandId,
+  1118→      title:
+  1119→        oppForm.title.trim() ||
+  1120→        `Lead ${channelLabel(selectedLead.channel)} — ${(selectedLead.senderName ?? "Tanpa nama").trim().slice(0, 48)}`,
+  1121→      ownerName: oppForm.ownerName.trim() || user.name,
+  1122→      priority: oppForm.priority,
+  1123→    };
+  1124→    if (oppForm.serviceCategory) opportunity.serviceCategory = oppForm.serviceCategory;
+  1125→    if (oppForm.serviceName) opportunity.serviceName = oppForm.serviceName;
+  1126→    const est = Number(oppForm.estimatedValue);
+  1127→    if (oppForm.estimatedValue.trim() !== "" && Number.isFinite(est) && est > 0) {
+  1128→      opportunity.estimatedValue = est;
+  1129→    }
+  1130→
+  1131→    const payload: Record<string, unknown> = {
+  1132→      interactionId: selectedLead.id,
+  1133→      action: convertMode,
+  1134→      opportunity,
+  1135→      actorName: user.name,
+  1136→      actorRole: user.role,
+  1137→    };
+  1138→    if (convertMode === "link" && linkedContactId) payload.contactId = linkedContactId;
+  1139→    if (convertMode === "new") {
+  1140→      payload.contact = {
+  1141→        firstName: contactForm.firstName.trim(),
+  1142→        ...(contactForm.lastName.trim() ? { lastName: contactForm.lastName.trim() } : {}),
+  1143→        ...(contactForm.email.trim() ? { email: contactForm.email.trim() } : {}),
+  1144→        ...(contactForm.whatsapp.trim() ? { whatsapp: contactForm.whatsapp.trim() } : {}),
+  1145→        ...(contactForm.companyName.trim() ? { companyName: contactForm.companyName.trim() } : {}),
+  1146→        // Ronde 23 — jabatan + Instagram (lead berasal dari IG) ikut dikirim saat konversi.
+  1147→        ...(contactForm.position.trim() ? { position: contactForm.position.trim() } : {}),
+  1148→        ...(contactForm.instagram.trim() ? { instagram: contactForm.instagram.trim() } : {}),
+  1149→        ...(contactForm.city.trim() ? { city: contactForm.city.trim() } : {}),
+  1150→      };
+  1151→    }
+  1152→
+  1153→    setConverting(true);
+  1154→    try {
+  1155→      const res = await api.convertLead(payload);
+  1156→      toast.success("Lead dikonversi", {
+  1157→        description: `Opportunity ${res.opportunity?.title ?? ""} berhasil dibuat beserta task follow-up otomatis.`,
+  1158→      });
+  1159→      setSelectedId(null);
+  1160→      setShowNewContact(false);
+  1161→      setLinkedContactId(null);
+  1162→      await loadLeads();
+  1163→    } catch (err) {
+  1164→      toast.error(err instanceof Error ? err.message : "Gagal mengonversi lead.");
+  1165→    } finally {
+  1166→      setConverting(false);
+  1167→    }
+  1168→  }
+  1169→
+  1170→  /** Fase 3 — buka dialog eskalasi untuk sebuah lead. */
+  1171→  function openEscalateDialog(lead: InboxLead) {
+  1172→    setEscalateTarget(lead);
+  1173→    setEscalateNote("");
+  1174→  }
+  1175→
+  1176→  async function handleEscalate() {
+  1177→    if (!escalateTarget || !user || escalating) return;
+  1178→    setEscalating(true);
+  1179→    try {
+  1180→      await api.escalateLead({
+  1181→        interactionId: escalateTarget.id,
+  1182→        ...(escalateNote.trim() ? { note: escalateNote.trim() } : {}),
+  1183→        actorName: user.name,
+  1184→        actorRole: user.role,
+  1185→      });
+  1186→      toast.success("Eskalasi dibuat — task urgent untuk Direktur");
+  1187→      setEscalatedIds((prev) => {
+  1188→        const next = new Set(prev);
+  1189→        next.add(escalateTarget.id);
+  1190→        return next;
+  1191→      });
+  1192→      setEscalateTarget(null);
+  1193→      setEscalateNote("");
+  1194→    } catch (err) {
+  1195→      toast.error(err instanceof Error ? err.message : "Gagal membuat eskalasi.");
+  1196→    } finally {
+  1197→      setEscalating(false);
+  1198→    }
+  1199→  }
+  1200→
+  1201→  const firstLoad = loading && leads === null;
+  1202→  const escalateSla = escalateTarget
+  1203→    ? slaBadgeInfo(escalateTarget.brand?.slaHours ?? 24, escalateTarget.slaHours)
+  1204→    : null;
+  1205→
+  1206→  // Ronde 19 — kanal dgn lead masuk tapi belum ada koneksi aktif
+  1207→  const unconnectedInbound = useMemo(() => {
+  1208→    if (connectedChannels === null || !leads) return [];
+  1209→    const used = new Set(leads.map((l) => l.channel).filter((c) => c in CHANNEL_TYPES));
+  1210→    return [...used].filter((c) => !connectedChannels.has(c));
+  1211→  }, [connectedChannels, leads]);
+  1212→
+  1213→  return (
+  1214→    <div className="space-y-4">
+  1215→      {/* ===== Header ===== */}
+  1216→      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+  1217→        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+  1218→          <div className="min-w-0">
+  1219→            <div className="flex flex-wrap items-center gap-2">
+  1220→              <h1 className="text-lg font-bold text-zinc-900 sm:text-xl">Lead Inbox</h1>
+  1221→              {leads ? (
+  1222→                <Badge className="bg-zinc-900 text-white">{`${stats.total} lead belum dikonversi`}</Badge>
+  1223→              ) : (
+  1224→                <Skeleton className="h-5 w-40" />
+  1225→              )}
+  1226→            </div>
+  1227→            <p className="mt-1 text-sm text-zinc-500">Semua lead baru lintas kanal — Instagram, WhatsApp, Email, Website</p>
+  1228→            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500" aria-label="Legenda SLA">
+  1229→              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />SLA Aman</span>
+  1230→              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />Segera Jatuh Tempo</span>
+  1231→              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-500" aria-hidden="true" />Terlambat</span>
+  1232→              <span className="inline-flex items-center gap-1.5"><Reply className="size-3 text-emerald-600" aria-hidden="true" />Sudah Direspons</span>
+  1233→            </div>
+  1234→          </div>
+  1235→          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+  1236→            <Select
+  1237→              value={channelFilter}
+  1238→              onValueChange={(v) => { setChannelFilter(v); setSelectedId(null); }}
+  1239→            >
+  1240→              <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter kanal">
+  1241→                <SelectValue placeholder="Semua Kanal" />
+  1242→              </SelectTrigger>
+  1243→              <SelectContent>
+  1244→                <SelectItem value="all">Semua Kanal</SelectItem>
+  1245→                {CHANNELS.map((c) => (
+  1246→                  <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
+  1247→                ))}
+  1248→              </SelectContent>
+  1249→            </Select>
+  1250→            <Select
+  1251→              value={activeBrandFilter}
+  1252→              onValueChange={(v) => { setActiveBrandFilter(v); setSelectedId(null); }}
+  1253→            >
+  1254→              <SelectTrigger className="w-full sm:w-[190px]" aria-label="Filter brand">
+  1255→                <SelectValue placeholder="Semua Brand" />
+  1256→              </SelectTrigger>
+  1257→              <SelectContent>
+  1258→                <SelectItem value="all">Semua Brand</SelectItem>
+  1259→                {brands.map((b) => (
+  1260→                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+  1261→                ))}
+  1262→              </SelectContent>
+  1263→            </Select>
+  1264→            <Select value={sortBy} onValueChange={(v) => setSortBy(v === "late" ? "late" : "newest")}>
+  1265→              <SelectTrigger className="w-full sm:w-[160px]" aria-label="Urutkan lead">
+  1266→                <SelectValue placeholder="Urutkan" />
+  1267→              </SelectTrigger>
+  1268→              <SelectContent>
+  1269→                <SelectItem value="newest">Terbaru</SelectItem>
+  1270→                <SelectItem value="late">Paling Terlambat</SelectItem>
+  1271→              </SelectContent>
+  1272→            </Select>
+  1273→            <Button
+  1274→              type="button"
+  1275→              variant="outline"
+  1276→              size="icon"
+  1277→              className="shrink-0"
+  1278→              disabled={loading}
+  1279→              onClick={() => void loadLeads()}
+  1280→              aria-label="Muat ulang daftar lead"
+  1281→            >
+  1282→              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+  1283→            </Button>
+  1284→            <Button
+  1285→              type="button"
+  1286→              variant="outline"
+  1287→              size="icon"
+  1288→              className="shrink-0"
+  1289→              disabled={emailSyncing}
+  1290→              onClick={() => void handleEmailSync()}
+  1291→              aria-label="Tarik email masuk via IMAP"
+  1292→              title="Tarik email masuk via IMAP (kanal email)"
+  1293→            >
+  1294→              <Mail className={cn("size-4", emailSyncing && "animate-pulse")} />
+  1295→            </Button>
+  1296→          </div>
+  1297→        </div>
+  1298→      </div>
+  1299→
+  1300→      {/* ===== Ronde 19 — banner kanal belum terhubung ===== */}
+  1301→      {unconnectedInbound.length > 0 ? (
+  1302→        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
+  1303→          <PlugZap className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
+  1304→          <p className="min-w-0 flex-1 text-xs leading-relaxed text-amber-800">
+  1305→            <span className="font-semibold">Kanal belum terhubung: {unconnectedInbound.map((c) => CHANNEL_TYPES[c]?.label ?? c).join(", ")}.</span>{" "}
+  1306→            {canAccess("channels", user?.role ?? "")
+  1307→              ? "Balasan manual masih bisa dikirim, tetapi sinkronisasi otomatis & status pesan baru aktif setelah kanal disambungkan."
+  1308→              : "Minta admin (Direktur) menghubungkannya di menu Saluran & Integrasi."}
+  1309→          </p>
+  1310→          {canAccess("channels", user?.role ?? "") ? (
+  1311→            <Button
+  1312→              size="sm"
+  1313→              variant="outline"
+  1314→              className="h-7 shrink-0 border-amber-300 bg-white px-2 text-xs text-amber-700 hover:bg-amber-100"
+  1315→              onClick={() => useCrmStore.getState().setActiveModule("channels")}
+  1316→            >
+  1317→              Hubungkan sekarang
+  1318→              <Send className="size-3" aria-hidden="true" />
+  1319→            </Button>
+  1320→          ) : null}
+  1321→        </div>
+  1322→      ) : null}
+  1323→
+  1324→      {/* ===== Stat strip ===== */}
+  1325→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+  1326→        <StatCard icon={Inbox} label="Total Lead" value={stats.total} tone="zinc" />
+  1327→        <StatCard icon={AlarmClock} label="Terlambat Respons" value={stats.late} tone={stats.late > 0 ? "rose" : "zinc"} />
+  1328→        <StatCard icon={Reply} label="Sudah Direspons" value={stats.responded} tone={stats.responded > 0 ? "zinc" : "zinc"} />
+  1329→        <StatCard icon={AlertTriangle} label="Warning Duplikat" value={stats.duplicate} tone={stats.duplicate > 0 ? "amber" : "zinc"} />
+  1330→      </div>
+  1331→
+  1332→      {/* ===== Layout 2 kolom ===== */}
+  1333→      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+  1334→        {/* KIRI: daftar lead */}
+  1335→        <section aria-label="Daftar lead masuk">
+  1336→          {firstLoad ? (
+  1337→            <ListSkeleton />
+  1338→          ) : error && !leads ? (
+  1339→            <div className="flex flex-col items-center justify-center gap-3 rounded-xl border bg-white p-10 text-center shadow-sm">
+  1340→              <span className="flex size-12 items-center justify-center rounded-full bg-rose-100" aria-hidden="true">
+  1341→                <AlertTriangle className="size-6 text-rose-600" />
+  1342→              </span>
+  1343→              <p className="text-sm font-medium text-zinc-700">Gagal memuat lead</p>
+  1344→              <p className="text-xs text-zinc-400">{error}</p>
+  1345→              <Button type="button" variant="outline" size="sm" onClick={() => void loadLeads()}>Coba Lagi</Button>
+  1346→            </div>
+  1347→          ) : leads && leads.length === 0 ? (
+  1348→            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+  1349→              <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
+  1350→                <Inbox className="size-6 text-zinc-400" />
+  1351→              </span>
+  1352→              <p className="text-sm font-medium text-zinc-700">Tidak ada lead baru — semua sudah ditangani</p>
+  1353→              <p className="text-xs text-zinc-400">Lead baru dari semua kanal akan muncul di sini.</p>
+  1354→            </div>
+  1355→          ) : leads ? (
+  1356→            <div className="max-h-96 space-y-3 overflow-y-auto pr-1 crm-scroll">
+  1357→              {sortedLeads.map((lead) => (
+  1358→                <LeadCard
+  1359→                  key={lead.id}
+  1360→                  lead={lead}
+  1361→                  escalated={escalatedIds.has(lead.id)}
+  1362→                  selected={lead.id === selectedId}
+  1363→                  onSelect={handleSelectLead}
+  1364→                  onEscalate={openEscalateDialog}
+  1365→                />
+  1366→              ))}
+  1367→            </div>
+  1368→          ) : null}
+  1369→        </section>
+  1370→
+  1371→        {/* KANAN: panel detail (sticky) */}
+  1372→        <section aria-label="Detail lead">
+  1373→          <div
+  1374→            ref={detailRef}
+  1375→            className="lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto crm-scroll"
+  1376→          >
+  1377→            {!selectedLead ? (
+  1378→              <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+  1379→                <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
+  1380→                  <Inbox className="size-6 text-zinc-400" />
+  1381→                </span>
+  1382→                <p className="text-sm font-medium text-zinc-700">Belum ada lead dipilih</p>
+  1383→                <p className="text-xs text-zinc-400">Pilih lead dari daftar untuk melihat detail dan mengonversinya.</p>
+  1384→              </div>
+  1385→            ) : (
+  1386→              <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+  1387→                {/* Header panel */}
+  1388→                <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
+  1389→                  <div className="flex min-w-0 items-start gap-3">
+  1390→                    <ChannelAvatar channel={selectedLead.channel} />
+  1391→                    <div className="min-w-0">
+  1392→                      <p className="truncate text-sm font-semibold text-zinc-900">
+  1393→                        {(selectedLead.senderName ?? "").trim() || "Tanpa nama"}
+  1394→                      </p>
+  1395→                      <p className="text-xs text-zinc-500">
+  1396→                        {formatDateTime(selectedLead.createdAt)} · {timeAgo(selectedLead.createdAt)}
+  1397→                      </p>
+  1398→                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+  1399→                        <Badge variant="outline" className={cn("border", channelMeta(selectedLead.channel).badge)}>
+  1400→                          {channelLabel(selectedLead.channel)}
+  1401→                        </Badge>
+  1402→                        {selectedLead.brand ? (
+  1403→                          <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
+  1404→                        ) : null}
+  1405→                        <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} respondedAt={selectedLead.respondedAt} />
+  1406→                      </div>
+  1407→                    </div>
+  1408→                  </div>
+  1409→                  <Button
+  1410→                    type="button"
+  1411→                    variant="ghost"
+  1412→                    size="icon"
+  1413→                    className="size-8 shrink-0"
+  1414→                    onClick={() => setSelectedId(null)}
+  1415→                    aria-label="Tutup detail lead"
+  1416→                  >
+  1417→                    <X className="size-4" />
+  1418→                  </Button>
+  1419→                </div>
+  1420→
+  1421→                {/* Isi pesan + metadata */}
+  1422→                <div className="p-4">
+  1423→                  {selectedLead.subject ? (
+  1424→                    <p className="mb-2 text-sm font-medium text-zinc-800">{selectedLead.subject}</p>
+  1425→                  ) : null}
+  1426→                  <div className="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed text-zinc-700">
+  1427→                    {selectedLead.content}
+  1428→                  </div>
+  1429→                  <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+  1430→                    <div>
+  1431→                      <dt className="text-zinc-400">ID Eksternal</dt>
+  1432→                      <dd className="truncate font-mono text-zinc-700">{selectedLead.externalId ?? "-"}</dd>
+  1433→                    </div>
+  1434→                    <div>
+  1435→                      <dt className="text-zinc-400">Waktu Masuk</dt>
+  1436→                      <dd className="text-zinc-700">{formatDateTime(selectedLead.createdAt)}</dd>
+  1437→                    </div>
+  1438→                  </dl>
+  1439→
+  1440→                  {/* Fase 3 — Respons & catat */}
+  1441→                  <div className={cn(
+  1442→                    "mt-3 rounded-lg border p-3",
+  1443→                    selectedLead.respondedAt ? "border-emerald-200 bg-emerald-50/60" : "border-dashed border-zinc-300"
+  1444→                  )}>
+  1445→                    {selectedLead.respondedAt ? (
+  1446→                      <div className="flex flex-wrap items-center justify-between gap-2">
+  1447→                        <span className="flex items-center gap-2 text-xs font-medium text-emerald-700">
+  1448→                          <Reply className="size-3.5 shrink-0" aria-hidden="true" />
+  1449→                          Direspons oleh {selectedLead.respondedBy ?? "-"} · {timeAgo(selectedLead.respondedAt)}
+  1450→                        </span>
+  1451→                        <span className="text-[10px] text-emerald-600">SLA terpenuhi</span>
+  1452→                      </div>
+  1453→                    ) : (
+  1454→                      <div className="flex flex-wrap items-center justify-between gap-2">
+  1455→                        <span className="text-xs text-zinc-500">
+  1456→                          Belum direspons — balas dengan template agar SLA tercatat terpenuhi.
+  1457→                        </span>
+  1458→                        <Button
+  1459→                          type="button"
+  1460→                          size="sm"
+  1461→                          className="h-7 gap-1.5 rounded-lg bg-zinc-900 text-xs text-white hover:bg-zinc-800"
+  1462→                          onClick={() => setRespondTarget(selectedLead)}
+  1463→                          aria-label="Respons lead dengan template"
+  1464→                        >
+  1465→                          <Reply className="size-3" aria-hidden="true" />
+  1466→                          Respons
+  1467→                        </Button>
+  1468→                      </div>
+  1469→                    )}
+  1470→                  </div>
+  1471→
+  1472→                  {/* Task 17-c — Riwayat respons outbound + indikator tick status pengiriman */}
+  1473→                  {replies.length > 0 ? (
+  1474→                    <div className="mt-3 rounded-lg border border-zinc-200 p-3" aria-label="Riwayat respons">
+  1475→                      <div className="flex items-center justify-between gap-2">
+  1476→                        <span className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+  1477→                          <Reply className="size-4 text-zinc-500" aria-hidden="true" />
+  1478→                          Riwayat Respons
+  1479→                        </span>
+  1480→                        <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">
+  1481→                          {`${replies.length} respons`}
+  1482→                        </Badge>
+  1483→                      </div>
+  1484→                      <ul className="mt-2.5 space-y-2">
+  1485→                        {replies.map((r) => {
+  1486→                          const RIcon = channelMeta(r.channel).icon;
+  1487→                          return (
+  1488→                            <li key={r.id} className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-2.5">
+  1489→                              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+  1490→                                <RIcon className="size-3.5 shrink-0" aria-hidden="true" />
+  1491→                                <span className="font-medium text-zinc-600">{channelLabel(r.channel)}</span>
+  1492→                                <span aria-hidden="true">·</span>
+  1493→                                <span>{formatDateTime(r.createdAt)}</span>
+  1494→                                <DeliveryTick status={r.deliveryStatus} channel={r.channel} />
+  1495→                              </div>
+  1496→                              <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-700">
+  1497→                                {r.content}
+  1498→                              </p>
+  1499→                            </li>
+  1500→                          );
+  1501→                        })}
+  1502→                      </ul>
+  1503→                    </div>
+  1504→                  ) : null}
+  1505→                </div>
+  1506→
+  1507→                {/* Ronde 23 — Kelengkapan Identitas + pesan identifikasi */}
+  1508→                <IdentityReadinessCard
+  1509→                  lead={selectedLead}
+  1510→                  contactForm={contactForm}
+  1511→                  linkMode={convertMode === "link"}
+  1512→                />
+  1513→
+  1514→                {/* Identifikasi Identitas */}
+  1515→                <div className="border-t border-zinc-200 p-4">
+  1516→                  <div className="flex items-center justify-between gap-2">
+  1517→                    <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+  1518→                      <Fingerprint className="size-4 text-zinc-500" aria-hidden="true" />
+  1519→                      Identifikasi Identitas
+  1520→                    </div>
+  1521→                    {selectedLead.candidates.length > 0 ? (
+  1522→                      <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+  1523→                        {`${selectedLead.candidates.length} kandidat`}
+  1524→                      </Badge>
+  1525→                    ) : null}
+  1526→                  </div>
+  1527→                  {selectedLead.candidates.length === 0 ? (
+  1528→                    <p className="mt-3 text-sm text-zinc-500">Tidak ada kemiripan — buat contact baru.</p>
+  1529→                  ) : (
+  1530→                    <div className="mt-3 space-y-3">
+  1531→                      {selectedLead.candidates.map((candidate) => (
+  1532→                        <CandidateCard
+  1533→                          key={candidate.contactId}
+  1534→                          candidate={candidate}
+  1535→                          selected={linkedContactId === candidate.contactId}
+  1536→                          onToggle={() => handleToggleCandidate(candidate.contactId)}
+  1537→                        />
+  1538→                      ))}
+  1539→                    </div>
+  1540→                  )}
+  1541→                </div>
+  1542→
+  1543→                {/* Form konversi */}
+  1544→                <div className="border-t border-zinc-200 p-4">
+  1545→                  <div className="flex flex-wrap items-center justify-between gap-2">
+  1546→                    <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+  1547→                      <UserPlus className="size-4 text-zinc-500" aria-hidden="true" />
+  1548→                      Data Konversi
+  1549→                    </div>
+  1550→                    <Button
+  1551→                      type="button"
+  1552→                      size="sm"
+  1553→                      variant={showNewContact ? "default" : "outline"}
+  1554→                      onClick={handleToggleNewContact}
+  1555→                    >
+  1556→                      {showNewContact ? "Batal — pakai contact terpilih" : "Buat Contact Baru"}
+  1557→                    </Button>
+  1558→                  </div>
+  1559→
+  1560→                  {showNewContact ? (
+  1561→                    <div className="mt-3 space-y-3 rounded-lg border border-zinc-200 bg-zinc-50/60 p-3">
+  1562→                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Contact Baru</p>
+  1563→                      {selectedLead && selectedLead.channel === "instagram" && isSocialHandle(selectedLead.senderName) ? (
+  1564→                        <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+  1565→                          <Instagram className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+  1566→                          <span>
+  1567→                            Lead ini datang dari <strong>Instagram</strong> (handle {selectedLead.senderName}). Handle sosial <strong>tidak</strong> dimasukkan ke kolom email — isi email manual bila klien memberikannya.
+  1568→                          </span>
+  1569→                        </p>
+  1570→                      ) : null}
+  1571→                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1572→                        <div className="space-y-1.5">
+  1573→                          <Label htmlFor="inbox-first-name" className="text-xs">Nama Depan <span className="text-rose-600">*</span></Label>
+  1574→                          <Input
+  1575→                            id="inbox-first-name"
+  1576→                            value={contactForm.firstName}
+  1577→                            onChange={(e) => setContactForm((f) => ({ ...f, firstName: e.target.value }))}
+  1578→                            placeholder="cth. Dian"
+  1579→                          />
+  1580→                        </div>
+  1581→                        <div className="space-y-1.5">
+  1582→                          <Label htmlFor="inbox-last-name" className="text-xs">Nama Belakang</Label>
+  1583→                          <Input
+  1584→                            id="inbox-last-name"
+  1585→                            value={contactForm.lastName}
+  1586→                            onChange={(e) => setContactForm((f) => ({ ...f, lastName: e.target.value }))}
+  1587→                            placeholder="cth. Permata"
+  1588→                          />
+  1589→                        </div>
+  1590→                        <div className="space-y-1.5">
+  1591→                          <Label htmlFor="inbox-email" className="text-xs">Email</Label>
+  1592→                          <Input
+  1593→                            id="inbox-email"
+  1594→                            type="email"
+  1595→                            value={contactForm.email}
+  1596→                            onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
+  1597→                            placeholder="nama@perusahaan.co.id"
+  1598→                          />
+  1599→                        </div>
+  1600→                        <div className="space-y-1.5">
+  1601→                          <Label htmlFor="inbox-whatsapp" className="text-xs">WhatsApp</Label>
+  1602→                          <Input
+  1603→                            id="inbox-whatsapp"
+  1604→                            value={contactForm.whatsapp}
+  1605→                            onChange={(e) => setContactForm((f) => ({ ...f, whatsapp: e.target.value }))}
+  1606→                            placeholder="+62 8xx xxxx xxxx"
+  1607→                          />
+  1608→                        </div>
+  1609→                        <div className="space-y-1.5">
+  1610→                          <Label htmlFor="inbox-company" className="text-xs">Perusahaan</Label>
+  1611→                          <Input
+  1612→                            id="inbox-company"
+  1613→                            value={contactForm.companyName}
+  1614→                            onChange={(e) => setContactForm((f) => ({ ...f, companyName: e.target.value }))}
+  1615→                            placeholder="cth. PT Agro Makmur"
+  1616→                          />
+  1617→                        </div>
+  1618→                        <div className="space-y-1.5">
+  1619→                          <Label htmlFor="inbox-position" className="text-xs">Jabatan di Perusahaan</Label>
+  1620→                          <Input
+  1621→                            id="inbox-position"
+  1622→                            value={contactForm.position}
+  1623→                            onChange={(e) => setContactForm((f) => ({ ...f, position: e.target.value }))}
+  1624→                            placeholder="cth. Marketing Manager"
+  1625→                          />
+  1626→                        </div>
+  1627→                        <div className="space-y-1.5">
+  1628→                          <Label htmlFor="inbox-city" className="text-xs">Kota</Label>
+  1629→                          <Input
+  1630→                            id="inbox-city"
+  1631→                            value={contactForm.city}
+  1632→                            onChange={(e) => setContactForm((f) => ({ ...f, city: e.target.value }))}
+  1633→                            placeholder="cth. Medan"
+  1634→                          />
+  1635→                        </div>
+  1636→                        <div className="space-y-1.5">
+  1637→                          <Label htmlFor="inbox-instagram" className="text-xs">Instagram</Label>
+  1638→                          <Input
+  1639→                            id="inbox-instagram"
+  1640→                            value={contactForm.instagram}
+  1641→                            onChange={(e) => setContactForm((f) => ({ ...f, instagram: e.target.value }))}
+  1642→                            placeholder="cth. @rani.creativehouse"
+  1643→                          />
+  1644→                        </div>
+  1645→                      </div>
+  1646→                    </div>
+  1647→                  ) : null}
+  1648→
+  1649→                  <div className="mt-3 space-y-3">
+  1650→                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Opportunity</p>
+  1651→                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1652→                      <div className="space-y-1.5">
+  1653→                        <Label className="text-xs">Brand <span className="text-rose-600">*</span></Label>
+  1654→                        <Select
+  1655→                          value={oppForm.brandId}
+  1656→                          onValueChange={(v) => setOppForm((f) => ({ ...f, brandId: v, serviceName: "" }))}
+  1657→                        >
+  1658→                          <SelectTrigger className="w-full" aria-label="Brand opportunity">
+  1659→                            <SelectValue placeholder="Pilih brand" />
+  1660→                          </SelectTrigger>
+  1661→                          <SelectContent>
+  1662→                            {brandOptions.map((b) => (
+  1663→                              <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+  1664→                            ))}
+  1665→                          </SelectContent>
+  1666→                        </Select>
+  1667→                      </div>
+  1668→                      <div className="space-y-1.5">
+  1669→                        <Label className="text-xs">Prioritas</Label>
+  1670→                        <Select
+  1671→                          value={oppForm.priority}
+  1672→                          onValueChange={(v) => setOppForm((f) => ({ ...f, priority: v }))}
+  1673→                        >
+  1674→                          <SelectTrigger className="w-full" aria-label="Prioritas opportunity">
+  1675→                            <SelectValue placeholder="Pilih prioritas" />
+  1676→                          </SelectTrigger>
+  1677→                          <SelectContent>
+  1678→                            {PRIORITIES.map((p) => (
+  1679→                              <SelectItem key={p} value={p}>{PRIORITY_LABELS[p] ?? p}</SelectItem>
+  1680→                            ))}
+  1681→                          </SelectContent>
+  1682→                        </Select>
+  1683→                      </div>
+  1684→                    </div>
+  1685→                    <div className="space-y-1.5">
+  1686→                      <Label htmlFor="inbox-title" className="text-xs">Judul Opportunity</Label>
+  1687→                      <Input
+  1688→                        id="inbox-title"
+  1689→                        value={oppForm.title}
+  1690→                        onChange={(e) => setOppForm((f) => ({ ...f, title: e.target.value }))}
+  1691→                        placeholder="Judul opportunity"
+  1692→                      />
+  1693→                    </div>
+  1694→                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1695→                      <div className="space-y-1.5">
+  1696→                        <Label className="text-xs">Kategori Layanan</Label>
+  1697→                        <Select
+  1698→                          value={oppForm.serviceCategory}
+  1699→                          onValueChange={(v) => setOppForm((f) => ({ ...f, serviceCategory: v, serviceName: "" }))}
+  1700→                        >
+  1701→                          <SelectTrigger className="w-full" aria-label="Kategori layanan">
+  1702→                            <SelectValue placeholder="Pilih kategori" />
+  1703→                          </SelectTrigger>
+  1704→                          <SelectContent>
+  1705→                            {SERVICE_CATEGORIES.map((cat) => (
+  1706→                              <SelectItem key={cat} value={cat}>{SERVICE_CATEGORY_LABELS[cat] ?? cat}</SelectItem>
+  1707→                            ))}
+  1708→                          </SelectContent>
+  1709→                        </Select>
+  1710→                      </div>
+  1711→                      {serviceNameOptions.length > 0 ? (
+  1712→                        <div className="space-y-1.5">
+  1713→                          <Label className="text-xs">Layanan</Label>
+  1714→                          <Select
+  1715→                            value={oppForm.serviceName || "none"}
+  1716→                            onValueChange={(v) => setOppForm((f) => ({ ...f, serviceName: v === "none" ? "" : v }))}
+  1717→                          >
+  1718→                            <SelectTrigger className="w-full" aria-label="Layanan">
+  1719→                              <SelectValue placeholder="Pilih layanan" />
+  1720→                            </SelectTrigger>
+  1721→                            <SelectContent>
+  1722→                              <SelectItem value="none">Tanpa layanan spesifik</SelectItem>
+  1723→                              {serviceNameOptions.map((s) => (
+  1724→                                <SelectItem key={s} value={s}>{s}</SelectItem>
+  1725→                              ))}
+  1726→                            </SelectContent>
+  1727→                          </Select>
+  1728→                        </div>
+  1729→                      ) : (
+  1730→                        <div className="space-y-1.5">
+  1731→                          <Label className="text-xs">Layanan</Label>
+  1732→                          <p className="text-xs text-zinc-400">Pilih brand dengan katalog layanan terlebih dahulu.</p>
+  1733→                        </div>
+  1734→                      )}
+  1735→                    </div>
+  1736→                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1737→                      <div className="space-y-1.5">
+  1738→                        <Label htmlFor="inbox-value" className="text-xs">Estimasi Nilai (Rp)</Label>
+  1739→                        <Input
+  1740→                          id="inbox-value"
+  1741→                          type="number"
+  1742→                          min={0}
+  1743→                          value={oppForm.estimatedValue}
+  1744→                          onChange={(e) => setOppForm((f) => ({ ...f, estimatedValue: e.target.value }))}
+  1745→                          placeholder="cth. 25000000"
+  1746→                        />
+  1747→                      </div>
+  1748→                      <div className="space-y-1.5">
+  1749→                        <Label htmlFor="inbox-owner" className="text-xs">Owner</Label>
+  1750→                        <Input
+  1751→                          id="inbox-owner"
+  1752→                          value={oppForm.ownerName}
+  1753→                          onChange={(e) => setOppForm((f) => ({ ...f, ownerName: e.target.value }))}
+  1754→                          placeholder="Nama owner"
+  1755→                        />
+  1756→                      </div>
+  1757→                    </div>
+  1758→                  </div>
+  1759→
+  1760→                  <Button
+  1761→                    type="button"
+  1762→                    className="mt-4 w-full bg-zinc-900 text-white hover:bg-zinc-800"
+  1763→                    disabled={!canConvert || converting}
+  1764→                    onClick={() => void handleConvert()}
+  1765→                  >
+  1766→                    {converting ? (
+  1767→                      <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengonversi…</>
+  1768→                    ) : (
+  1769→                      "Konversi jadi Opportunity"
+  1770→                    )}
+  1771→                  </Button>
+  1772→                  {!canConvert ? (
+  1773→                    <p className="mt-2 text-center text-xs text-zinc-400">
+  1774→                      Pilih kandidat identitas di atas atau buat contact baru untuk melanjutkan.
+  1775→                    </p>
+  1776→                  ) : null}
+  1777→                </div>
+  1778→              </div>
+  1779→            )}
+  1780→          </div>
+  1781→        </section>
+  1782→      </div>
+  1783→
+  1784→      {/* ===== Dialog eskalasi SLA (Fase 3) ===== */}
+  1785→      <Dialog
+  1786→        open={escalateTarget !== null}
+  1787→        onOpenChange={(open) => {
+  1788→          if (!open && !escalating) {
+  1789→            setEscalateTarget(null);
+  1790→            setEscalateNote("");
+  1791→          }
+  1792→        }}
+  1793→      >
+  1794→        <DialogContent className="sm:max-w-md">
+  1795→          <DialogHeader>
+  1796→            <DialogTitle className="flex items-center gap-2">
+  1797→              <ShieldAlert className="size-4.5 text-rose-600" aria-hidden="true" />
+  1798→              Eskalasi Lead ke Direktur
+  1799→            </DialogTitle>
+  1800→            <DialogDescription>
+  1801→              Membuat task urgent (deadline 2 jam) yang ditugaskan ke Direktur untuk follow-up segera.
+  1802→            </DialogDescription>
+  1803→          </DialogHeader>
+  1804→
+  1805→          {escalateTarget ? (
+  1806→            <div className="space-y-3">
+  1807→              <dl className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs sm:grid-cols-2">
+  1808→                <div>
+  1809→                  <dt className="text-zinc-400">Pengirim</dt>
+  1810→                  <dd className="truncate font-medium text-zinc-800">
+  1811→                    {(escalateTarget.senderName ?? "").trim() || "Tanpa nama"}
+  1812→                  </dd>
+  1813→                </div>
+  1814→                <div>
+  1815→                  <dt className="text-zinc-400">Kanal</dt>
+  1816→                  <dd className="text-zinc-800">{channelLabel(escalateTarget.channel)}</dd>
+  1817→                </div>
+  1818→                <div>
+  1819→                  <dt className="text-zinc-400">Brand</dt>
+  1820→                  <dd className="text-zinc-800">{escalateTarget.brand?.name ?? "-"}</dd>
+  1821→                </div>
+  1822→                <div>
+  1823→                  <dt className="text-zinc-400">Waktu Tunggu</dt>
+  1824→                  <dd className={cn(
+  1825→                    "font-semibold tabular-nums",
+  1826→                    escalateSla?.tone === "breach" ? "text-rose-600" : "text-amber-600"
+  1827→                  )}>
+  1828→                    {escalateSla?.label ?? "-"}
+  1829→                  </dd>
+  1830→                </div>
+  1831→              </dl>
+  1832→              <p className="line-clamp-3 rounded-lg border border-zinc-200 bg-white p-3 text-sm leading-relaxed text-zinc-600">
+  1833→                {escalateTarget.content}
+  1834→              </p>
+  1835→              <div className="space-y-1.5">
+  1836→                <Label htmlFor="escalate-note" className="text-xs">Catatan (opsional)</Label>
+  1837→                <Textarea
+  1838→                  id="escalate-note"
+  1839→                  value={escalateNote}
+  1840→                  onChange={(e) => setEscalateNote(e.target.value)}
+  1841→                  placeholder="cth. Klien menunggu penawaran segera, mohon prioritas."
+  1842→                  rows={3}
+  1843→                  disabled={escalating}
+  1844→                />
+  1845→              </div>
+  1846→            </div>
+  1847→          ) : null}
+  1848→
+  1849→          <DialogFooter className="gap-2">
+  1850→            <Button
+  1851→              type="button"
+  1852→              variant="outline"
+  1853→              disabled={escalating}
+  1854→              onClick={() => { setEscalateTarget(null); setEscalateNote(""); }}
+  1855→            >
+  1856→              Batal
+  1857→            </Button>
+  1858→            <Button
+  1859→              type="button"
+  1860→              className="bg-rose-600 text-white hover:bg-rose-700"
+  1861→              disabled={escalating}
+  1862→              onClick={() => void handleEscalate()}
+  1863→            >
+  1864→              {escalating ? (
+  1865→                <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengirim…</>
+  1866→              ) : (
+  1867→                <><ShieldAlert className="size-4" aria-hidden="true" /> Buat Task Eskalasi</>
+  1868→              )}
+  1869→            </Button>
+  1870→          </DialogFooter>
+  1871→        </DialogContent>
+  1872→      </Dialog>
+  1873→
+  1874→      {/* Fase 3 — dialog Respons & Catat lead */}
+  1875→      <RespondDialog
+  1876→        lead={respondTarget}
+  1877→        linkedContactId={linkedContactId}
+  1878→        linkedContactName={
+  1879→          respondTarget && linkedContactId
+  1880→            ? respondTarget.candidates.find((c) => c.contactId === linkedContactId)?.contact?.fullName ?? null
+  1881→            : null
+  1882→        }
+  1883→        onClose={() => setRespondTarget(null)}
+  1884→        onResponded={(updated) => {
+  1885→          setLeads((prev) => (prev ?? []).map((l) => (l.id === updated.id ? updated : l)));
+  1886→        }}
+  1887→      />
+  1888→    </div>
+  1889→  );
+  1890→}
+  1891→

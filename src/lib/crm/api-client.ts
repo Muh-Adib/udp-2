@@ -3,6 +3,7 @@
 import type {
   OpportunityDTO, InteractionDTO, TaskDTO, ContactRef, CompanyRef,
   DashboardData, MatchCandidateDTO, ProjectDTO, InvoiceDTO, AuditLogDTO, Brand,
+  InboxLeadDTO,
 } from "@/lib/crm/types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -146,7 +147,7 @@ export const api = {
     if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     if (params?.sweep) sp.set("sweep", "1");
-    return request<{ leads: (InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] })[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
+    return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
     request<{ opportunity: OpportunityDTO }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),

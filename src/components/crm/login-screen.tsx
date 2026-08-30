@@ -80,7 +80,7 @@ export default function LoginScreen() {
               <p className="text-xs text-zinc-400">Multi-Brand Creative Agency Platform</p>
             </div>
           </div>
-          <h1 className="mt-10 text-3xl lg:text-4xl font-bold leading-tight tracking-tight">
+          <h1 className="mt-10 text-2xl sm:text-3xl lg:text-4xl font-bold leading-tight tracking-tight">
             Satu sistem untuk<br />empat brand, satu<br />basis data pelanggan.
           </h1>
           <p className="mt-4 text-sm text-zinc-400 max-w-md leading-relaxed">
@@ -109,8 +109,11 @@ export default function LoginScreen() {
         </p>
       </div>
 
-      {/* Panel kanan: form login */}
-      <div className="flex-1 flex items-center justify-center p-6 lg:p-10">
+      {/* Panel kanan: form login (safe-area bawah utk perangkat mobile) */}
+      <div
+        className="flex-1 flex items-center justify-center p-6 lg:p-10"
+        style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+      >
         <div className="w-full max-w-md space-y-5">
           <Card className="border-zinc-200 shadow-lg shadow-zinc-200/50">
             <CardHeader>
@@ -130,14 +133,14 @@ export default function LoginScreen() {
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@grup.co.id" required autoComplete="username" />
+                    <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@grup.co.id" required autoComplete="username" className="h-12" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="pin">PIN</Label>
-                    <Input id="pin" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••" required autoComplete="current-password" />
+                    <Input id="pin" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••" required autoComplete="current-password" className="h-12" />
                     <p className="text-xs text-zinc-500">PIN demo semua akun: <Badge variant="secondary">1234</Badge></p>
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading} aria-label="Tombol masuk">
+                  <Button type="submit" className="h-12 w-full" disabled={loading} aria-label="Tombol masuk">
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <LogIn className="h-4 w-4" aria-hidden />}
                     Masuk
                   </Button>
@@ -153,7 +156,7 @@ export default function LoginScreen() {
                   <Sparkles className="h-4 w-4 text-amber-500" aria-hidden /> Akun demo (pilih untuk mengisi form)
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-2 max-h-72 overflow-y-auto crm-scroll">
+              <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2 max-h-72 overflow-y-auto crm-scroll">
                 {users
                   .filter((u) => DEMO_USERS.some((d) => d.email === u.email))
                   .map((u) => (

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, ClipboardList, Clock, Copy,
-  Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone,
-  PlugZap, RefreshCw, Reply, Send, ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
+  Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Link2, Link2Off, List, Loader2, Mail, MessageCircle,
+  MessagesSquare, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, channelsApi } from "@/lib/crm/api-client";
@@ -13,7 +13,9 @@ import { canAccess, useCrmStore } from "@/lib/crm/store";
 import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { CHANNEL_TYPES } from "@/lib/crm/channels";
 import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
-import type { FollowUpTemplateDTO, InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
+import type {
+  ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionDTO, MatchCandidateDTO, ThreadMessageDTO,
+} from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +30,8 @@ import { Textarea } from "@/components/ui/textarea";
 
 // ============ Tipe lokal ============
 
-type InboxLead = InteractionDTO & { slaHours: number; candidates: MatchCandidateDTO[] };
+/** Task 24-a — lead inbox kini InboxLeadDTO dari backend: membawa threadKey + thread percakapan. */
+type InboxLead = InboxLeadDTO;
 
 /** Lead sudah direspons (respondedAt terisi dari alur Respons & Catat Fase 3). */
 function isResponded(lead: InboxLead): boolean {
@@ -317,6 +320,166 @@ function LeadCard({
   );
 }
 
+// ============ Task 24-a — grouping percakapan per kontak (thread) ============
+
+/** Thread dari backend; fallback sintetis bila lead lama belum membawa thread (aman runtime). */
+function threadOf(lead: InboxLead): ConversationThreadDTO {
+  if (lead.thread) return lead.thread;
+  return {
+    key: lead.threadKey || lead.id,
+    messageCount: 1,
+    channels: [lead.channel],
+    lastMessageAt: lead.createdAt,
+    messages: [{
+      id: lead.id, channel: lead.channel, direction: lead.direction, subject: lead.subject ?? null,
+      content: lead.content, senderName: lead.senderName ?? null, recipientName: lead.recipientName ?? null,
+      respondedBy: lead.respondedBy ?? null, deliveryStatus: lead.deliveryStatus ?? null,
+      externalId: lead.externalId ?? null, createdAt: lead.createdAt,
+    }],
+  };
+}
+
+/** Pesan terakhir thread (maks createdAt) — dipakai utk preview kartu. */
+function lastThreadMessage(thread: ConversationThreadDTO): ThreadMessageDTO | null {
+  const msgs = thread.messages;
+  if (msgs.length === 0) return null;
+  return msgs.reduce(
+    (acc, m) => (new Date(m.createdAt).getTime() > new Date(acc.createdAt).getTime() ? m : acc),
+    msgs[0]
+  );
+}
+
+/** Kanal paling sering muncul dalam thread — warna avatar kartu thread. */
+function dominantChannelOf(thread: ConversationThreadDTO, fallback: string): string {
+  const counts = new Map<string, number>();
+  for (const m of thread.messages) counts.set(m.channel, (counts.get(m.channel) ?? 0) + 1);
+  let best = fallback;
+  let bestN = -1;
+  for (const [ch, n] of counts) {
+    if (n > bestN) { best = ch; bestN = n; }
+  }
+  return best;
+}
+
+/** Nama tampilan thread: nama contact (bila tertaut) → senderName apa adanya (handle IG utuh). */
+function threadDisplayName(lead: InboxLead): string {
+  const fromContact = lead.contact?.fullName?.trim();
+  if (fromContact) return fromContact;
+  return (lead.senderName ?? "").trim() || "Tanpa nama";
+}
+
+/** Hasil grouping leads by threadKey (useMemo di modul utama). */
+interface ThreadGroup {
+  key: string;
+  /** Anggota thread, terbaru dulu. */
+  members: InboxLead[];
+  /** Lead terbaru — sumber nama tampilan & target seleksi. */
+  newest: InboxLead;
+  thread: ConversationThreadDTO;
+  /** Lead belum-direspons dgn sisa SLA paling kritis (null bila semua sudah direspons). */
+  worstPending: InboxLead | null;
+  /** Sisa SLA terburuk grup (brandSla − wait); null bila semua responded. */
+  worstRemaining: number | null;
+  maxCandidates: number;
+  allResponded: boolean;
+}
+
+function ThreadCard({ group, selected, onSelect }: {
+  group: ThreadGroup;
+  selected: boolean;
+  onSelect: (lead: InboxLead) => void;
+}) {
+  const { newest, thread } = group;
+  const name = threadDisplayName(newest);
+  const breached = group.worstRemaining !== null && group.worstRemaining <= 0;
+  const lastMsg = lastThreadMessage(thread);
+  const preview = (lastMsg?.content ?? newest.content).trim();
+  const avatarMeta = channelMeta(dominantChannelOf(thread, newest.channel));
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(newest)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(newest);
+        }
+      }}
+      aria-label={`Buka percakapan dengan ${name}`}
+      className={cn(
+        "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+        breached ? "border-l-4 border-l-rose-500" : group.allResponded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
+        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
+        selected && breached && "ring-1 ring-rose-500"
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+            avatarMeta.circle
+          )}
+          aria-hidden="true"
+        >
+          {initials(name.replace(/^@+/, ""))}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{name}</span>
+            <span className="shrink-0 text-xs text-zinc-400">{timeAgo(thread.lastMessageAt)}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {thread.channels.map((ch) => {
+              const ChMeta = channelMeta(ch);
+              const ChIcon = ChMeta.icon;
+              return (
+                <span
+                  key={ch}
+                  role="img"
+                  aria-label={`Kanal ${channelLabel(ch)}`}
+                  title={channelLabel(ch)}
+                  className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-full", ChMeta.circle)}
+                >
+                  <ChIcon className="size-3" aria-hidden="true" />
+                </span>
+              );
+            })}
+            {thread.messageCount > 1 ? (
+              <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">{`${thread.messageCount} pesan`}</Badge>
+            ) : null}
+            {thread.channels.length > 1 ? (
+              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">{`${thread.channels.length} kanal`}</Badge>
+            ) : null}
+            {newest.brand ? <BrandChip name={newest.brand.name} color={newest.brand.color} /> : null}
+          </div>
+          <p className="mt-1.5 line-clamp-1 text-sm leading-relaxed text-zinc-600">{preview}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {group.allResponded ? (
+              <Badge
+                variant="outline"
+                className="border-emerald-200 bg-emerald-50 text-emerald-700"
+                aria-label="Semua pesan di grup sudah direspons"
+              >
+                <Reply aria-hidden="true" />
+                Sudah Direspons
+              </Badge>
+            ) : group.worstPending ? (
+              <SlaBadge brandSlaHours={group.worstPending.brand?.slaHours ?? 24} waitHours={group.worstPending.slaHours} />
+            ) : null}
+            {group.maxCandidates > 0 ? (
+              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+                <AlertTriangle aria-hidden="true" />
+                {`Duplikat? ${group.maxCandidates} kandidat`}
+              </Badge>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCandidateDTO; selected: boolean; onToggle: () => void }) {
   const tone = scoreTone(candidate.score);
   const contact = candidate.contact;
@@ -549,6 +712,85 @@ function IdentityReadinessCard({
   );
 }
 
+// ============ Task 24-a — Riwayat Percakapan (bubble chat thread per kontak) ============
+
+function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { message: ThreadMessageDTO; highlight: boolean; fallbackOutboundAuthor?: string | null }) {
+  const isInbound = message.direction !== "outbound";
+  const MIcon = channelMeta(message.channel).icon;
+  const author = isInbound
+    ? (message.senderName ?? "").trim() || "Pengirim"
+    : (message.respondedBy ?? "").trim() || (fallbackOutboundAuthor ?? "").trim() || "Tim CRM";
+  const isOwnReply = typeof message.externalId === "string" && message.externalId.startsWith("inbox-reply:");
+  return (
+    <li className={cn("flex w-full", isInbound ? "justify-start" : "justify-end")}>
+      <div
+        className={cn(
+          "max-w-[85%] rounded-2xl px-3.5 py-2.5",
+          isInbound ? "bg-zinc-100 text-zinc-800" : "bg-zinc-900 text-white",
+          highlight && "ring-2 ring-amber-400"
+        )}
+      >
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]",
+            isInbound ? "text-zinc-500" : "text-white/70"
+          )}
+        >
+          <MIcon className="size-3 shrink-0" aria-hidden="true" />
+          <span className="max-w-[10rem] truncate font-semibold">{author}</span>
+          <span aria-hidden="true">·</span>
+          <span className="shrink-0">{formatDateTime(message.createdAt)}</span>
+          {!isInbound ? <DeliveryTick status={message.deliveryStatus} channel={message.channel} /> : null}
+        </div>
+        {message.subject ? (
+          <p className={cn("mt-1 truncate text-xs font-medium", isInbound ? "text-zinc-600" : "text-white/80")}>
+            {message.subject}
+          </p>
+        ) : null}
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
+        {isOwnReply ? (
+          <span
+            className={cn(
+              "mt-1.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+              isInbound ? "bg-zinc-200 text-zinc-600" : "bg-white/10 text-white/80"
+            )}
+          >
+            Balasan kamu
+          </span>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+/** Riwayat percakapan per kontak (thread backend) — inbound kiri zinc-100, outbound kanan zinc-900. */
+function ThreadHistorySection({ lead }: { lead: InboxLead }) {
+  const messages = useMemo(() => {
+    const msgs = [...lead.thread.messages];
+    msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    return msgs;
+  }, [lead.thread]);
+  if (messages.length === 0) return null;
+  return (
+    <div className="border-t border-zinc-200 p-4" aria-label="Riwayat percakapan dengan kontak ini">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+          <MessagesSquare className="size-4 text-zinc-500" aria-hidden="true" />
+          Riwayat Percakapan
+        </div>
+        <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">
+          {`${lead.thread.messageCount} pesan · ${lead.thread.channels.length} kanal`}
+        </Badge>
+      </div>
+      <ul className="crm-scroll mt-3 max-h-80 space-y-2.5 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-3">
+        {messages.map((m) => (
+          <ThreadMessageBubble key={m.id} message={m} highlight={m.id === lead.id} fallbackOutboundAuthor={lead.respondedBy} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ListSkeleton() {
   return (
     <div className="space-y-3" aria-hidden="true">
@@ -698,7 +940,34 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
           description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
         });
       }
-      onResponded({ ...lead, ...res.lead, slaHours: lead.slaHours, candidates: lead.candidates });
+      // Task 24-a — balasan baru langsung digabung ke thread supaya Riwayat Percakapan mutakhir.
+      onResponded({
+        ...lead,
+        ...res.lead,
+        slaHours: lead.slaHours,
+        candidates: lead.candidates,
+        thread: {
+          ...lead.thread,
+          messageCount: lead.thread.messageCount + 1,
+          lastMessageAt: res.reply.createdAt,
+          messages: [
+            ...lead.thread.messages,
+            {
+              id: res.reply.id,
+              channel: res.reply.channel,
+              direction: "outbound",
+              subject: res.reply.subject ?? null,
+              content: res.reply.content,
+              senderName: res.reply.senderName ?? null,
+              recipientName: res.reply.recipientName ?? null,
+              respondedBy: res.reply.respondedBy ?? null,
+              deliveryStatus: res.reply.deliveryStatus ?? null,
+              externalId: res.reply.externalId ?? null,
+              createdAt: res.reply.createdAt,
+            },
+          ],
+        },
+      });
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal mencatat respons");
@@ -922,6 +1191,8 @@ export default function InboxModule() {
   const [error, setError] = useState<string | null>(null);
   const [channelFilter, setChannelFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"newest" | "late">("newest");
+  // Task 24-a — mode tampilan daftar: "thread" (grup per kontak, DEFAULT) | "message" (daftar flat lama)
+  const [viewMode, setViewMode] = useState<"thread" | "message">("thread");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [showNewContact, setShowNewContact] = useState(false);
@@ -1000,12 +1271,20 @@ export default function InboxModule() {
 
   const stats = useMemo(() => {
     const list = leads ?? [];
+    // Task 24-a — jumlah thread unik + total pesan (thread.messageCount sama utk seluruh anggota thread)
+    const perThread = new Map<string, number>();
+    for (const l of list) {
+      const key = l.threadKey || l.id;
+      perThread.set(key, Math.max(perThread.get(key) ?? 0, l.thread?.messageCount ?? 1));
+    }
     return {
       total: list.length,
       // Breach baru (Fase 3): waktu tunggu melewati SLA brand — lead yang sudah direspons tidak dihitung
       late: list.filter((l) => !isResponded(l) && (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
       duplicate: list.filter((l) => l.candidates.length > 0).length,
       responded: list.filter((l) => isResponded(l)).length,
+      conversations: perThread.size,
+      threadMessages: [...perThread.values()].reduce((acc, n) => acc + n, 0),
     };
   }, [leads]);
 
@@ -1018,6 +1297,55 @@ export default function InboxModule() {
     }
     return list;
   }, [leads, sortBy]);
+
+  // Task 24-a — grouping leads by threadKey → ThreadGroup, diurut sesuai sortBy
+  const threadGroups = useMemo<ThreadGroup[]>(() => {
+    const map = new Map<string, InboxLead[]>();
+    for (const lead of sortedLeads) {
+      const key = lead.threadKey || `lead:${lead.id}`;
+      const arr = map.get(key);
+      if (arr) arr.push(lead);
+      else map.set(key, [lead]);
+    }
+    const groups: ThreadGroup[] = [];
+    for (const [key, members] of map) {
+      const byNewest = [...members].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const newest = byNewest[0];
+      const thread = threadOf(newest);
+      const pending = byNewest.filter((l) => !isResponded(l));
+      let worstPending: InboxLead | null = null;
+      let worstRemaining: number | null = null;
+      for (const l of pending) {
+        const remaining = (l.brand?.slaHours ?? 24) - l.slaHours;
+        if (worstRemaining === null || remaining < worstRemaining) {
+          worstPending = l;
+          worstRemaining = remaining;
+        }
+      }
+      groups.push({
+        key,
+        members: byNewest,
+        newest,
+        thread,
+        worstPending,
+        worstRemaining,
+        maxCandidates: byNewest.reduce((acc, l) => Math.max(acc, l.candidates.length), 0),
+        allResponded: pending.length === 0,
+      });
+    }
+    if (sortBy === "late") {
+      // Thread dgn SLA terburuk dulu (sisa paling kecil / minus); thread semua-responded di akhir
+      groups.sort((a, b) => {
+        const ra = a.worstRemaining ?? Number.POSITIVE_INFINITY;
+        const rb = b.worstRemaining ?? Number.POSITIVE_INFINITY;
+        if (ra !== rb) return ra - rb;
+        return new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime();
+      });
+    } else {
+      groups.sort((a, b) => new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime());
+    }
+    return groups;
+  }, [sortedLeads, sortBy]);
 
   const selectedLead = useMemo(
     () => leads?.find((l) => l.id === selectedId) ?? null,
@@ -1219,7 +1547,13 @@ export default function InboxModule() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-bold text-zinc-900 sm:text-xl">Lead Inbox</h1>
               {leads ? (
-                <Badge className="bg-zinc-900 text-white">{`${stats.total} lead belum dikonversi`}</Badge>
+                viewMode === "thread" ? (
+                  <Badge className="bg-zinc-900 text-white" aria-label="Jumlah percakapan">
+                    {`${stats.conversations} percakapan · ${stats.threadMessages} pesan`}
+                  </Badge>
+                ) : (
+                  <Badge className="bg-zinc-900 text-white">{`${stats.total} lead belum dikonversi`}</Badge>
+                )
               ) : (
                 <Skeleton className="h-5 w-40" />
               )}
@@ -1232,67 +1566,108 @@ export default function InboxModule() {
               <span className="inline-flex items-center gap-1.5"><Reply className="size-3 text-emerald-600" aria-hidden="true" />Sudah Direspons</span>
             </div>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Select
-              value={channelFilter}
-              onValueChange={(v) => { setChannelFilter(v); setSelectedId(null); }}
+          <div className="flex flex-col gap-2 lg:items-end">
+            {/* Task 24-a — toggle mode tampilan: Percakapan (grup per kontak, default) vs Per Pesan (flat) */}
+            <div
+              role="group"
+              aria-label="Mode tampilan inbox"
+              className="flex w-full items-center gap-0.5 rounded-lg border border-zinc-200 bg-zinc-50 p-0.5 sm:w-fit"
             >
-              <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter kanal">
-                <SelectValue placeholder="Semua Kanal" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Kanal</SelectItem>
-                {CHANNELS.map((c) => (
-                  <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={activeBrandFilter}
-              onValueChange={(v) => { setActiveBrandFilter(v); setSelectedId(null); }}
-            >
-              <SelectTrigger className="w-full sm:w-[190px]" aria-label="Filter brand">
-                <SelectValue placeholder="Semua Brand" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Brand</SelectItem>
-                {brands.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={sortBy} onValueChange={(v) => setSortBy(v === "late" ? "late" : "newest")}>
-              <SelectTrigger className="w-full sm:w-[160px]" aria-label="Urutkan lead">
-                <SelectValue placeholder="Urutkan" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="newest">Terbaru</SelectItem>
-                <SelectItem value="late">Paling Terlambat</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="shrink-0"
-              disabled={loading}
-              onClick={() => void loadLeads()}
-              aria-label="Muat ulang daftar lead"
-            >
-              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="shrink-0"
-              disabled={emailSyncing}
-              onClick={() => void handleEmailSync()}
-              aria-label="Tarik email masuk via IMAP"
-              title="Tarik email masuk via IMAP (kanal email)"
-            >
-              <Mail className={cn("size-4", emailSyncing && "animate-pulse")} />
-            </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={viewMode === "thread"}
+                onClick={() => setViewMode("thread")}
+                className={cn(
+                  "min-h-10 flex-1 justify-center gap-1.5 rounded-md px-3 text-xs font-medium sm:flex-none",
+                  viewMode === "thread"
+                    ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white"
+                    : "text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900"
+                )}
+              >
+                <MessagesSquare className="size-4" aria-hidden="true" />
+                Percakapan
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={viewMode === "message"}
+                onClick={() => setViewMode("message")}
+                className={cn(
+                  "min-h-10 flex-1 justify-center gap-1.5 rounded-md px-3 text-xs font-medium sm:flex-none",
+                  viewMode === "message"
+                    ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white"
+                    : "text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900"
+                )}
+              >
+                <List className="size-4" aria-hidden="true" />
+                Per Pesan
+              </Button>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Select
+                value={channelFilter}
+                onValueChange={(v) => { setChannelFilter(v); setSelectedId(null); }}
+              >
+                <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter kanal">
+                  <SelectValue placeholder="Semua Kanal" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Kanal</SelectItem>
+                  {CHANNELS.map((c) => (
+                    <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={activeBrandFilter}
+                onValueChange={(v) => { setActiveBrandFilter(v); setSelectedId(null); }}
+              >
+                <SelectTrigger className="w-full sm:w-[190px]" aria-label="Filter brand">
+                  <SelectValue placeholder="Semua Brand" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Brand</SelectItem>
+                  {brands.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v === "late" ? "late" : "newest")}>
+                <SelectTrigger className="w-full sm:w-[160px]" aria-label="Urutkan lead">
+                  <SelectValue placeholder="Urutkan" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Terbaru</SelectItem>
+                  <SelectItem value="late">Paling Terlambat</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-10 shrink-0"
+                disabled={loading}
+                onClick={() => void loadLeads()}
+                aria-label="Muat ulang daftar lead"
+              >
+                <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-10 shrink-0"
+                disabled={emailSyncing}
+                onClick={() => void handleEmailSync()}
+                aria-label="Tarik email masuk via IMAP"
+                title="Tarik email masuk via IMAP (kanal email)"
+              >
+                <Mail className={cn("size-4", emailSyncing && "animate-pulse")} />
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -1321,12 +1696,13 @@ export default function InboxModule() {
         </div>
       ) : null}
 
-      {/* ===== Stat strip ===== */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* ===== Stat strip (Task 24-a: + kartu Percakapan) ===== */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard icon={Inbox} label="Total Lead" value={stats.total} tone="zinc" />
         <StatCard icon={AlarmClock} label="Terlambat Respons" value={stats.late} tone={stats.late > 0 ? "rose" : "zinc"} />
         <StatCard icon={Reply} label="Sudah Direspons" value={stats.responded} tone={stats.responded > 0 ? "zinc" : "zinc"} />
         <StatCard icon={AlertTriangle} label="Warning Duplikat" value={stats.duplicate} tone={stats.duplicate > 0 ? "amber" : "zinc"} />
+        <StatCard icon={MessagesSquare} label="Percakapan" value={stats.conversations} tone="zinc" />
       </div>
 
       {/* ===== Layout 2 kolom ===== */}
@@ -1353,18 +1729,31 @@ export default function InboxModule() {
               <p className="text-xs text-zinc-400">Lead baru dari semua kanal akan muncul di sini.</p>
             </div>
           ) : leads ? (
-            <div className="max-h-96 space-y-3 overflow-y-auto pr-1 crm-scroll">
-              {sortedLeads.map((lead) => (
-                <LeadCard
-                  key={lead.id}
-                  lead={lead}
-                  escalated={escalatedIds.has(lead.id)}
-                  selected={lead.id === selectedId}
-                  onSelect={handleSelectLead}
-                  onEscalate={openEscalateDialog}
-                />
-              ))}
-            </div>
+            viewMode === "thread" ? (
+              <div className="max-h-96 space-y-3 overflow-y-auto pr-1 crm-scroll">
+                {threadGroups.map((group) => (
+                  <ThreadCard
+                    key={group.key}
+                    group={group}
+                    selected={group.members.some((l) => l.id === selectedId)}
+                    onSelect={handleSelectLead}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="max-h-96 space-y-3 overflow-y-auto pr-1 crm-scroll">
+                {sortedLeads.map((lead) => (
+                  <LeadCard
+                    key={lead.id}
+                    lead={lead}
+                    escalated={escalatedIds.has(lead.id)}
+                    selected={lead.id === selectedId}
+                    onSelect={handleSelectLead}
+                    onEscalate={openEscalateDialog}
+                  />
+                ))}
+              </div>
+            )
           ) : null}
         </section>
 
@@ -1503,6 +1892,9 @@ export default function InboxModule() {
                     </div>
                   ) : null}
                 </div>
+
+                {/* Task 24-a — Riwayat Percakapan per kontak (thread) */}
+                {selectedLead.thread.messageCount > 1 ? <ThreadHistorySection lead={selectedLead} /> : null}
 
                 {/* Ronde 23 — Kelengkapan Identitas + pesan identifikasi */}
                 <IdentityReadinessCard
