@@ -602,3 +602,42 @@ export interface ClientBriefDTO {
   createdAt: string;
   updatedAt: string;
 }
+
+// ============ FASE 3: SALURAN & INTEGRASI ============
+
+/** Kredensial termask utk respons API ("••••1234"). */
+export type MaskedCredentials = Record<string, string>;
+
+/** Satu koneksi kanal (WhatsApp/Instagram/Email). */
+export interface ChannelConfigDTO {
+  id: string;
+  channel: string;
+  brandId?: string | null;
+  brand?: { id: string; name: string; slug: string; color: string; logoEmoji: string } | null;
+  displayName: string;
+  accountRef?: string | null;
+  credentials: MaskedCredentials;
+  status: "connected" | "disconnected" | "error";
+  statusNote?: string | null;
+  connectedAt?: string | null;
+  lastTestedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Info webhook WhatsApp utk panduan setup Meta. */
+export interface ChannelWebhookInfo {
+  path: string;
+  envVerifyToken: boolean;
+  envAppSecret: boolean;
+  effectiveVerifyToken: string;
+  dbTokenCount: number;
+  dbSecretCount: number;
+}
+
+/** Respons GET /api/channels. */
+export interface ChannelsData {
+  configs: ChannelConfigDTO[];
+  webhook: { whatsapp: ChannelWebhookInfo };
+  types: Record<string, import("@/lib/crm/channels").ChannelTypeMeta>;
+}

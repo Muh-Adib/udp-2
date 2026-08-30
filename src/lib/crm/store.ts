@@ -6,7 +6,7 @@ import type { SessionUser, Brand } from "@/lib/crm/types";
 
 export type ModuleKey =
   | "dashboard" | "inbox" | "contacts" | "pipeline" | "followups"
-  | "finance" | "reports" | "projects" | "portal" | "brands" | "users" | "audit";
+  | "finance" | "reports" | "projects" | "portal" | "channels" | "brands" | "users" | "audit";
 
 export const MODULE_META: Record<ModuleKey, { label: string; description: string; roles: string[] }> = {
   dashboard: { label: "Command Center", description: "Dashboard eksekutif lintas brand", roles: ["super_admin", "director", "marketing", "finance", "production"] },
@@ -18,6 +18,7 @@ export const MODULE_META: Record<ModuleKey, { label: string; description: string
   reports: { label: "Laporan", description: "Laporan kinerja lintas brand & ekspor CSV", roles: ["super_admin", "director", "finance", "marketing"] },
   projects: { label: "Projects", description: "Produksi setelah deal berhasil", roles: ["super_admin", "director", "production", "marketing"] },
   portal: { label: "Client Portal", description: "Tampilan terbatas untuk klien", roles: ["super_admin", "director", "client"] },
+  channels: { label: "Saluran & Integrasi", description: "Hubungkan WhatsApp, Instagram, & Email", roles: ["super_admin", "director"] },
   brands: { label: "Brand Configuration", description: "Konfigurasi brand tanpa ubah source code", roles: ["super_admin", "director"] },
   users: { label: "User & Access", description: "Role dan permission", roles: ["super_admin", "director"] },
   audit: { label: "Audit Logs", description: "Siapa mengubah apa, kapan, dari mana", roles: ["super_admin", "director"] },

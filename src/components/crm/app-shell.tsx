@@ -21,11 +21,12 @@ import ReportsModule from "@/components/crm/reports-module";
 import ProjectsModule from "@/components/crm/projects-module";
 import PortalModule from "@/components/crm/portal-module";
 import BrandsModule from "@/components/crm/brands-module";
+import ChannelsModule from "@/components/crm/channels-module";
 import UsersModule from "@/components/crm/users-module";
 import AuditModule from "@/components/crm/audit-module";
 import {
   LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
-  FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu,
+  FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu, PlugZap,
   ChevronDown, CircleUser,
 } from "lucide-react";
 
@@ -39,6 +40,7 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
   reports: BarChart3,
   projects: FolderKanban,
   portal: Globe2,
+  channels: PlugZap,
   brands: Building2,
   users: UserCog,
   audit: ScrollText,
@@ -48,7 +50,7 @@ const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
   { label: "Operasional", modules: ["dashboard", "inbox", "contacts", "pipeline"] },
   { label: "Komersial & Produksi", modules: ["followups", "finance", "reports", "projects"] },
   { label: "Eksternal", modules: ["portal"] },
-  { label: "Sistem", modules: ["brands", "users", "audit"] },
+  { label: "Sistem", modules: ["channels", "brands", "users", "audit"] },
 ];
 
 function roleLabel(role: string) {
@@ -253,6 +255,7 @@ export default function AppShell() {
               {activeModule === "reports" && <ReportsModule />}
               {activeModule === "projects" && <ProjectsModule />}
               {activeModule === "portal" && <PortalModule />}
+              {activeModule === "channels" && <ChannelsModule />}
               {activeModule === "brands" && <BrandsModule />}
               {activeModule === "users" && <UsersModule />}
               {activeModule === "audit" && <AuditModule />}

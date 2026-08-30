@@ -32,14 +32,64 @@ function safeEqual(a: string, b: string): boolean {
 
 /** Verifikasi X-Hub-Signature-256 terhadap raw body. Return null = valid/skip, string = alasan gagal. */
 function verifySignature(rawBody: string, header: string | null): string | null {
-  const secret = process.env.WHATSAPP_APP_SECRET;
-  if (!secret) return null; // mode demo — validasi tidak diaktifkan
-  if (!header) return "header X-Hub-Signature-256 wajib ada";
-  const expected = "sha256=" + createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
-  if (!safeEqual(expected.toLowerCase(), header.toLowerCase())) {
-    return "signature tidak cocok";
+  const envSecret = process.env.WHATSAPP_APP_SECRET;
+  if (envSecret) {
+    if (!header) return "header X-Hub-Signature-256 wajib ada";
+    const expected = "sha256=" + createHmac("sha256", envSecret).update(rawBody, "utf8").digest("hex");
+    if (!safeEqual(expected.toLowerCase(), header.toLowerCase())) {
+      return "signature tidak cocok";
+    }
+    return null;
   }
-  return null;
+  // Tanpa env secret — coba kredensial kanal WhatsApp yang tersimpan di DB (Ronde 19).
+  const candidates = dbSecretsMemo;
+  if (candidates.length > 0) {
+    if (!header) return "header X-Hub-Signature-256 wajib ada";
+    for (const secret of candidates) {
+      const expected = "sha256=" + createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+      if (safeEqual(expected.toLowerCase(), header.toLowerCase())) return null;
+    }
+    return "signature tidak cocok dgn kredensial terdaftar";
+  }
+  return null; // belum ada kredensial sama sekali — mode demo, validasi dilewati
+}
+
+/** Secret appSecret WhatsApp dari ChannelConfig (di-load per request, kecil & ter-cache 30 dtk). */
+let dbSecretsCache: { secrets: string[]; at: number } = { secrets: [], at: 0 };
+const DB_SECRETS_TTL_MS = 30_000;
+let dbSecretsMemo: string[] = [];
+async function refreshDbSecrets() {
+  const now = Date.now();
+  if (now - dbSecretsCache.at < DB_SECRETS_TTL_MS) return;
+  const rows = await db.channelConfig.findMany({ where: { channel: "whatsapp" }, select: { credentials: true } });
+  const secrets: string[] = [];
+  for (const r of rows) {
+    try {
+      const creds = JSON.parse(r.credentials) as Record<string, unknown>;
+      const s = typeof creds.appSecret === "string" ? creds.appSecret.trim() : "";
+      if (s) secrets.push(s);
+    } catch {
+      // kredensial korup — abaikan
+    }
+  }
+  dbSecretsCache = { secrets, at: now };
+  dbSecretsMemo = secrets;
+}
+
+/** Token verify yang sah: env WHATSAPP_VERIFY_TOKEN ATAU verifyToken di ChannelConfig. */
+async function verifyHandshakeToken(token: string): Promise<boolean> {
+  if (token === (process.env.WHATSAPP_VERIFY_TOKEN || DEMO_VERIFY_TOKEN)) return true;
+  const rows = await db.channelConfig.findMany({ where: { channel: "whatsapp" }, select: { credentials: true } });
+  for (const r of rows) {
+    try {
+      const creds = JSON.parse(r.credentials) as Record<string, unknown>;
+      const t = typeof creds.verifyToken === "string" ? creds.verifyToken.trim() : "";
+      if (t && safeEqual(t, token)) return true;
+    } catch {
+      // kredensial korup — abaikan
+    }
+  }
+  return false;
 }
 
 export async function GET(req: NextRequest) {
@@ -47,12 +97,11 @@ export async function GET(req: NextRequest) {
   const mode = sp.get("hub.mode");
   const token = sp.get("hub.verify_token");
   const challenge = sp.get("hub.challenge");
-  const expected = process.env.WHATSAPP_VERIFY_TOKEN || DEMO_VERIFY_TOKEN;
 
   if (mode !== "subscribe" || !challenge) {
     return fail("Permintaan verifikasi webhook tidak valid", 400);
   }
-  if (!token || token !== expected) {
+  if (!token || !(await verifyHandshakeToken(token))) {
     return fail("hub.verify_token tidak valid", 403);
   }
   // Echo challenge sebagai plain-text 200 sesuai konvensi Meta.
@@ -67,6 +116,7 @@ type RawStatus = { id?: unknown; status?: unknown };
 export async function POST(req: NextRequest) {
   // Raw body dibutuhkan untuk verifikasi HMAC (bukan body yang sudah diparse).
   const rawBody = await req.text();
+  await refreshDbSecrets();
   const sigError = verifySignature(rawBody, req.headers.get("x-hub-signature-256"));
   if (sigError) {
     return fail(`Webhook ditolak: ${sigError}`, 401);

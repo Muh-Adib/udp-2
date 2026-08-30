@@ -303,3 +303,35 @@ export const briefsApi = {
   remove: (id: string) =>
     request<{ ok: boolean }>(`/api/briefs/${id}`, { method: "DELETE" }),
 };
+
+// ============ Saluran & Integrasi (ronde 19 — Fase 3) ============
+
+export const channelsApi = {
+  list: () => request<import("@/lib/crm/types").ChannelsData>("/api/channels"),
+  connect: (payload: {
+    channel: string;
+    brandId?: string | null;
+    displayName: string;
+    accountRef: string;
+    credentials: Record<string, string>;
+    actorName?: string;
+    actorRole?: string;
+  }) =>
+    request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: {
+    action?: "update" | "test" | "disconnect" | "reconnect";
+    displayName?: string;
+    accountRef?: string;
+    credentials?: Record<string, string | null>;
+    actorName?: string;
+    actorRole?: string;
+  }) =>
+    request<{ config: import("@/lib/crm/types").ChannelConfigDTO; test?: { ok: boolean; note: string } }>(
+      `/api/channels/${id}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+  remove: (id: string) => request<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }),
+};

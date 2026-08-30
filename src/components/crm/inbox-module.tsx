@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, Clock, Fingerprint, Globe, Inbox,
-  Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone, RefreshCw, Reply, Send,
+  Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone, PlugZap, RefreshCw, Reply, Send,
   ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/crm/api-client";
-import { useCrmStore } from "@/lib/crm/store";
+import { api, channelsApi } from "@/lib/crm/api-client";
+import { canAccess, useCrmStore } from "@/lib/crm/store";
 import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
+import { CHANNEL_TYPES } from "@/lib/crm/channels";
 import { formatDateTime, initials, timeAgo } from "@/lib/crm/utils";
 import type { FollowUpTemplateDTO, InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -743,6 +744,22 @@ export default function InboxModule() {
   const [respondTarget, setRespondTarget] = useState<InboxLead | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
 
+  // Ronde 19 — status koneksi kanal utk banner "kanal belum terhubung"
+  const [connectedChannels, setConnectedChannels] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await channelsApi.list();
+        if (!alive) return;
+        setConnectedChannels(new Set(res.configs.filter((c) => c.status === "connected").map((c) => c.channel)));
+      } catch {
+        if (alive) setConnectedChannels(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   const loadLeads = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -965,6 +982,13 @@ export default function InboxModule() {
     ? slaBadgeInfo(escalateTarget.brand?.slaHours ?? 24, escalateTarget.slaHours)
     : null;
 
+  // Ronde 19 — kanal dgn lead masuk tapi belum ada koneksi aktif
+  const unconnectedInbound = useMemo(() => {
+    if (connectedChannels === null || !leads) return [];
+    const used = new Set(leads.map((l) => l.channel).filter((c) => c in CHANNEL_TYPES));
+    return [...used].filter((c) => !connectedChannels.has(c));
+  }, [connectedChannels, leads]);
+
   return (
     <div className="space-y-4">
       {/* ===== Header ===== */}
@@ -1039,6 +1063,30 @@ export default function InboxModule() {
           </div>
         </div>
       </div>
+
+      {/* ===== Ronde 19 — banner kanal belum terhubung ===== */}
+      {unconnectedInbound.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
+          <PlugZap className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-amber-800">
+            <span className="font-semibold">Kanal belum terhubung: {unconnectedInbound.map((c) => CHANNEL_TYPES[c]?.label ?? c).join(", ")}.</span>{" "}
+            {canAccess("channels", user?.role ?? "")
+              ? "Balasan manual masih bisa dikirim, tetapi sinkronisasi otomatis & status pesan baru aktif setelah kanal disambungkan."
+              : "Minta admin (Direktur) menghubungkannya di menu Saluran & Integrasi."}
+          </p>
+          {canAccess("channels", user?.role ?? "") ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 border-amber-300 bg-white px-2 text-xs text-amber-700 hover:bg-amber-100"
+              onClick={() => useCrmStore.getState().setActiveModule("channels")}
+            >
+              Hubungkan sekarang
+              <Send className="size-3" aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* ===== Stat strip ===== */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

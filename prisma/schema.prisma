@@ -32,6 +32,7 @@ model Brand {
   interactions  Interaction[]
   quotations    Quotation[]
   briefs        ClientBrief[]
+  channels      ChannelConfig[]
 }
 
 model User {
@@ -492,4 +493,27 @@ model ClientBrief {
   createdBy       String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
+}
+
+// ============ FASE 3: SALURAN & INTEGRASI ============
+// Koneksi kanal komunikasi (WhatsApp Business, Instagram, Email) per brand
+// atau organisasi. Kredensial disimpan JSON dan DIRESPONS TERSENSA oleh API.
+// Webhook WhatsApp memakai verifyToken/appSecret dari sini sbg fallback env.
+model ChannelConfig {
+  id           String    @id @default(cuid())
+  channel      String // whatsapp, instagram, email
+  brandId      String?
+  brand        Brand?    @relation(fields: [brandId], references: [id])
+  displayName  String
+  accountRef   String? // nomor WA / username IG / alamat email
+  credentials  String    @default("{}") // JSON per kanal (token, ids, secret)
+  status       String    @default("connected") // connected, disconnected, error
+  statusNote   String? // hasil test/verifikasi terakhir
+  connectedAt  DateTime?
+  lastTestedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([channel])
+  @@index([brandId])
 }
