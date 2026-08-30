@@ -173,7 +173,8 @@ model Interaction {
   attachments    String? // JSON array
   respondedBy    String?
   respondedAt    DateTime?
-  deliveryStatus String? // delivered, read, failed
+  deliveryStatus String? // delivered, read, failed, sent
+  deliveryNote   String? // catatan pengiriman nyata (error SMTP, dsb)
   opportunityId  String?
   opportunity    Opportunity? @relation(fields: [opportunityId], references: [id])
   contactId      String?
@@ -510,6 +511,7 @@ model ChannelConfig {
   status       String    @default("connected") // connected, disconnected, error
   statusNote   String? // hasil test/verifikasi terakhir
   isDemo       Boolean   @default(false) // koneksi demo (kredensial buatan, 1-klik)
+  lastEmailSyncAt DateTime? // sinkronisasi IMAP terakhir (kanal email)
   connectedAt  DateTime?
   lastTestedAt DateTime?
   createdAt    DateTime  @default(now())

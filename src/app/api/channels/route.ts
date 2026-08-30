@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { CHANNEL_TYPES, CHANNEL_TYPE_KEYS, requiredCredentialKeys, maskCredentialValue } from "@/lib/crm/channels";
+import { verifyChannel } from "@/lib/crm/channel-verify";
 
 /**
  * Ronde 19/20 — Saluran & Integrasi.
@@ -162,7 +163,7 @@ export async function POST(req: NextRequest) {
     return fail(`Kredensial wajib belum lengkap: ${labels.join(", ")}`, 400);
   }
 
-  // Satu koneksi per kanal+brand (global = brandId null).
+  // Satu koneksi per kanal+brand (global = brandId null) — cek SEBELUM verifikasi jaringan.
   const existing = await db.channelConfig.findFirst({ where: { channel, brandId } });
   if (existing) {
     return fail(
@@ -177,7 +178,20 @@ export async function POST(req: NextRequest) {
     if (typeof v === "string" && v.trim()) safeCreds[f.key] = v.trim();
   }
 
-  const isDemo = body.isDemo === true;
+  // Ronde 21: verifikasi NYATA sebelum menyimpan — kecuali operator sadar memilih
+  // "tanpa verifikasi (demo)". Tanpa ini kanal bisa salah bertanda Terhubung.
+  const skipVerification = body.skipVerification === true;
+  const isDemo = body.isDemo === true || skipVerification;
+  let statusNote: string;
+  if (skipVerification) {
+    statusNote = "Tersimpan TANPA verifikasi (mode demo) — tekan “Uji” untuk verifikasi nyata";
+  } else {
+    const v = await verifyChannel(channel, safeCreds);
+    if (!v.ok) {
+      return fail(v.note, 422);
+    }
+    statusNote = v.note;
+  }
 
   const row = await db.channelConfig.create({
     data: {
@@ -187,9 +201,7 @@ export async function POST(req: NextRequest) {
       accountRef,
       credentials: JSON.stringify(safeCreds),
       status: "connected",
-      statusNote: isDemo
-        ? "Koneksi mode demo — kredensial buatan, tidak memanggil API penyedia"
-        : "Kredensial tersimpan (mode demo: belum ada panggilan jaringan)",
+      statusNote,
       isDemo,
       connectedAt: new Date(),
       lastTestedAt: new Date(),

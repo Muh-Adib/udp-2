@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { deliverEmailReply } from "@/lib/crm/email-delivery";
 
 /**
  * Fase 3 — Respons & catat lead inbox:
@@ -32,6 +33,19 @@ export async function POST(req: NextRequest) {
     : lead.contact?.companyId ?? null;
   const subject = body.subject ? String(body.subject) : null;
 
+  // Ronde 21: email outbound → kirim NYATA via SMTP bila kanal terverifikasi (non-demo).
+  let deliveryStatus: string | null = "delivered";
+  let deliveryNote: string | null = null;
+  if (channel === "email") {
+    const delivery = await deliverEmailReply({
+      recipientRaw: lead.contact?.fullName ?? lead.senderName ?? null,
+      subject,
+      content,
+    });
+    deliveryStatus = delivery.status;
+    deliveryNote = delivery.note;
+  }
+
   const reply = await db.interaction.create({
     data: {
       channel,
@@ -41,7 +55,8 @@ export async function POST(req: NextRequest) {
       recipientName: lead.contact?.fullName ?? lead.senderName,
       subject,
       content,
-      deliveryStatus: "delivered",
+      deliveryStatus,
+      deliveryNote,
       opportunityId: null,
       contactId,
       companyId,

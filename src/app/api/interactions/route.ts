@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, logAudit } from "@/lib/crm/server";
+import { deliverEmailReply } from "@/lib/crm/email-delivery";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -37,19 +38,37 @@ export async function POST(req: NextRequest) {
   const content = String(body.content ?? "").trim();
   if (!content) return ok({ error: "Konten pesan wajib diisi" }, 400);
 
+  const channel = String(body.channel ?? "whatsapp");
+  const direction = String(body.direction ?? "outbound");
+  const subject = body.subject ? String(body.subject) : null;
+  const recipientRaw = body.recipientName ? String(body.recipientName) : null;
+
+  // Ronde 21: email outbound → kirim nyata via SMTP (lihat email-delivery.ts).
+  let deliveryStatus: string | null = null;
+  let deliveryNote: string | null = null;
+  if (channel === "email" && direction === "outbound") {
+    const delivery = await deliverEmailReply({ recipientRaw, subject, content });
+    deliveryStatus = delivery.status;
+    deliveryNote = delivery.note;
+  } else if (direction === "outbound") {
+    // Perilaku simulasi lama untuk kanal lain (whatsapp/instagram dsb).
+    deliveryStatus = "delivered";
+  }
+
   const interaction = await db.interaction.create({
     data: {
-      channel: String(body.channel ?? "whatsapp"),
-      direction: String(body.direction ?? "outbound"),
+      channel,
+      direction,
       brandId: body.brandId ? String(body.brandId) : null,
       externalId: body.externalId ? String(body.externalId) : null,
       senderName: body.senderName ? String(body.senderName) : null,
-      recipientName: body.recipientName ? String(body.recipientName) : null,
-      subject: body.subject ? String(body.subject) : null,
+      recipientName: recipientRaw,
+      subject,
       content,
       respondedBy: body.respondedBy ? String(body.respondedBy) : null,
       respondedAt: body.respondedBy ? new Date() : null,
-      deliveryStatus: String(body.direction ?? "outbound") === "outbound" ? "delivered" : "delivered",
+      deliveryStatus,
+      deliveryNote,
       opportunityId: body.opportunityId ? String(body.opportunityId) : null,
       contactId: body.contactId ? String(body.contactId) : null,
       companyId: body.companyId ? String(body.companyId) : null,

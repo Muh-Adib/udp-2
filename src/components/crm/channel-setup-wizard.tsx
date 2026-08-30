@@ -184,6 +184,8 @@ export default function ChannelSetupWizard({
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [isDemo, setIsDemo] = useState(false);
+  const [skipVerify, setSkipVerify] = useState(false);
+  const [verifyNote, setVerifyNote] = useState<string | null>(null);
   const [origin, setOrigin] = useState("");
 
   const meta = channelKey ? CHANNEL_TYPES[channelKey] : null;
@@ -201,6 +203,8 @@ export default function ChannelSetupWizard({
       setError(null);
       setConnecting(false);
       setIsDemo(false);
+      setSkipVerify(false);
+      setVerifyNote(null);
       setOrigin(window.location.origin);
     }
   }, [open, channelKey]);
@@ -270,20 +274,23 @@ export default function ChannelSetupWizard({
     setConnecting(true);
     setError(null);
     try {
-      await channelsApi.connect({
+      const res = await channelsApi.connect({
         channel: channelKey,
         brandId: brandId === "all" ? null : brandId,
         displayName: displayName.trim(),
         accountRef: accountRef.trim(),
         credentials: collectedCreds,
+        skipVerification: skipVerify,
         actorName,
         actorRole,
       });
-      setIsDemo(false);
+      setIsDemo(skipVerify);
+      setVerifyNote(res.config?.statusNote ?? null);
       setPhase("success");
       await onConnected();
       toast.success(`${meta.label} berhasil terhubung 🎉`);
     } catch (e) {
+      // Verifikasi nyata gagal → pesan error asli ditampilkan inline agar bisa diperbaiki.
       setError(e instanceof Error ? e.message : "Gagal menghubungkan kanal");
     } finally {
       setConnecting(false);
@@ -591,6 +598,23 @@ export default function ChannelSetupWizard({
                   Koneksi ini hanya aktif untuk lead brand <span className="font-medium text-zinc-600">{brandName}</span>.
                 </p>
               ) : null}
+              {/* Ronde 21: opsi sadar-demo — default TIDAK dicentang, verifikasi nyata diutamakan */}
+              <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2" htmlFor="wiz-skip-verify">
+                <input
+                  id="wiz-skip-verify"
+                  type="checkbox"
+                  checked={skipVerify}
+                  onChange={(e) => setSkipVerify(e.target.checked)}
+                  className="mt-0.5 size-3.5 accent-amber-600"
+                />
+                <span className="text-[11px] leading-relaxed text-amber-800">
+                  Sambungkan <span className="font-semibold">tanpa verifikasi nyata (mode demo)</span> — kredensial tidak diuji ke server.
+                  Kanal akan bertanda Demo dan email tidak benar-benar terkirim.
+                </span>
+              </label>
+              <p className="text-[10px] text-zinc-400">
+                Default: sistem melakukan verifikasi NYATA ({channelKey === "email" ? "handshake + login SMTP/IMAP" : "cek ID & token ke API penyedia"}) — gagal berarti koneksi tidak dibuat.
+              </p>
             </div>
           ) : null}
 
@@ -605,9 +629,14 @@ export default function ChannelSetupWizard({
               </p>
               <p className="mt-1 max-w-sm text-xs leading-relaxed text-zinc-500">
                 {isDemo
-                  ? "Koneksi demo aktif dengan kredensial buatan — cocok untuk melihat alur sebelum setup nyata. Ganti kredensial asli kapan pun lewat Edit."
-                  : "Sistem akan menerima pesan masuk via webhook. Kirim pesan uji ke akun bisnis Anda untuk melihatnya muncul di Inbox."}
+                  ? "Koneksi aktif TANPA verifikasi nyata — kredensial belum diuji. Ganti kredensial asli kapan pun lewat Edit atau tekan “Uji”."
+                  : `Kredensial diverifikasi langsung ke server. ${channelKey === "email" ? "Balasan dari Inbox akan terkirim nyata via SMTP, dan tombol “Tarik Email” menarik email masuk via IMAP." : "Pesan masuk akan diterima lewat webhook yang terdaftar."}`}
               </p>
+              {verifyNote ? (
+                <p className="mt-2 max-w-sm rounded-lg bg-zinc-100 px-3 py-1.5 text-[10px] leading-relaxed text-zinc-500" title={verifyNote}>
+                  <span className="font-semibold">Hasil verifikasi:</span> {verifyNote}
+                </p>
+              ) : null}
               <div className="mt-4 w-full max-w-sm space-y-1.5 rounded-2xl border bg-white p-3 text-left shadow-sm">
                 <div className="flex items-center justify-between gap-2 text-xs">
                   <span className="text-zinc-400">Koneksi</span>

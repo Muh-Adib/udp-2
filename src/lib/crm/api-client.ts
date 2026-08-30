@@ -315,12 +315,17 @@ export const channelsApi = {
     accountRef: string;
     credentials: Record<string, string>;
     isDemo?: boolean;
+    skipVerification?: boolean;
     actorName?: string;
     actorRole?: string;
   }) =>
-    request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels", {
+    request<{ config: import("@/lib/crm/types").ChannelConfigDTO; error?: string }>("/api/channels", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  emailSync: () =>
+    request<{ created: number; skipped: number; scanned: number; since: string }>("/api/channels/email-sync", {
+      method: "POST",
     }),
   demoConnect: (payload: { channel: string; brandId?: string | null; actorName?: string; actorRole?: string }) =>
     request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels/demo", {

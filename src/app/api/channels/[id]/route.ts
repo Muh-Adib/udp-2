@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { CHANNEL_TYPES, maskCredentialValue } from "@/lib/crm/channels";
+import { verifyChannel } from "@/lib/crm/channel-verify";
 
 /**
  * Ronde 19 — Saluran & Integrasi: aksi per koneksi.
@@ -64,15 +65,14 @@ function serialize(row: NonNullable<Awaited<ReturnType<typeof load>>>) {
   };
 }
 
-/** Uji kredensial level format (demo: tanpa panggilan jaringan nyata). */
-function testCredentials(channel: string, creds: Record<string, string>): { ok: boolean; note: string } {
+/** Pracheck format murah SEBELUM verifikasi jaringan nyata (ronde 21). */
+function precheckCredentials(channel: string, creds: Record<string, string>): { ok: boolean; note: string } {
   const meta = CHANNEL_TYPES[channel];
   if (!meta) return { ok: false, note: "Tipe kanal tidak dikenal" };
   const missing = meta.fields.filter((f) => f.required && !creds[f.key]);
   if (missing.length > 0) {
     return { ok: false, note: `Kredensial kosong: ${missing.map((f) => f.label).join(", ")}` };
   }
-  // Format check ringan per kanal.
   if (channel === "whatsapp") {
     if (creds.phoneNumberId && !/^\d{6,}$/.test(creds.phoneNumberId)) {
       return { ok: false, note: "Phone Number ID seharusnya berupa angka panjang (≥6 digit)" };
@@ -91,7 +91,7 @@ function testCredentials(channel: string, creds: Record<string, string>): { ok: 
       return { ok: false, note: "IG Business Account ID seharusnya angka" };
     }
   }
-  return { ok: true, note: "Format kredensial valid (mode demo — tanpa panggilan jaringan)" };
+  return { ok: true, note: "Pracheck format lulus" };
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -128,8 +128,33 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   if (action === "test") {
+    // Koneksi demo memakai kredensial buatan — tidak adil diuji ke penyedia;
+    // beri status jujur tanpa panggilan jaringan (bukan error palsu).
+    if (row.isDemo) {
+      const updated = await db.channelConfig.update({
+        where: { id },
+        data: {
+          status: "connected",
+          statusNote: "Koneksi demo — kredensial buatan, verifikasi nyata dilewati",
+          lastTestedAt: new Date(),
+        },
+        include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+      });
+      await logAudit({
+        actorName, actorRole,
+        action: "test",
+        entity: "channel", entityId: id,
+        entityLabel: `uji kanal demo ${row.channel} (${row.displayName}) — dilewati (demo)`,
+        newValue: { ok: true, note: "demo — verifikasi dilewati" },
+        req,
+      });
+      return ok({ config: serialize(updated), test: { ok: true, note: "Koneksi demo — kredensial buatan, verifikasi nyata dilewati" } });
+    }
+
     const creds = parseJsonObject(row.credentials);
-    const result = testCredentials(row.channel, creds);
+    // Ronde 21: pracheck format → lalu verifikasi NYATA (SMTP/IMAP/Graph API).
+    const pre = precheckCredentials(row.channel, creds);
+    const result = pre.ok ? await verifyChannel(row.channel, creds) : pre;
     const updated = await db.channelConfig.update({
       where: { id },
       data: {
@@ -143,7 +168,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       actorName, actorRole,
       action: "test",
       entity: "channel", entityId: id,
-      entityLabel: `uji kanal ${row.channel} (${row.displayName}) — ${result.ok ? "lulus" : "gagal"}`,
+      entityLabel: `uji nyata kanal ${row.channel} (${row.displayName}) — ${result.ok ? "lulus" : "gagal"}`,
       newValue: { ok: result.ok, note: result.note },
       req,
     });
@@ -172,7 +197,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (current[f.key]) safeCreds[f.key] = current[f.key];
     }
     data.credentials = JSON.stringify(safeCreds);
-    const result = testCredentials(row.channel, safeCreds);
+    const pre = precheckCredentials(row.channel, safeCreds);
+    const result = pre.ok ? await verifyChannel(row.channel, safeCreds) : pre;
     data.status = result.ok ? "connected" : "error";
     data.statusNote = result.note;
     data.lastTestedAt = new Date();

@@ -502,9 +502,22 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
         actorName: user.name,
         actorRole: user.role,
       });
-      toast.success(`Respons ${channel === "email" ? "email" : channel} tercatat`, {
-        description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
-      });
+      // Ronde 21 — sampaikan hasil pengiriman NYATA dengan jujur.
+      const st = res.reply?.deliveryStatus;
+      if (st === "failed") {
+        toast.error("Email GAGAL terkirim", { description: res.reply?.deliveryNote ?? "Periksa koneksi kanal email", duration: 8000 });
+      } else if (st === "sent") {
+        toast.success("Email terkirim nyata via SMTP", { description: res.reply?.deliveryNote ?? undefined });
+      } else if (st === "simulated") {
+        toast.info("Respons tercatat (simulasi — email tidak terkirim)", {
+          description: res.reply?.deliveryNote ?? "Hubungkan email asli di Saluran & Integrasi agar terkirim nyata",
+          duration: 7000,
+        });
+      } else {
+        toast.success(`Respons ${channel === "email" ? "email" : channel} tercatat`, {
+          description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
+        });
+      }
       onResponded({ ...lead, ...res.lead, slaHours: lead.slaHours, candidates: lead.candidates });
       onClose();
     } catch (err) {
@@ -784,6 +797,27 @@ export default function InboxModule() {
     void loadLeads();
   }, [loadLeads]);
 
+  // Ronde 21 — tarik email masuk nyata via IMAP (kanal email terhubung & non-demo).
+  const [emailSyncing, setEmailSyncing] = useState(false);
+  async function handleEmailSync() {
+    setEmailSyncing(true);
+    try {
+      const res = await channelsApi.emailSync();
+      if (res.created > 0) {
+        toast.success(`${res.created} email masuk ditarik via IMAP`, {
+          description: `${res.skipped} duplikat dilewati · sejak ${new Date(res.since).toLocaleDateString("id-ID")}`,
+        });
+        await loadLeads(true);
+      } else {
+        toast.info("Tidak ada email baru", { description: `${res.skipped} email sudah pernah disinkron.` });
+      }
+    } catch (err) {
+      toast.error("Sinkron IMAP gagal", { description: err instanceof Error ? err.message : "Cek koneksi email di Saluran & Integrasi" });
+    } finally {
+      setEmailSyncing(false);
+    }
+  }
+
   const stats = useMemo(() => {
     const list = leads ?? [];
     return {
@@ -1059,6 +1093,18 @@ export default function InboxModule() {
               aria-label="Muat ulang daftar lead"
             >
               <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="shrink-0"
+              disabled={emailSyncing}
+              onClick={() => void handleEmailSync()}
+              aria-label="Tarik email masuk via IMAP"
+              title="Tarik email masuk via IMAP (kanal email)"
+            >
+              <Mail className={cn("size-4", emailSyncing && "animate-pulse")} />
             </Button>
           </div>
         </div>

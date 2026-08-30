@@ -114,6 +114,7 @@ export interface InteractionDTO {
   respondedBy?: string | null;
   respondedAt?: string | null;
   deliveryStatus?: string | null;
+  deliveryNote?: string | null;
   opportunityId?: string | null;
   contactId?: string | null;
   companyId?: string | null;
