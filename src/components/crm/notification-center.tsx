@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { io } from "socket.io-client";
 import {
   Bell, BellOff, CheckCheck, X, Timer, FileCheck2, GitPullRequestArrow,
   ListChecks, CalendarClock, ReceiptText, SlidersHorizontal,
@@ -47,6 +48,90 @@ const NAV_MODULES = new Set<string>(["dashboard", "inbox", "pipeline", "followup
 
 type FilterKey = "all" | "unread";
 
+/** Statistik mini service via event socket "stats" (ronde 17-d — monitoring kesehatan). */
+interface ServiceStats {
+  startedAt: string;
+  uptimeMs: number;
+  activeRooms: number;
+  totalEmits: number;
+  pollCount: number;
+  pollErrorCount: number;
+  lastPollAt: string | null;
+}
+
+/** Hasil GET /api/health (ronde 17-d) — struktur sama dgn api.getSystemHealth. */
+interface SystemHealth {
+  status: "ok" | "degraded";
+  db: { status: "up" | "down"; ms: number | null };
+  notifService: { status: "up" | "down"; detail: string };
+  uptimeSec: number;
+  rssMb: number;
+}
+
+/** Durasi pendek utk uptime layanan: "45 dtk", "12 mnt", "2 j 13 mnt", "3 hr 2 j". */
+function formatUptimeShort(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} dtk`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} mnt`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} j ${m % 60} mnt`;
+  const d = Math.floor(h / 24);
+  return `${d} hr ${h % 24} j`;
+}
+
+function normalizeStats(v: unknown): ServiceStats | null {
+  if (!v || typeof v !== "object") return null;
+  const s = v as Partial<ServiceStats>;
+  if (typeof s.uptimeMs !== "number" || typeof s.activeRooms !== "number") return null;
+  return {
+    startedAt: typeof s.startedAt === "string" ? s.startedAt : "",
+    uptimeMs: s.uptimeMs,
+    activeRooms: s.activeRooms,
+    totalEmits: typeof s.totalEmits === "number" ? s.totalEmits : 0,
+    pollCount: typeof s.pollCount === "number" ? s.pollCount : 0,
+    pollErrorCount: typeof s.pollErrorCount === "number" ? s.pollErrorCount : 0,
+    lastPollAt: typeof s.lastPollAt === "string" ? s.lastPollAt : null,
+  };
+}
+
+/** Minta statistik layanan via socket "stats" (ack + fallback event "service:stats").
+ * Koneksi sekali pakai (forceNew, tanpa reconnect) agar TIDAK mengganggu socket
+ * notifikasi milik useNotifSocket — hanya dipanggil saat panel preferensi dibuka. */
+function fetchServiceStats(): Promise<ServiceStats | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    let socket: ReturnType<typeof io> | null = null;
+    const finish = (v: ServiceStats | null) => {
+      if (done) return;
+      done = true;
+      try {
+        socket?.close();
+      } catch {
+        /* abaikan */
+      }
+      resolve(v);
+    };
+    try {
+      socket = io("/?XTransformPort=3005", {
+        path: "/",
+        transports: ["polling", "websocket"],
+        forceNew: true,
+        reconnection: false,
+        timeout: 4000,
+      });
+      socket.on("connect", () => {
+        socket?.once("service:stats", (s: unknown) => finish(normalizeStats(s)));
+        socket?.emit("stats", (s: unknown) => finish(normalizeStats(s)));
+      });
+      socket.on("connect_error", () => finish(null));
+      window.setTimeout(() => finish(null), 4500);
+    } catch {
+      finish(null);
+    }
+  });
+}
+
 export default function NotificationCenter() {
   const user = useCrmStore((s) => s.user);
   const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
@@ -60,6 +145,11 @@ export default function NotificationCenter() {
   const [acting, setActing] = useState(false);
   const [showPrefs, setShowPrefs] = useState(false);
   const { prefs, update, toggleMuted } = useNotifPrefs(user?.email);
+
+  // Status sistem (ronde 17-d) — diisi saat panel preferensi dibuka
+  const [serviceStats, setServiceStats] = useState<ServiceStats | null>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
+  const [healthFailed, setHealthFailed] = useState(false);
 
   // Ref terbaru agar polling tidak dobel & closure selalu segar
   const brandRef = useRef(activeBrandFilter);
@@ -147,6 +237,33 @@ export default function NotificationCenter() {
     realtimeRef.current = realtimeConnected;
   }, [realtimeConnected]);
 
+  // "Status sistem" (ronde 17-d): refresh SETIAP panel preferensi dibuka — tanpa interval.
+  // Kesehatan server via GET /api/health; statistik realtime service via socket "stats"
+  // (hanya saat socket browser konek — saat fallback, status layanan dicek dari server).
+  useEffect(() => {
+    if (!open || !showPrefs) return;
+    let cancelled = false;
+    setServiceStats(null);
+    setSystemHealth(null);
+    setHealthFailed(false);
+    api
+      .getSystemHealth()
+      .then((h) => {
+        if (!cancelled) setSystemHealth(h);
+      })
+      .catch(() => {
+        if (!cancelled) setHealthFailed(true);
+      });
+    if (realtimeConnected) {
+      void fetchServiceStats().then((s) => {
+        if (!cancelled && s) setServiceStats(s);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [open, showPrefs, realtimeConnected]);
+
   function handleOpenChange(next: boolean) {
     setOpen(next);
     if (next) {
@@ -198,6 +315,27 @@ export default function NotificationCenter() {
   if (!user) return null;
 
   const showSkeleton = loading && items.length === 0;
+
+  // Baris "Status sistem": kesehatan database dari GET /api/health (ronde 17-d)
+  const dbLine = (() => {
+    if (healthFailed) return { dot: "bg-red-600", text: "Server tidak terjangkau" };
+    if (!systemHealth) return { dot: "bg-zinc-400", text: "Memeriksa server…" };
+    if (systemHealth.db.status !== "up" || systemHealth.db.ms === null) {
+      return { dot: "bg-red-600", text: "Database tidak responsif" };
+    }
+    if (systemHealth.db.ms > 500) {
+      return { dot: "bg-amber-500", text: `Database lambat · ${systemHealth.db.ms} ms` };
+    }
+    return { dot: "bg-emerald-500", text: `Database responsif · ${systemHealth.db.ms} ms` };
+  })();
+  // Probe layanan dari server — hanya tampil saat socket browser tidak konek (fallback)
+  const serviceLine = (() => {
+    if (healthFailed) return { dot: "bg-zinc-400", text: "Kesehatan layanan tidak diketahui" };
+    if (!systemHealth) return { dot: "bg-zinc-400", text: "Memeriksa layanan dari server…" };
+    return systemHealth.notifService.status === "up"
+      ? { dot: "bg-emerald-500", text: "Layanan notifikasi terjangkau dari server" }
+      : { dot: "bg-red-600", text: "Layanan notifikasi mati (dari server)" };
+  })();
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -309,6 +447,41 @@ export default function NotificationCenter() {
               />
               {realtimeConnected ? "Tersinkron antar perangkat" : "Sinkron antar perangkat menunggu koneksi realtime"}
             </p>
+            {/* Status sistem (ronde 17-d) — realtime service + kesehatan server; dimuat tiap panel dibuka */}
+            <div
+              className="mt-3 border-t border-zinc-200 pt-2"
+              role="region"
+              aria-label="Status sistem"
+              data-testid="status-sistem"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Status sistem</p>
+              <ul className="mt-1 space-y-1">
+                <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-realtime">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+                    )}
+                    aria-hidden
+                  />
+                  {realtimeConnected
+                    ? serviceStats
+                      ? `Layanan realtime aktif · ${formatUptimeShort(serviceStats.uptimeMs)} · ${serviceStats.activeRooms} ruangan`
+                      : "Layanan realtime aktif"
+                    : "Layanan realtime tidak terjangkau dari browser — dicek dari server"}
+                </li>
+                {!realtimeConnected && (
+                  <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-service-server">
+                    <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", serviceLine.dot)} aria-hidden />
+                    {serviceLine.text}
+                  </li>
+                )}
+                <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-server">
+                  <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dbLine.dot)} aria-hidden />
+                  {dbLine.text}
+                </li>
+              </ul>
+            </div>
           </div>
         ) : null}
 

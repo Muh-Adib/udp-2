@@ -233,6 +233,26 @@ export const api = {
     if (params?.action && params.action !== "all") sp.set("action", params.action);
     return request<{ logs: AuditLogDTO[] }>(`/api/audit-logs?${sp}`);
   },
+
+  // Monitoring kesehatan sistem (ronde 17-d) — probe server read-only tanpa data sensitif
+  getSystemHealth: () =>
+    request<{
+      status: "ok" | "degraded";
+      db: { status: "up" | "down"; ms: number | null };
+      notifService: { status: "up" | "down"; detail: string };
+      uptimeSec: number;
+      rssMb: number;
+    }>("/api/health"),
 };
 
 export type { DashboardData };
+
+// ============ Laporan (ronde 17-b) ============
+
+/** Laporan kinerja period-bounded lintas brand (revenue, win rate, SLA, aging, pipeline per owner). */
+export function getReports(params?: { brandId?: string; days?: number }) {
+  const sp = new URLSearchParams();
+  if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+  if (params?.days) sp.set("days", String(params.days));
+  return request<import("@/lib/crm/types").ReportsData>(`/api/reports?${sp}`);
+}

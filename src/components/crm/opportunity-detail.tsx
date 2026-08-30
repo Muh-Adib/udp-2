@@ -4,13 +4,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   ArrowLeftRight,
   BadgeCheck,
   BedDouble,
   Calculator,
   Camera,
+  Check,
   CheckCheck,
   ChevronDown,
+  Clock,
   CircleAlert,
   FileText,
   Globe,
@@ -315,6 +318,38 @@ function ScoreBadge({ score, reasons }: { score: number; reasons: string[] }) {
 
 // ---------- Komponen kecil: bubble timeline ----------
 
+/**
+ * Task 17-c — indikator status pengiriman pesan outbound (tick gaya WhatsApp).
+ * read → CheckCheck emerald, delivered → CheckCheck zinc, sent → Check zinc,
+ * failed → AlertTriangle merah; outbound WhatsApp tanpa status → Clock "Menunggu status".
+ * Baris inbound TIDAK menampilkan tick.
+ */
+function DeliveryTick({ status, channel }: { status?: string | null; channel?: string | null }) {
+  const label =
+    status === "read" ? "Dibaca"
+    : status === "delivered" ? "Terkirim"
+    : status === "sent" ? "Terkirim"
+    : status === "failed" ? "Gagal terkirim"
+    : channel === "whatsapp" ? "Menunggu status"
+    : null;
+  if (!label) return null;
+  const Icon =
+    status === "read" || status === "delivered" ? CheckCheck
+    : status === "sent" ? Check
+    : status === "failed" ? AlertTriangle
+    : Clock;
+  const tone =
+    status === "read" ? "text-emerald-600"
+    : status === "failed" ? "text-red-600"
+    : status === "sent" || status === "delivered" ? "text-zinc-400"
+    : "text-zinc-300";
+  return (
+    <span role="img" aria-label={label} title={label} className="inline-flex shrink-0 items-center">
+      <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+    </span>
+  );
+}
+
 function TimelineBubble({ item }: { item: InteractionRow }) {
   const outbound = item.direction === "outbound";
   return (
@@ -335,6 +370,7 @@ function TimelineBubble({ item }: { item: InteractionRow }) {
           <span className="font-medium">{channelLabel(item.channel)}</span>
           <span aria-hidden="true">•</span>
           <span>{formatDateTime(item.createdAt)}</span>
+          {outbound ? <DeliveryTick status={item.deliveryStatus} channel={item.channel} /> : null}
           <span aria-hidden="true">•</span>
           <span className="truncate">{item.senderName ?? "Tanpa nama"}</span>
         </div>

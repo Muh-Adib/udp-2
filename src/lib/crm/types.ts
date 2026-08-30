@@ -476,3 +476,81 @@ export interface NotificationDTO {
   ageHours: number;
   read: boolean;
 }
+
+// ============ LAPORAN (ronde 17-b) ============
+
+/** Periode laporan: window [since, until] berdasarkan jumlah hari ke belakang. */
+export interface ReportPeriod {
+  days: number;
+  since: string; // ISO
+  until: string; // ISO
+}
+
+/** KPI ringkas periode untuk strip atas modul Laporan. */
+export interface ReportTotals {
+  wonValue: number;
+  wonCount: number;
+  lostCount: number;
+  winRatePct: number;
+  outstanding: number;
+  avgResponseHours: number;
+}
+
+/** Revenue per brand: opportunity won pada periode (won-date = updatedAt). */
+export interface ReportRevenueBrandRow {
+  brandId: string;
+  name: string;
+  color: string;
+  count: number;
+  value: number;
+}
+
+/** Win rate per layanan: kohort opportunity dibuat pada periode, per serviceCategory. */
+export interface ReportWinRateServiceRow {
+  category: string;
+  created: number;
+  won: number;
+  lost: number;
+  winRatePct: number;
+  valueWon: number;
+}
+
+/** SLA compliance per brand: lead inbound pada periode vs slaHours brand. */
+export interface ReportSlaRow {
+  brandId: string;
+  name: string;
+  color: string;
+  slaHours: number;
+  total: number;
+  responded: number;
+  respondedPct: number;
+  avgResponseHours: number;
+  /** % lead terlambat melewati slaHours (sudah direspons telat ATAU belum direspons melewati SLA). */
+  breachPct: number;
+}
+
+/** Invoice aging: outstanding invoice (sent/partial/overdue) yang sudah lewat jatuh tempo, per bucket hari. */
+export interface ReportInvoiceAgingRow {
+  bucket: string;
+  count: number;
+  amount: number;
+}
+
+/** Pipeline per owner: opportunity open (bukan won/lost) + weighted (value × probability). */
+export interface ReportPipelineOwnerRow {
+  owner: string;
+  count: number;
+  value: number;
+  weighted: number;
+}
+
+/** Response GET /api/reports?brandId&days — seluruh seksi laporan dalam satu route. */
+export interface ReportsData {
+  period: ReportPeriod;
+  totals: ReportTotals;
+  revenuePerBrand: ReportRevenueBrandRow[];
+  winRatePerService: ReportWinRateServiceRow[];
+  slaCompliance: ReportSlaRow[];
+  invoiceAging: ReportInvoiceAgingRow[];
+  pipelinePerOwner: ReportPipelineOwnerRow[];
+}

@@ -6,7 +6,7 @@ import type { SessionUser, Brand } from "@/lib/crm/types";
 
 export type ModuleKey =
   | "dashboard" | "inbox" | "contacts" | "pipeline" | "followups"
-  | "finance" | "projects" | "portal" | "brands" | "users" | "audit";
+  | "finance" | "reports" | "projects" | "portal" | "brands" | "users" | "audit";
 
 export const MODULE_META: Record<ModuleKey, { label: string; description: string; roles: string[] }> = {
   dashboard: { label: "Command Center", description: "Dashboard eksekutif lintas brand", roles: ["super_admin", "director", "marketing", "finance", "production"] },
@@ -15,6 +15,7 @@ export const MODULE_META: Record<ModuleKey, { label: string; description: string
   pipeline: { label: "Sales Pipeline", description: "Kanban & tabel opportunity", roles: ["super_admin", "director", "marketing", "finance"] },
   followups: { label: "Follow-up", description: "Task & jadwal follow-up", roles: ["super_admin", "director", "marketing", "production"] },
   finance: { label: "Finance", description: "Invoice, pembayaran, aging receivable", roles: ["super_admin", "director", "finance"] },
+  reports: { label: "Laporan", description: "Laporan kinerja lintas brand & ekspor CSV", roles: ["super_admin", "director", "finance", "marketing"] },
   projects: { label: "Projects", description: "Produksi setelah deal berhasil", roles: ["super_admin", "director", "production", "marketing"] },
   portal: { label: "Client Portal", description: "Tampilan terbatas untuk klien", roles: ["super_admin", "director", "client"] },
   brands: { label: "Brand Configuration", description: "Konfigurasi brand tanpa ubah source code", roles: ["super_admin", "director"] },

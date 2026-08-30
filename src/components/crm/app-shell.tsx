@@ -17,13 +17,14 @@ import InboxModule from "@/components/crm/inbox-module";
 import ContactsModule from "@/components/crm/contacts-module";
 import FollowupsModule from "@/components/crm/followups-module";
 import FinanceModule from "@/components/crm/finance-module";
+import ReportsModule from "@/components/crm/reports-module";
 import ProjectsModule from "@/components/crm/projects-module";
 import PortalModule from "@/components/crm/portal-module";
 import BrandsModule from "@/components/crm/brands-module";
 import UsersModule from "@/components/crm/users-module";
 import AuditModule from "@/components/crm/audit-module";
 import {
-  LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet,
+  LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
   FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu,
   ChevronDown, CircleUser,
 } from "lucide-react";
@@ -35,6 +36,7 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
   pipeline: KanbanSquare,
   followups: BellRing,
   finance: Wallet,
+  reports: BarChart3,
   projects: FolderKanban,
   portal: Globe2,
   brands: Building2,
@@ -44,7 +46,7 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
 
 const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
   { label: "Operasional", modules: ["dashboard", "inbox", "contacts", "pipeline"] },
-  { label: "Komersial & Produksi", modules: ["followups", "finance", "projects"] },
+  { label: "Komersial & Produksi", modules: ["followups", "finance", "reports", "projects"] },
   { label: "Eksternal", modules: ["portal"] },
   { label: "Sistem", modules: ["brands", "users", "audit"] },
 ];
@@ -248,6 +250,7 @@ export default function AppShell() {
               {activeModule === "pipeline" && <PipelineModule />}
               {activeModule === "followups" && <FollowupsModule />}
               {activeModule === "finance" && <FinanceModule />}
+              {activeModule === "reports" && <ReportsModule />}
               {activeModule === "projects" && <ProjectsModule />}
               {activeModule === "portal" && <PortalModule />}
               {activeModule === "brands" && <BrandsModule />}

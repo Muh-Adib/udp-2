@@ -39,6 +39,28 @@ const rooms = new Map<string, Set<string>>();
 /** room key → hash observasi terakhir (baseline saat pertama dilihat). */
 const baselines = new Map<string, string>();
 
+/** Ronde 17-d: statistik in-memory layanan (monitoring kesehatan — TIDAK ada route HTTP
+ * tambahan; socket.io path "/" mencegat semua HTTP, jadi stats HANYA via event socket). */
+const startedAt = Date.now();
+const stats = {
+  totalEmits: 0, // jumlah emit "notif:changed"
+  pollCount: 0, // poll room berhasil
+  pollErrorCount: 0, // poll room gagal (fetch/HTTP error)
+  lastPollAt: null as string | null, // akhir siklus poll terakhir
+};
+
+function serviceStats() {
+  return {
+    startedAt: new Date(startedAt).toISOString(),
+    uptimeMs: Date.now() - startedAt,
+    activeRooms: rooms.size,
+    totalEmits: stats.totalEmits,
+    pollCount: stats.pollCount,
+    pollErrorCount: stats.pollErrorCount,
+    lastPollAt: stats.lastPollAt,
+  };
+}
+
 function roomKey(email: string, brandId?: string | null): string {
   return `${email}::${brandId && brandId !== "all" ? brandId : "all"}`;
 }
@@ -104,6 +126,16 @@ io.on("connection", (socket) => {
 
   socket.on("ping", () => socket.emit("pong", { at: new Date().toISOString() }));
 
+  // Ronde 17-d: "stats" → kirim statistik layanan. Mendukung ack callback (arg terakhir
+  // berupa fungsi) DAN emit "service:stats" ke socket peminta — event lama tidak berubah.
+  socket.on("stats", (...args: unknown[]) => {
+    const payload = serviceStats();
+    const ack = args.find((a) => typeof a === "function");
+    if (typeof ack === "function") (ack as (s: unknown) => void)(payload);
+    socket.emit("service:stats", payload);
+    log(`stats → socket=${socket.id} (rooms=${payload.activeRooms}, uptime=${Math.round(payload.uptimeMs / 1000)}dtk)`);
+  });
+
   socket.on("disconnect", () => {
     const key = currentRoom(socket);
     if (key) leaveRoom(socket, key);
@@ -158,8 +190,10 @@ async function pollOnce(): Promise<void> {
       const prev = baselines.get(key);
       baselines.set(key, hash);
       fetchFailLogged = false;
+      stats.pollCount++; // Ronde 17-d: poll room berhasil
       if (prev === undefined) continue; // observasi pertama = baseline saja
       if (prev !== hash) {
+        stats.totalEmits++; // Ronde 17-d: hitung emit notif:changed
         io.to(key).emit("notif:changed", {
           email,
           brandId,
@@ -169,12 +203,14 @@ async function pollOnce(): Promise<void> {
         log(`notif:changed → room=${key} unread=${unread}`);
       }
     } catch (err) {
+      stats.pollErrorCount++; // Ronde 17-d: poll room gagal
       if (!fetchFailLogged) {
         console.error(`[notif-service] fetch notifikasi gagal (${key}):`, err instanceof Error ? err.message : err);
         fetchFailLogged = true;
       }
     }
   }
+  stats.lastPollAt = new Date().toISOString(); // Ronde 17-d: akhir siklus poll
 }
 
 const pollTimer = setInterval(() => {

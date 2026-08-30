@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  AlarmClock, AlertTriangle, Building2, Check, CheckCircle2, Fingerprint, Globe, Inbox,
+  AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, Clock, Fingerprint, Globe, Inbox,
   Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone, RefreshCw, Reply, Send,
   ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
@@ -66,6 +66,38 @@ function channelMeta(channel: string) {
 }
 function channelLabel(channel: string): string {
   return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
+}
+
+/**
+ * Task 17-c — indikator status pengiriman pesan outbound (tick gaya WhatsApp).
+ * read → CheckCheck emerald, delivered → CheckCheck zinc, sent → Check zinc,
+ * failed → AlertTriangle merah; outbound WhatsApp tanpa status → Clock "Menunggu status".
+ * Baris inbound TIDAK menampilkan tick.
+ */
+function DeliveryTick({ status, channel }: { status?: string | null; channel?: string | null }) {
+  const label =
+    status === "read" ? "Dibaca"
+    : status === "delivered" ? "Terkirim"
+    : status === "sent" ? "Terkirim"
+    : status === "failed" ? "Gagal terkirim"
+    : channel === "whatsapp" ? "Menunggu status"
+    : null;
+  if (!label) return null;
+  const Icon =
+    status === "read" || status === "delivered" ? CheckCheck
+    : status === "sent" ? Check
+    : status === "failed" ? AlertTriangle
+    : Clock;
+  const tone =
+    status === "read" ? "text-emerald-600"
+    : status === "failed" ? "text-red-600"
+    : status === "sent" || status === "delivered" ? "text-zinc-400"
+    : "text-zinc-300";
+  return (
+    <span role="img" aria-label={label} title={label} className="inline-flex shrink-0 items-center">
+      <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+    </span>
+  );
 }
 type SlaTone = "ok" | "warning" | "breach";
 
@@ -761,6 +793,34 @@ export default function InboxModule() {
     [leads, selectedId]
   );
 
+  // Task 17-c — riwayat respons outbound utk lead terpilih (match externalId `inbox-reply:<leadId>`)
+  const [replies, setReplies] = useState<InteractionDTO[]>([]);
+  const repliesLeadId = selectedLead?.id ?? null;
+  const repliesLeadContactId = selectedLead?.contactId ?? null;
+  const repliesRespondedAt = selectedLead?.respondedAt ?? null;
+  useEffect(() => {
+    if (!repliesLeadId) {
+      setReplies([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const res = await api.interactions(
+          repliesLeadContactId ? { contactId: repliesLeadContactId } : undefined
+        );
+        if (!alive) return;
+        const marker = `inbox-reply:${repliesLeadId}`;
+        setReplies(
+          res.interactions.filter((i) => i.direction === "outbound" && i.externalId === marker)
+        );
+      } catch {
+        if (alive) setReplies([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [repliesLeadId, repliesLeadContactId, repliesRespondedAt]);
+
   const brandOptions = brands.length > 0 ? brands : selectedLead?.brand ? [selectedLead.brand] : [];
   const selectedOppBrand = brandOptions.find((b) => b.id === oppForm.brandId);
   const serviceNameOptions = selectedOppBrand ? BRAND_SERVICES[selectedOppBrand.slug] ?? [] : [];
@@ -1127,6 +1187,40 @@ export default function InboxModule() {
                       </div>
                     )}
                   </div>
+
+                  {/* Task 17-c — Riwayat respons outbound + indikator tick status pengiriman */}
+                  {replies.length > 0 ? (
+                    <div className="mt-3 rounded-lg border border-zinc-200 p-3" aria-label="Riwayat respons">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+                          <Reply className="size-4 text-zinc-500" aria-hidden="true" />
+                          Riwayat Respons
+                        </span>
+                        <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">
+                          {`${replies.length} respons`}
+                        </Badge>
+                      </div>
+                      <ul className="mt-2.5 space-y-2">
+                        {replies.map((r) => {
+                          const RIcon = channelMeta(r.channel).icon;
+                          return (
+                            <li key={r.id} className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-2.5">
+                              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                                <RIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                                <span className="font-medium text-zinc-600">{channelLabel(r.channel)}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{formatDateTime(r.createdAt)}</span>
+                                <DeliveryTick status={r.deliveryStatus} channel={r.channel} />
+                              </div>
+                              <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-700">
+                                {r.content}
+                              </p>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
                 </div>
 
                 {/* Identifikasi Identitas */}
