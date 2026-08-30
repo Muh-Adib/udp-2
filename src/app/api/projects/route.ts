@@ -23,6 +23,74 @@ export async function GET(req: NextRequest) {
   return ok({ projects });
 }
 
+/**
+ * Task 22-4 — POST: pembuatan project MANUAL (bukan dari opportunity Won).
+ * Kode project dibuat dengan pola yang sama persis dengan handleWonTransition
+ * (src/lib/crm/server.ts): PREFIX dari slug brand (3 char pertama, uppercase,
+ * underscore di-strip) + tahun + counter 3 digit, dengan retry bila code sudah dipakai.
+ * Milestone/invoice TIDAK dibuat otomatis (hanya alur Won).
+ */
+export async function POST(req: NextRequest) {
+  const body = await readBody(req);
+  const name = String(body.name ?? "").trim();
+  const brandId = String(body.brandId ?? "").trim();
+  const companyId = String(body.companyId ?? "").trim();
+  if (!name) return fail("Nama project wajib diisi", 400);
+  if (!brandId || !companyId) return fail("Brand dan perusahaan wajib dipilih", 400);
+
+  const brand = await db.brand.findUnique({ where: { id: brandId } });
+  if (!brand) return fail("Brand tidak ditemukan", 404);
+  const company = await db.company.findUnique({ where: { id: companyId } });
+  if (!company) return fail("Perusahaan tidak ditemukan", 404);
+
+  // Kode project: pola identik dengan handleWonTransition + jaminan unik (retry counter).
+  const year = new Date().getFullYear();
+  const prefix = brand.slug.slice(0, 3).toUpperCase().replace("_", "");
+  let counter = (await db.project.count()) + 1;
+  let code = `${prefix}-${year}-${String(counter).padStart(3, "0")}`;
+  while (await db.project.findUnique({ where: { code } })) {
+    counter += 1;
+    code = `${prefix}-${year}-${String(counter).padStart(3, "0")}`;
+  }
+
+  const status = body.status ? String(body.status) : "planning";
+  const pmName = body.pmName ? String(body.pmName).trim() : null;
+  const serviceCategory = body.serviceCategory ? String(body.serviceCategory) : null;
+  const startDate = body.startDate ? new Date(String(body.startDate)) : null;
+  const dueDate = body.dueDate ? new Date(String(body.dueDate)) : null;
+
+  const project = await db.project.create({
+    data: {
+      code,
+      name,
+      brandId,
+      companyId,
+      serviceCategory,
+      status,
+      progress: 0,
+      pmName,
+      startDate: startDate && !Number.isNaN(startDate.getTime()) ? startDate : null,
+      dueDate: dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null,
+      budgetInternal: Number(body.budgetInternal) || 0,
+      contractValue: Number(body.contractValue) || 0,
+    },
+    include: { brand: true, company: true },
+  });
+
+  await logAudit({
+    actorName: String(body.actorName ?? "System"),
+    actorRole: body.actorRole ? String(body.actorRole) : "system",
+    action: "create",
+    entity: "project",
+    entityId: project.id,
+    entityLabel: name,
+    newValue: JSON.stringify({ code: project.code, brand: brand.name, company: company.name, status }),
+    req,
+  });
+
+  return ok({ project }, 201);
+}
+
 export async function PATCH(req: NextRequest) {
   const body = await readBody(req);
   const id = String(body.id ?? "");

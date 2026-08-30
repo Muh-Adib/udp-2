@@ -275,9 +275,35 @@ model Project {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
-  milestones     Milestone[]
-  invoices       Invoice[]
+  milestones    Milestone[]
+  invoices      Invoice[]
   changeRequests ChangeRequest[]
+  deliverables  ProjectDeliverable[]
+}
+
+/**
+ * Deliverable & file/tautan untuk direview — alur "kirim file/tautan ke sistem untuk ditinjau".
+ * kind: link (url eksternal, contoh Google Drive/Figma) atau file (upload kecil ≤1.2MB, base64 data URL).
+ * status: pending (menunggu review) → approved (disetujui) / revision (minta revisi + komentar).
+ */
+model ProjectDeliverable {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name          String
+  kind          String   @default("link") // link | file
+  url           String? // untuk kind=link
+  fileName      String? // untuk kind=file
+  fileData      String? // data URL base64 (upload kecil)
+  mimeType      String?
+  sizeBytes     Int?
+  note          String?
+  status        String   @default("pending") // pending, approved, revision
+  reviewComment String?
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  createdBy     String?
+  createdAt     DateTime @default(now())
 }
 
 model Milestone {

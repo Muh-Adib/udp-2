@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, findMatchCandidates } from "@/lib/crm/server";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
+import { extractEmailFromText } from "@/lib/crm/utils";
 
 /** Unified Lead Inbox: pesan inbound yang belum ditautkan ke opportunity. */
 export async function GET(req: NextRequest) {
@@ -34,9 +35,10 @@ export async function GET(req: NextRequest) {
   // Untuk setiap lead, cari kandidat identitas + hitung SLA
   const enriched = await Promise.all(
     leads.map(async (lead) => {
+      // FIX r22: handle IG bukan email — hanya email valid (x@y.tld) yang dipakai utk pencocokan.
       const candidates = await findMatchCandidates({
-        email: lead.senderName?.includes("@") ? lead.senderName : null,
-        whatsapp: lead.senderName?.match(/^\+?\d/) ? lead.senderName : null,
+        email: extractEmailFromText(lead.senderName),
+        whatsapp: lead.senderName && /^\+?[\d][\d\s\-()+]{5,}$/.test(lead.senderName.trim()) ? lead.senderName : null,
         fullName: lead.contact?.fullName ?? null,
         companyName: lead.contact?.company?.name ?? null,
       });

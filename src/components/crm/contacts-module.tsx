@@ -9,12 +9,14 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormE
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Banknote,
   Briefcase,
   Building2,
   CheckCircle2,
   ChevronDown,
   Clock,
+  CopyX,
   Download,
   ExternalLink,
   FileUp,
@@ -93,6 +95,7 @@ import { useCrmStore } from "@/lib/crm/store";
 import type {
   CompanyRef,
   ContactRef,
+  DuplicatePairDTO,
   ImportCommitResponseDTO,
   ImportPreviewResponseDTO,
   ImportPreviewRowDTO,
@@ -279,6 +282,13 @@ function sizeBadgeClass(size?: string | null): string {
 function scoreBadgeClass(score: number): string {
   if (score >= 85) return "bg-rose-100 text-rose-700";
   if (score >= 70) return "bg-amber-100 text-amber-700";
+  return "bg-zinc-100 text-zinc-600";
+}
+
+/** Skor pasangan duplikat lintas sumber: ≥90 emerald (nyaris pasti), 80–89 amber, sisanya zinc. */
+function dupScoreBadgeClass(score: number): string {
+  if (score >= 90) return "bg-emerald-100 text-emerald-700";
+  if (score >= 80) return "bg-amber-100 text-amber-700";
   return "bg-zinc-100 text-zinc-600";
 }
 
@@ -2066,6 +2076,290 @@ function buildContactsCsv(contacts: ContactRecord[]): string {
   return "\uFEFF" + lines.join("\r\n");
 }
 
+// ---------- Dialog: Deteksi & gabung duplikat lintas sumber (Ronde 22) ----------
+
+/** Identitas ringkas satu sisi pasangan duplikat (email / WA / perusahaan). */
+function DuplicateIdentity({
+  email,
+  whatsapp,
+  company,
+}: {
+  email?: string | null;
+  whatsapp?: string | null;
+  company?: string | null;
+}) {
+  return (
+    <div className="mt-1.5 space-y-1">
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+        <Mail className="size-3.5 shrink-0 text-zinc-400" />
+        <span className="truncate">{email || "—"}</span>
+      </p>
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+        <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
+        <span className="truncate">{whatsapp || "—"}</span>
+      </p>
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+        <Building2 className="size-3.5 shrink-0 text-zinc-400" />
+        <span className="truncate">{company || "—"}</span>
+      </p>
+    </div>
+  );
+}
+
+function DuplicatePairSkeletonRow() {
+  return (
+    <div className="rounded-xl border bg-white p-4 shadow-sm" aria-hidden="true">
+      <Skeleton className="h-5 w-20 rounded-md" />
+      <div className="mt-3 grid grid-cols-1 items-start gap-3 sm:grid-cols-[1fr_auto_1fr]">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-3 w-44" />
+        </div>
+        <Skeleton className="mx-auto size-8 rounded-full" />
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-3 w-44" />
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Skeleton className="h-8 w-28 rounded-md" />
+      </div>
+    </div>
+  );
+}
+
+function DuplicateScanDialog({
+  open,
+  onOpenChange,
+  onMerged,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onMerged: () => void;
+}) {
+  const user = useCrmStore((s) => s.user);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pairs, setPairs] = useState<DuplicatePairDTO[]>([]);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [mergingId, setMergingId] = useState<string | null>(null);
+
+  const runScan = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setConfirmingId(null);
+    try {
+      const res = await api.scanDuplicates();
+      setPairs(res.pairs);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memindai duplikat");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      setPairs([]);
+      setMergingId(null);
+      void runScan();
+    }
+  }, [open, runScan]);
+
+  async function confirmMerge(pair: DuplicatePairDTO) {
+    setMergingId(pair.duplicateId);
+    try {
+      await api.mergeContacts(pair.primaryId, pair.duplicateId, user?.name ?? "System");
+      toast.success("Kontak digabungkan");
+      // Optimistic: hapus pasangan dari daftar, lalu muat ulang data kontak di modul.
+      setPairs((list) => list.filter((p) => p.duplicateId !== pair.duplicateId));
+      setConfirmingId(null);
+      onMerged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menggabungkan kontak");
+    } finally {
+      setMergingId(null);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CopyX className="size-5 text-zinc-900" /> Gabungkan Lead Lintas Sumber
+          </DialogTitle>
+          <DialogDescription>
+            Kontak yang datang dari WhatsApp, Instagram, Email, atau import CSV bisa tercatat ganda. Sistem mencocokkan
+            email, WhatsApp, telepon, sosial media, domain perusahaan, dan kemiripan nama.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading && (
+          <div className="space-y-2" aria-live="polite" aria-label="Memindai duplikat">
+            <DuplicatePairSkeletonRow />
+            <DuplicatePairSkeletonRow />
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-8 text-center">
+            <span className="flex size-11 items-center justify-center rounded-full bg-rose-100 text-rose-600">
+              <AlertTriangle className="size-5" />
+            </span>
+            <p className="max-w-sm text-sm text-rose-700">{error}</p>
+            <Button variant="outline" size="sm" onClick={() => void runScan()} aria-label="Coba pindai ulang duplikat">
+              <RefreshCw className="size-4" /> Coba lagi
+            </Button>
+          </div>
+        )}
+
+        {!loading && !error && pairs.length === 0 && (
+          <div className="flex flex-col items-center gap-2.5 rounded-xl border bg-white px-4 py-10 text-center shadow-sm">
+            <span className="flex size-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+              <CheckCircle2 className="size-6" />
+            </span>
+            <p className="text-sm font-medium text-zinc-700">Tidak ada duplikat terdeteksi — data kontak bersih.</p>
+          </div>
+        )}
+
+        {!loading && !error && pairs.length > 0 && (
+          <>
+            <p className="text-xs text-zinc-500">
+              Ditemukan <span className="font-semibold text-zinc-800">{pairs.length}</span> pasangan kemiripan.
+              Periksa lalu gabungkan yang benar-benar orang yang sama.
+            </p>
+            <ul className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+              {pairs.map((pair) => {
+                const confirming = confirmingId === pair.duplicateId;
+                const busy = mergingId !== null;
+                return (
+                  <li key={pair.duplicateId} className="rounded-xl border bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <Badge className={cn("border-transparent", dupScoreBadgeClass(pair.score))}>
+                        Skor {pair.score}
+                      </Badge>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 items-start gap-3 sm:grid-cols-[1fr_auto_1fr]">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                          Usulan Utama
+                        </p>
+                        <p className="mt-0.5 truncate text-sm font-bold text-zinc-900">{pair.primaryName}</p>
+                        <DuplicateIdentity
+                          email={pair.primaryEmail}
+                          whatsapp={pair.primaryWhatsapp}
+                          company={pair.primaryCompany}
+                        />
+                      </div>
+                      <div className="flex items-center justify-center" aria-hidden="true">
+                        <span className="flex size-8 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
+                          <ArrowLeftRight className="size-4" />
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Duplikat</p>
+                        <p className="mt-0.5 truncate text-sm font-bold text-zinc-900">{pair.duplicateName}</p>
+                        <DuplicateIdentity
+                          email={pair.duplicateEmail}
+                          whatsapp={pair.duplicateWhatsapp}
+                          company={pair.duplicateCompany}
+                        />
+                      </div>
+                    </div>
+
+                    {pair.reasons.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {pair.reasons.map((r, i) => (
+                          <Badge
+                            key={`${pair.duplicateId}-${i}`}
+                            variant="outline"
+                            className="text-[11px] font-normal text-zinc-500"
+                          >
+                            {r}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+
+                    {!confirming && (
+                      <div className="mt-3 flex justify-end border-t border-zinc-100 pt-3">
+                        <Button
+                          size="sm"
+                          className="bg-zinc-900 text-white hover:bg-zinc-800"
+                          disabled={busy}
+                          onClick={() => setConfirmingId(pair.duplicateId)}
+                          aria-label={`Gabungkan ${pair.duplicateName} ke ${pair.primaryName}`}
+                        >
+                          <GitMerge className="size-3.5" /> Gabungkan
+                        </Button>
+                      </div>
+                    )}
+
+                    {confirming && (
+                      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-xs leading-relaxed text-amber-800">
+                          Data <span className="font-semibold">{pair.duplicateName}</span> akan digabungkan ke{" "}
+                          <span className="font-semibold">{pair.primaryName}</span>. Opportunity &amp; interaksi
+                          dipindah, kontak duplikat diarsipkan.
+                        </p>
+                        <div className="mt-2.5 flex flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setConfirmingId(null)}
+                            disabled={busy}
+                            aria-label="Batal menggabungkan"
+                          >
+                            Batal
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => void confirmMerge(pair)}
+                            disabled={busy}
+                            aria-label={`Ya, gabungkan ${pair.duplicateName} ke ${pair.primaryName}`}
+                          >
+                            {mergingId === pair.duplicateId ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <GitMerge className="size-3.5" />
+                            )}
+                            Ya, gabungkan
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void runScan()}
+            disabled={loading}
+            aria-label="Pindai ulang duplikat"
+          >
+            {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} Pindai ulang
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            Tutup
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- Modul utama ----------
 
 export default function ContactsModule() {
@@ -2097,6 +2391,7 @@ export default function ContactsModule() {
   const [createContactOpen, setCreateContactOpen] = useState(false);
   const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
   const [importCsvOpen, setImportCsvOpen] = useState(false);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
   const [mergeState, setMergeState] = useState<{ newContactId: string; candidates: MatchCandidateDTO[] } | null>(null);
   const [merging, setMerging] = useState(false);
 
@@ -2327,6 +2622,14 @@ export default function ContactsModule() {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setDedupeOpen(true)}
+            aria-label="Deteksi duplikat lead lintas sumber"
+          >
+            <CopyX className="size-4" /> Deteksi Duplikat
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setImportCsvOpen(true)}
             aria-label="Impor kontak dari file CSV"
           >
@@ -2498,6 +2801,9 @@ export default function ContactsModule() {
           void refreshAll();
         }}
       />
+
+      {/* Dialog deteksi & gabung duplikat lintas sumber (Ronde 22) */}
+      <DuplicateScanDialog open={dedupeOpen} onOpenChange={setDedupeOpen} onMerged={() => void refreshAll()} />
 
       {/* Dialog merge pasca-create */}
       <Dialog open={!!mergeState} onOpenChange={(o) => !o && setMergeState(null)}>

@@ -12,7 +12,7 @@ import { api, channelsApi } from "@/lib/crm/api-client";
 import { canAccess, useCrmStore } from "@/lib/crm/store";
 import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { CHANNEL_TYPES } from "@/lib/crm/channels";
-import { formatDateTime, initials, timeAgo } from "@/lib/crm/utils";
+import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
 import type { FollowUpTemplateDTO, InteractionDTO, MatchCandidateDTO } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -888,11 +888,13 @@ export default function InboxModule() {
     setLinkedContactId(null);
 
     const rawSender = (lead.senderName ?? "").trim();
-    const looksLikePhone = /^\+?\d/.test(rawSender);
-    const looksLikeEmail = rawSender.includes("@");
+    // FIX r22: email hanya diisi bila benar-benar alamat email valid (x@y.tld).
+    // Handle Instagram seperti "@rani.creativehouse" BUKAN email — jangan diprefill ke kolom email.
+    const emailCandidate = extractEmailFromText(rawSender);
+    const looksLikePhone = /^\+?[\d][\d\s\-()+]{5,}$/.test(rawSender);
     setContactForm({
       ...EMPTY_CONTACT_FORM,
-      email: looksLikeEmail ? rawSender : "",
+      email: emailCandidate ?? "",
       whatsapp: looksLikePhone ? rawSender : "",
     });
     setOppForm({
@@ -1366,6 +1368,14 @@ export default function InboxModule() {
                   {showNewContact ? (
                     <div className="mt-3 space-y-3 rounded-lg border border-zinc-200 bg-zinc-50/60 p-3">
                       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Contact Baru</p>
+                      {selectedLead && selectedLead.channel === "instagram" && isSocialHandle(selectedLead.senderName) ? (
+                        <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                          <Instagram className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                          <span>
+                            Lead ini datang dari <strong>Instagram</strong> (handle {selectedLead.senderName}). Handle sosial <strong>tidak</strong> dimasukkan ke kolom email — isi email manual bila klien memberikannya.
+                          </span>
+                        </p>
+                      ) : null}
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
                           <Label htmlFor="inbox-first-name" className="text-xs">Nama Depan <span className="text-rose-600">*</span></Label>

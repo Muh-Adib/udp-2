@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
-  Download, Factory, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
+  Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
+  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Trash2, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,8 +30,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
+import { SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { ChangeRequestDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
+import type {
+  Brand, ChangeRequestDTO, CompanyRef, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
+} from "@/lib/crm/types";
 import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +63,36 @@ const CR_STATUS: Record<string, { label: string; cls: string }> = {
 function statusMeta(s: string) {
   return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
 }
+
+// Task 22-4 — Deliverable & Review (file/tautan yang dikirim untuk ditinjau klien/manajemen)
+const SERVICE_CATEGORY_LABELS: Record<string, string> = {
+  animation: "Animasi",
+  website: "Website",
+  video: "Video / Produksi",
+  immersive: "Immersive / AR-VR",
+  digital_marketing: "Digital Marketing",
+};
+
+const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: "Menunggu Review", cls: "bg-zinc-100 text-zinc-600" },
+  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+  revision: { label: "Revisi", cls: "bg-amber-100 text-amber-700" },
+};
+
+function dlvMeta(s: string) {
+  return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+}
+
+function formatSizeKb(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return "";
+  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+}
+
+const MAX_DELIVERABLE_BYTES = 1_200_000; // 1.2MB — sinkron dengan validasi API
+
+/** fileData (base64 data URL) dikirim server tetapi tidak dideklarasikan di ProjectDeliverableDTO —
+ *  types.ts tidak boleh diubah, jadi perluas secara lokal untuk keperluan unduh. */
+type DeliverableRowData = ProjectDeliverableDTO & { fileData?: string | null };
 
 // ---------- Ekspor CSV project (Task 13): BOM + CRLF + separator titik-koma ----------
 
@@ -777,6 +811,200 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
   );
 }
 
+// ============ Deliverable & Review (Task 22-4) ============
+
+/** Satu baris deliverable: ikon jenis, meta, status, aksi review (manajemen/produksi) & hapus. */
+function DeliverableRow({ d, user, onChanged }: {
+  d: DeliverableRowData;
+  user: { name: string; role: string } | null;
+  onChanged: () => Promise<void>;
+}) {
+  const meta = dlvMeta(d.status);
+  const [review, setReview] = useState<null | "approved" | "revision">(null);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const canReview = user?.role === "super_admin" || user?.role === "director" || user?.role === "production";
+  const canDelete = canReview || (!!user?.name && d.createdBy === user.name);
+  const KindIcon = d.kind === "file" ? Paperclip : Link2;
+
+  async function submitDecision() {
+    if (!user || !review) return;
+    setBusy(true);
+    try {
+      await api.decideDeliverable({
+        id: d.id,
+        decision: review,
+        reviewComment: comment.trim() || undefined,
+        reviewedBy: user.name,
+        reviewedRole: user.role,
+      });
+      toast.success(review === "approved" ? `“${d.name}” disetujui` : `Revisi diminta untuk “${d.name}”`);
+      setReview(null);
+      setComment("");
+      await onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan keputusan review");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Hapus via fetch langsung: api.deleteDeliverable (kontrak api-client tidak boleh diubah)
+   *  tidak mengirim identitas aktor, sedangkan aturan hapus butuh actorName/actorRole. */
+  async function remove() {
+    if (!user) return;
+    if (!window.confirm(`Hapus deliverable “${d.name}”? Tindakan ini tidak dapat dibatalkan.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/projects/deliverables", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: d.id, actorName: user.name, actorRole: user.role }),
+      });
+      const json: { error?: string } = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Gagal menghapus deliverable");
+      toast.success("Deliverable dihapus");
+      await onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus deliverable");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100" aria-hidden>
+            <KindIcon className="h-3.5 w-3.5 text-zinc-500" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-zinc-900">{d.name}</p>
+            <p className="truncate text-[11px] text-zinc-500">
+              {d.kind === "file"
+                ? [d.fileName, d.sizeBytes ? formatSizeKb(d.sizeBytes) : null].filter(Boolean).join(" · ")
+                : d.url}
+            </p>
+            {d.note ? <p className="mt-1 text-xs text-zinc-500">{d.note}</p> : null}
+            <p className="mt-1 text-[11px] text-zinc-400">
+              Dikirim {timeAgo(d.createdAt)}{d.createdBy ? ` oleh ${d.createdBy}` : ""}
+            </p>
+            {d.status !== "pending" && d.reviewedBy ? (
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Direview oleh {d.reviewedBy}{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
+              </p>
+            ) : null}
+            {d.reviewComment ? (
+              <p className="mt-0.5 text-[11px] italic text-zinc-500">Catatan review: “{d.reviewComment}”</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>{meta.label}</Badge>
+          {canDelete ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+              onClick={() => void remove()}
+              disabled={busy}
+              aria-label={`Hapus deliverable ${d.name}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {d.kind === "link" && d.url ? (
+          <a
+            href={d.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Buka tautan
+          </a>
+        ) : null}
+        {d.kind === "file" && d.fileData ? (
+          <a
+            href={d.fileData}
+            download={d.fileName ?? undefined}
+            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden /> Unduh
+          </a>
+        ) : null}
+        {canReview ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 border-emerald-200 px-2 text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+              disabled={busy}
+              onClick={() => { setReview("approved"); setComment(d.reviewComment ?? ""); }}
+              aria-label={`Setujui deliverable ${d.name}`}
+            >
+              <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 border-amber-200 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+              disabled={busy}
+              onClick={() => { setReview("revision"); setComment(d.reviewComment ?? ""); }}
+              aria-label={`Minta revisi deliverable ${d.name}`}
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden /> Minta Revisi
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      {review !== null ? (
+        <div className="mt-2.5 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5">
+          <Textarea
+            rows={2}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder={review === "approved" ? "Catatan persetujuan (opsional)…" : "Jelaskan bagian yang perlu direvisi…"}
+            aria-label="Catatan review deliverable"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => { setReview(null); setComment(""); }}
+              aria-label="Batal review deliverable"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              onClick={() => void submitDecision()}
+              className={review === "approved" ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"}
+              aria-label="Konfirmasi keputusan review"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+              {review === "approved" ? "Konfirmasi Setujui" : "Kirim Permintaan Revisi"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProjectsSkeleton() {
   return (
     <div className="space-y-6" aria-hidden>
@@ -836,11 +1064,55 @@ export default function ProjectsModule() {
   const [rescheduleStatus, setRescheduleStatus] = useState("pending");
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
 
+  // Task 22-4 — Deliverable & Review pada sheet detail
+  const [deliverables, setDeliverables] = useState<ProjectDeliverableDTO[] | null>(null);
+  const [dfOpen, setDfOpen] = useState(false);
+  const [dfName, setDfName] = useState("");
+  const [dfKind, setDfKind] = useState<"link" | "file">("link");
+  const [dfUrl, setDfUrl] = useState("");
+  const [dfFileName, setDfFileName] = useState("");
+  const [dfFileData, setDfFileData] = useState("");
+  const [dfMimeType, setDfMimeType] = useState("");
+  const [dfSizeBytes, setDfSizeBytes] = useState<number | null>(null);
+  const [dfNote, setDfNote] = useState("");
+  const [dfSaving, setDfSaving] = useState(false);
+
+  // Task 22-4 — dialog Proyek Baru (pembuatan manual, tanpa opportunity Won)
+  const [npOpen, setNpOpen] = useState(false);
+  const [npName, setNpName] = useState("");
+  const [npBrandId, setNpBrandId] = useState("");
+  const [npCompanyId, setNpCompanyId] = useState("");
+  const [npServiceCategory, setNpServiceCategory] = useState("none");
+  const [npStatus, setNpStatus] = useState("planning");
+  const [npPmName, setNpPmName] = useState("");
+  const [npStartDate, setNpStartDate] = useState("");
+  const [npDueDate, setNpDueDate] = useState("");
+  const [npBudget, setNpBudget] = useState("");
+  const [npContract, setNpContract] = useState("");
+  const [npCompanies, setNpCompanies] = useState<CompanyRef[] | null>(null);
+  const [npBrandOptions, setNpBrandOptions] = useState<Brand[]>([]);
+  const [npSaving, setNpSaving] = useState(false);
+
   const canDecideCr = user?.role === "director" || user?.role === "super_admin";
   const detailCrs = detail?.changeRequests ?? [];
   const approvedCrSum = detailCrs
     .filter((c) => c.status === "approved")
     .reduce((s, c) => s + (c.additionalCost ?? 0), 0);
+
+  // Task 22-4 — ringkasan deliverable untuk chips header section
+  const dlvCounts = useMemo(() => {
+    const list = deliverables ?? [];
+    return {
+      total: list.length,
+      pending: list.filter((d) => d.status === "pending").length,
+      approved: list.filter((d) => d.status === "approved").length,
+      revision: list.filter((d) => d.status === "revision").length,
+    };
+  }, [deliverables]);
+
+  // Opsi brand untuk dialog Proyek Baru: store biasanya sudah terisi, fallback fetch saat dialog dibuka.
+  const npBrands = storeBrands.length > 0 ? storeBrands : npBrandOptions;
+  const detailId = detail?.id ?? null;
 
   // Item aktif pada dialog jadwalkan ulang (lookup terkini dari state agar guard same-day akurat).
   // Untuk kind "project" item-nya adalah project itu sendiri; untuk milestone tetap milestone-nya.
@@ -884,6 +1156,35 @@ export default function ProjectsModule() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Task 22-4 — lazy-fetch deliverable saat sheet detail dibuka (per project id)
+  useEffect(() => {
+    if (!detailId) {
+      setDeliverables(null);
+      return;
+    }
+    let cancelled = false;
+    api.projectDeliverables(detailId)
+      .then((res) => { if (!cancelled) setDeliverables(res.deliverables); })
+      .catch(() => {
+        if (!cancelled) {
+          setDeliverables([]);
+          toast.error("Gagal memuat deliverable");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [detailId]);
+
+  /** Muat ulang deliverable project yang sedang dibuka di sheet detail. */
+  const reloadDeliverables = useCallback(async () => {
+    if (!detailId) return;
+    try {
+      const res = await api.projectDeliverables(detailId);
+      setDeliverables(res.deliverables);
+    } catch {
+      toast.error("Gagal memuat deliverable");
+    }
+  }, [detailId]);
+
   const stats = useMemo(() => {
     const list = projects ?? [];
     return {
@@ -897,6 +1198,19 @@ export default function ProjectsModule() {
     setDetail(p);
     setEditStatus(p.status);
     setEditProgress(String(p.progress));
+    setDfOpen(false);
+    resetDf();
+  }
+
+  function resetDf() {
+    setDfName("");
+    setDfKind("link");
+    setDfUrl("");
+    setDfFileName("");
+    setDfFileData("");
+    setDfMimeType("");
+    setDfSizeBytes(null);
+    setDfNote("");
   }
 
   function confirmMilestone(project: ProjectDTO, m: MilestoneDTO) {
@@ -1200,6 +1514,132 @@ export default function ProjectsModule() {
     }
   }
 
+  /** Task 22-4 — baca file terpilih sebagai data URL (FileReader), tolak > 1.2MB di sisi klien. */
+  function handleDfFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > MAX_DELIVERABLE_BYTES) {
+      toast.error("Ukuran file maksimal 1.2MB — gunakan tautan (Drive/Dropbox) untuk file besar");
+      e.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDfFileData(String(reader.result ?? ""));
+      setDfFileName(f.name);
+      setDfMimeType(f.type || "application/octet-stream");
+      setDfSizeBytes(f.size);
+    };
+    reader.onerror = () => toast.error("Gagal membaca file");
+    reader.readAsDataURL(f);
+  }
+
+  /** Task 22-4 — kirim deliverable (tautan/file) untuk ditinjau. */
+  async function submitDeliverable() {
+    if (!detail || !user) {
+      toast.error("Sesi tidak ditemukan — muat ulang halaman");
+      return;
+    }
+    const name = dfName.trim();
+    if (!name) {
+      toast.error("Nama deliverable wajib diisi");
+      return;
+    }
+    if (dfKind === "link") {
+      if (!/^https?:\/\//i.test(dfUrl.trim())) {
+        toast.error("URL tautan wajib diawali http(s)://");
+        return;
+      }
+    } else if (!dfFileName || !dfFileData) {
+      toast.error("Pilih file yang akan dikirim");
+      return;
+    }
+    setDfSaving(true);
+    try {
+      await api.createDeliverable(detail.id, {
+        name,
+        kind: dfKind,
+        ...(dfKind === "link"
+          ? { url: dfUrl.trim() }
+          : { fileName: dfFileName, fileData: dfFileData, mimeType: dfMimeType, sizeBytes: dfSizeBytes ?? undefined }),
+        note: dfNote.trim() || undefined,
+        createdBy: user.name,
+      });
+      toast.success("Deliverable terkirim — menunggu review klien/manajemen");
+      setDfOpen(false);
+      resetDf();
+      await reloadDeliverables();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengirim deliverable");
+    } finally {
+      setDfSaving(false);
+    }
+  }
+
+  /** Task 22-4 — buka dialog Proyek Baru; opsi perusahaan di-fetch lazy sekali, brand dari store (fallback fetch). */
+  async function openNewProject() {
+    setNpName("");
+    setNpBrandId("");
+    setNpCompanyId("");
+    setNpServiceCategory("none");
+    setNpStatus("planning");
+    setNpPmName("");
+    setNpStartDate("");
+    setNpDueDate("");
+    setNpBudget("");
+    setNpContract("");
+    setNpOpen(true);
+    if (storeBrands.length === 0 || npCompanies === null) {
+      try {
+        const [brandRes, companyRes] = await Promise.all([
+          storeBrands.length === 0 ? api.brands() : Promise.resolve(null),
+          npCompanies === null ? api.companies() : Promise.resolve(null),
+        ]);
+        if (brandRes) setNpBrandOptions(brandRes.brands);
+        if (companyRes) setNpCompanies(companyRes.companies);
+      } catch {
+        toast.error("Gagal memuat data brand/perusahaan");
+      }
+    }
+  }
+
+  /** Task 22-4 — simpan project baru (manual create, tanpa milestone/invoice otomatis). */
+  async function submitNewProject(e: React.FormEvent) {
+    e?.preventDefault();
+    if (!user) {
+      toast.error("Sesi tidak ditemukan — muat ulang halaman");
+      return;
+    }
+    const name = npName.trim();
+    if (!name) { toast.error("Nama project wajib diisi"); return; }
+    if (!npBrandId) { toast.error("Pilih brand untuk project ini"); return; }
+    if (!npCompanyId) { toast.error("Pilih perusahaan klien"); return; }
+    setNpSaving(true);
+    try {
+      const res = await api.createProject({
+        name,
+        brandId: npBrandId,
+        companyId: npCompanyId,
+        serviceCategory: npServiceCategory === "none" ? undefined : npServiceCategory,
+        status: npStatus,
+        pmName: npPmName.trim() || undefined,
+        startDate: npStartDate || undefined,
+        dueDate: npDueDate || undefined,
+        budgetInternal: Number(npBudget) || 0,
+        contractValue: Number(npContract) || 0,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      toast.success("Proyek dibuat", { description: `${res.project.code} — muncul di daftar project` });
+      setNpOpen(false);
+      await load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat project");
+    } finally {
+      setNpSaving(false);
+    }
+  }
+
   if (loading && projects === null) return <ProjectsSkeleton />;
 
   return (
@@ -1210,7 +1650,15 @@ export default function ProjectsModule() {
           <h1 className="text-xl font-bold tracking-tight text-zinc-900">Projects</h1>
           <p className="text-sm text-zinc-500">Produksi setelah deal berhasil — template workflow per layanan</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => void openNewProject()}
+            disabled={npSaving}
+            aria-label="Buat proyek baru secara manual"
+          >
+            {npSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />} Proyek Baru
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1543,6 +1991,143 @@ export default function ProjectsModule() {
                   </div>
                 </div>
 
+                {/* Deliverable & Review (Task 22-4) — kirim file/tautan → review klien/manajemen */}
+                <div>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      <FileCheck className="h-3.5 w-3.5" aria-hidden />
+                      Deliverable &amp; Review
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { if (!dfOpen) resetDf(); setDfOpen((v) => !v); }}
+                      aria-expanded={dfOpen}
+                      aria-label="Kirim file atau tautan untuk ditinjau"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden /> Kirim File / Tautan
+                    </Button>
+                  </div>
+
+                  {deliverables !== null && deliverables.length > 0 ? (
+                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">{dlvCounts.total} total</span>
+                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">{dlvCounts.pending} menunggu</span>
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">{dlvCounts.approved} disetujui</span>
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">{dlvCounts.revision} revisi</span>
+                    </div>
+                  ) : null}
+
+                  {dfOpen ? (
+                    <div className="mb-2 space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="dlv-name">Nama deliverable *</Label>
+                        <Input
+                          id="dlv-name"
+                          value={dfName}
+                          onChange={(e) => setDfName(e.target.value)}
+                          placeholder="Contoh: Draft desain halaman utama"
+                          aria-label="Nama deliverable"
+                        />
+                      </div>
+                      <div className="grid gap-1.5">
+                        <Label>Jenis</Label>
+                        <div className="flex w-fit items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5" role="group" aria-label="Jenis deliverable">
+                          <button
+                            type="button"
+                            onClick={() => setDfKind("link")}
+                            aria-pressed={dfKind === "link"}
+                            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${dfKind === "link" ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"}`}
+                          >
+                            <Link2 className="h-3.5 w-3.5" aria-hidden /> Tautan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDfKind("file")}
+                            aria-pressed={dfKind === "file"}
+                            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${dfKind === "file" ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"}`}
+                          >
+                            <Paperclip className="h-3.5 w-3.5" aria-hidden /> File
+                          </button>
+                        </div>
+                      </div>
+                      {dfKind === "link" ? (
+                        <div className="grid gap-1.5">
+                          <Label htmlFor="dlv-url">URL tautan *</Label>
+                          <Input
+                            id="dlv-url"
+                            type="url"
+                            value={dfUrl}
+                            onChange={(e) => setDfUrl(e.target.value)}
+                            placeholder="https://drive.google.com/…"
+                            aria-label="URL tautan deliverable"
+                          />
+                          <p className="text-[11px] text-zinc-400">Wajib diawali http:// atau https:// — mis. Google Drive, Figma, YouTube.</p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-1.5">
+                          <Label htmlFor="dlv-file">File (maks 1.2MB) *</Label>
+                          <input
+                            id="dlv-file"
+                            type="file"
+                            onChange={handleDfFile}
+                            className="block w-full cursor-pointer rounded-md border border-zinc-200 bg-white text-xs text-zinc-500 file:mr-3 file:cursor-pointer file:rounded-l-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-xs file:font-medium file:text-white hover:file:bg-zinc-700"
+                            aria-label="Pilih file untuk dikirim"
+                          />
+                          {dfFileName ? (
+                            <p className="text-[11px] text-zinc-500">
+                              {dfFileName}{dfSizeBytes ? ` · ${formatSizeKb(dfSizeBytes)}` : ""} — siap dikirim
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="dlv-note">Catatan (opsional)</Label>
+                        <Textarea
+                          id="dlv-note"
+                          rows={2}
+                          value={dfNote}
+                          onChange={(e) => setDfNote(e.target.value)}
+                          placeholder="Konteks untuk reviewer…"
+                          aria-label="Catatan deliverable"
+                        />
+                      </div>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => setDfOpen(false)} disabled={dfSaving} aria-label="Batal kirim deliverable">
+                          Batal
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void submitDeliverable()}
+                          disabled={dfSaving || !dfName.trim()}
+                          aria-label="Kirim deliverable untuk ditinjau"
+                        >
+                          {dfSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+                          {dfSaving ? "Mengirim…" : "Kirim untuk Ditinjau"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {deliverables === null ? (
+                    <div className="space-y-2" aria-hidden>
+                      <Skeleton className="h-16 rounded-lg" />
+                      <Skeleton className="h-16 rounded-lg" />
+                    </div>
+                  ) : deliverables.length === 0 ? (
+                    <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+                      Belum ada deliverable. Kirim tautan atau file untuk ditinjau klien/manajemen.
+                    </div>
+                  ) : (
+                    <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+                      {deliverables.map((d) => (
+                        <DeliverableRow key={d.id} d={d} user={user} onChanged={reloadDeliverables} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Update status & progress */}
                 <form onSubmit={saveDetail} className="space-y-3 rounded-xl border bg-zinc-50 p-4">
                   <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -1834,6 +2419,148 @@ export default function ProjectsModule() {
               {rescheduleSaving ? "Menyimpan…" : "Simpan"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Task 22-4 — dialog Proyek Baru (pembuatan manual) */}
+      <Dialog open={npOpen} onOpenChange={setNpOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll rounded-xl sm:max-w-lg" aria-label="Form proyek baru">
+          <DialogHeader>
+            <DialogTitle>Proyek Baru</DialogTitle>
+            <DialogDescription>
+              Buat project secara manual tanpa menunggu opportunity Won. Kode project otomatis mengikuti brand
+              (contoh: UNI-2026-004). Milestone &amp; invoice tidak dibuat otomatis.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitNewProject} className="space-y-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="np-name">Nama project *</Label>
+              <Input
+                id="np-name"
+                value={npName}
+                onChange={(e) => setNpName(e.target.value)}
+                placeholder="Contoh: Website Profil PT Nusantara"
+                required
+                aria-label="Nama project"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-brand">Brand *</Label>
+                <Select value={npBrandId} onValueChange={setNpBrandId}>
+                  <SelectTrigger id="np-brand" aria-label="Brand project">
+                    <SelectValue placeholder="Pilih brand" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {npBrands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-company">Perusahaan klien *</Label>
+                <Select value={npCompanyId} onValueChange={setNpCompanyId}>
+                  <SelectTrigger id="np-company" aria-label="Perusahaan klien">
+                    <SelectValue placeholder={npCompanies === null ? "Memuat…" : "Pilih perusahaan"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(npCompanies ?? []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-service">Kategori layanan</Label>
+                <Select value={npServiceCategory} onValueChange={setNpServiceCategory}>
+                  <SelectTrigger id="np-service" aria-label="Kategori layanan"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Tidak ditentukan</SelectItem>
+                    {SERVICE_CATEGORIES.map((s) => (
+                      <SelectItem key={s} value={s}>{SERVICE_CATEGORY_LABELS[s] ?? s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-status">Status awal</Label>
+                <Select value={npStatus} onValueChange={setNpStatus}>
+                  <SelectTrigger id="np-status" aria-label="Status awal project"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="planning">Perencanaan</SelectItem>
+                    <SelectItem value="in_progress">Berjalan</SelectItem>
+                    <SelectItem value="review">Review</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="np-pm">Project Manager</Label>
+              <Input
+                id="np-pm"
+                value={npPmName}
+                onChange={(e) => setNpPmName(e.target.value)}
+                placeholder="Contoh: Budi Hartono"
+                aria-label="Nama project manager"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-start">Mulai</Label>
+                <Input id="np-start" type="date" value={npStartDate} onChange={(e) => setNpStartDate(e.target.value)} aria-label="Tanggal mulai" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-due">Deadline</Label>
+                <Input id="np-due" type="date" value={npDueDate} onChange={(e) => setNpDueDate(e.target.value)} aria-label="Tanggal deadline" />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-budget">Budget internal</Label>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden>Rp</span>
+                  <Input
+                    id="np-budget"
+                    type="number" min={0} step={100000} inputMode="numeric"
+                    className="pl-9"
+                    value={npBudget}
+                    onChange={(e) => setNpBudget(e.target.value)}
+                    placeholder="0"
+                    aria-label="Budget internal dalam rupiah"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="np-contract">Nilai kontrak</Label>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden>Rp</span>
+                  <Input
+                    id="np-contract"
+                    type="number" min={0} step={100000} inputMode="numeric"
+                    className="pl-9"
+                    value={npContract}
+                    onChange={(e) => setNpContract(e.target.value)}
+                    placeholder="0"
+                    aria-label="Nilai kontrak dalam rupiah"
+                  />
+                </div>
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Dibuat oleh {user?.name ?? "-"} — project muncul langsung di daftar &amp; kalender produksi.
+            </p>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" onClick={() => setNpOpen(false)} disabled={npSaving} aria-label="Batal buat proyek">
+                Batal
+              </Button>
+              <Button
+                type="submit"
+                disabled={npSaving || !npName.trim() || !npBrandId || !npCompanyId}
+                aria-label="Simpan proyek baru"
+              >
+                {npSaving ? "Membuat…" : "Buat Proyek"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

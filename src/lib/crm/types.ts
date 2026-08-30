@@ -186,6 +186,41 @@ export interface MilestoneDTO {
   dueDate?: string | null;
 }
 
+/** Deliverable project: tautan atau file kecil yang dikirim untuk ditinjau klien/manajemen. */
+export interface ProjectDeliverableDTO {
+  id: string;
+  projectId: string;
+  name: string;
+  kind: "link" | "file";
+  url?: string | null;
+  fileName?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  note?: string | null;
+  status: "pending" | "approved" | "revision";
+  reviewComment?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+}
+
+/** Pasangan kontak terdeteksi duplikat (scanner multi-sumber). */
+export interface DuplicatePairDTO {
+  primaryId: string;
+  primaryName: string;
+  primaryEmail?: string | null;
+  primaryWhatsapp?: string | null;
+  primaryCompany?: string | null;
+  duplicateId: string;
+  duplicateName: string;
+  duplicateEmail?: string | null;
+  duplicateWhatsapp?: string | null;
+  duplicateCompany?: string | null;
+  score: number;
+  reasons: string[];
+}
+
 /** Scope change request (Fase 2 Produksi) — persetujuan klien → invoice tambahan. */
 export interface ChangeRequestDTO {
   id: string;

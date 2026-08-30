@@ -12,11 +12,40 @@ export function normalizePhone(raw?: string | null): string | null {
   return digits;
 }
 
-/** Normalisasi email: lowercase + trim. */
+/** Email valid sejati (x@y.tld) — MENOLAK handle Instagram (@username) dan teks bebas. */
+export function isValidEmail(raw?: string | null): boolean {
+  if (!raw) return false;
+  const s = raw.trim();
+  if (s.startsWith("@")) return false;
+  return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(s);
+}
+
+/**
+ * Ekstrak email valid PERTAMA dari teks bebas (contoh: body pesan), lowercase.
+ * Handle IG seperti "@rani.creativehouse" TIDAK dianggap email (domain tanpa TLD rill).
+ */
+export function extractEmailFromText(raw?: string | null): string | null {
+  if (!raw) return null;
+  const matches = raw.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g);
+  if (!matches) return null;
+  for (const candidate of matches) {
+    if (isValidEmail(candidate)) return candidate.toLowerCase();
+  }
+  return null;
+}
+
+/** Deteksi handle sosial (Instagram/Twitter): diawali @ dan tanpa spasi. */
+export function isSocialHandle(raw?: string | null): boolean {
+  if (!raw) return false;
+  const s = raw.trim();
+  return s.startsWith("@") && !s.includes(" ") && s.length > 1;
+}
+
+/** Normalisasi email: lowercase + trim + VALIDASI asli (handle IG/teks sampah → null). */
 export function normalizeEmail(raw?: string | null): string | null {
   if (!raw) return null;
   const email = raw.trim().toLowerCase();
-  return email.includes("@") ? email : null;
+  return isValidEmail(email) ? email : null;
 }
 
 /** Ambil domain dari website/email perusahaan. */

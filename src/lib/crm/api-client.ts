@@ -88,6 +88,23 @@ export const api = {
     request<{ templates: import("@/lib/crm/types").FollowUpTemplateDTO[] }>(
       `/api/followup-templates${brandId && brandId !== "all" ? `?brandId=${brandId}` : ""}`
     ),
+  updateBrand: (id: string, payload: Record<string, unknown>) =>
+    request<{ brand: import("@/lib/crm/types").Brand }>(`/api/brands/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  createTemplate: (payload: Record<string, unknown>) =>
+    request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>("/api/followup-templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTemplate: (id: string, payload: Record<string, unknown>) =>
+    request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>(`/api/followup-templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteTemplate: (id: string) =>
+    request<{ ok: boolean }>(`/api/followup-templates/${id}`, { method: "DELETE" }),
 
   // Contacts & companies
   contacts: (q?: string) => request<{ contacts: (ContactRef & { company?: CompanyRef | null; _count?: { opportunities: number; interactions: number } })[] }>(`/api/contacts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
@@ -100,6 +117,9 @@ export const api = {
     request<{ company: CompanyRef }>("/api/companies", { method: "POST", body: JSON.stringify(payload) }),
   mergeContacts: (primaryId: string, duplicateId: string, actorName: string) =>
     request<{ merged: boolean }>("/api/contacts/merge", { method: "POST", body: JSON.stringify({ primaryId, duplicateId, actorName }) }),
+  /** Scanner duplikat lintas sumber (WA/IG/email/import): pasangan kontak skor ≥ ambang. */
+  scanDuplicates: () =>
+    request<{ pairs: import("@/lib/crm/types").DuplicatePairDTO[] }>("/api/contacts/duplicates"),
   /** Import CSV massal: preview (commit=false) mengembalikan kandidat duplikat per baris; commit mengeksekusi keputusan. */
   importContacts: (payload: { rows: Record<string, string>[]; decisions?: Record<string, string>; commit: boolean; actorName: string; actorRole: string }) =>
     request<import("@/lib/crm/types").ImportPreviewResponseDTO | import("@/lib/crm/types").ImportCommitResponseDTO>(
@@ -167,8 +187,27 @@ export const api = {
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     return request<{ projects: ProjectDTO[] }>(`/api/projects?${sp}`);
   },
+  createProject: (payload: Record<string, unknown>) =>
+    request<{ project: ProjectDTO }>("/api/projects", { method: "POST", body: JSON.stringify(payload) }),
   updateProject: (payload: Record<string, unknown>) =>
     request<{ project: ProjectDTO }>("/api/projects", { method: "PATCH", body: JSON.stringify(payload) }),
+  /** Deliverable: daftar + kirim tautan/file kecil utk ditinjau; keputusan review via decideDeliverable. */
+  projectDeliverables: (projectId: string) =>
+    request<{ deliverables: import("@/lib/crm/types").ProjectDeliverableDTO[] }>(
+      `/api/projects/${projectId}/deliverables`
+    ),
+  createDeliverable: (projectId: string, payload: Record<string, unknown>) =>
+    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(
+      `/api/projects/${projectId}/deliverables`,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  decideDeliverable: (payload: { id: string; decision: "approved" | "revision"; reviewComment?: string; reviewedBy: string; reviewedRole?: string }) =>
+    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(
+      "/api/projects/deliverables",
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+  deleteDeliverable: (id: string) =>
+    request<{ ok: boolean }>(`/api/projects/deliverables`, { method: "DELETE", body: JSON.stringify({ id }) }),
   /** Update milestone (drag-reschedule kalender / status) — Fase 3. */
   updateMilestone: (payload: { milestoneId: string; dueDate?: string | null; status?: string; name?: string; actorName?: string; actorRole?: string }) =>
     request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "PATCH", body: JSON.stringify(payload) }),

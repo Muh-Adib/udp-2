@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, fail, logAudit, findMatchCandidates } from "@/lib/crm/server";
-import { normalizeEmail, normalizePhone } from "@/lib/crm/utils";
+import { normalizeEmail, normalizePhone, isValidEmail } from "@/lib/crm/utils";
 
 /** Batas baris per impor — cukup untuk use case agency, mencegah abuse. */
 const MAX_ROWS = 200;
@@ -61,7 +61,7 @@ function validateRow(row: NormalizedRow): string[] {
   const errors: string[] = [];
   if (!row.fullName) errors.push("Nama wajib diisi");
   if (!row.email && !row.whatsapp && !row.phone) errors.push("Minimal satu kontak (email/WA/telepon)");
-  if (row.email && !row.email.includes("@")) errors.push("Format email tidak valid");
+  if (row.email && !isValidEmail(row.email)) errors.push("Format email tidak valid (handle sosial @username bukan email)");
   return errors;
 }
 

@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Eye, FileSignature, FolderKanban,
-  GitPullRequestArrow, Info, Lock, RefreshCw, ReceiptText, X, type LucideIcon,
+  Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Copy, Eye, ExternalLink,
+  FileSignature, FolderKanban, GitPullRequestArrow, Info, KeyRound, Link2, Loader2, Lock, PackageCheck, Paperclip, Pencil,
+  RefreshCw, ReceiptText, X, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,7 +26,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
-  ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDTO, QuotationDTO, QuotationItemDTO,
+  ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO, QuotationDTO, QuotationItemDTO,
+  SessionUser,
 } from "@/lib/crm/types";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 
@@ -66,6 +68,24 @@ const MILESTONE_ICON: Record<string, LucideIcon> = {
   in_progress: CircleDotDashed,
   pending: CircleDashed,
 };
+
+// Task 22-4 — status deliverable (badge: pending=zinc, approved=emerald, revision=amber)
+const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: "Menunggu Review", cls: "bg-zinc-100 text-zinc-600" },
+  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+  revision: { label: "Revisi Diminta", cls: "bg-amber-100 text-amber-700" },
+};
+
+function dlvStatus(s: string) { return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+
+function formatSizeKb(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return "";
+  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+}
+
+/** fileData (base64 data URL) dikirim server tetapi tidak dideklarasikan di ProjectDeliverableDTO —
+ *  types.ts tidak boleh diubah, jadi perluas secara lokal untuk keperluan unduh. */
+type DeliverableRowData = ProjectDeliverableDTO & { fileData?: string | null };
 
 function invStatus(s: string) { return INVOICE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
 function projStatus(s: string) { return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
@@ -131,6 +151,244 @@ function PortalProjectCard({ project }: { project: ProjectDTO }) {
           })}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ============ Deliverable & Review klien (Task 22-4) ============
+
+/** Satu baris deliverable di portal klien: ikon jenis, meta, status, dan aksi review (Setujui / Minta Revisi). */
+function PortalDeliverableRow({ d, user, canReview, onChanged }: {
+  d: DeliverableRowData;
+  user: SessionUser | null;
+  canReview: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const meta = dlvStatus(d.status);
+  const [review, setReview] = useState<null | "approved" | "revision">(null);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const KindIcon = d.kind === "file" ? Paperclip : Link2;
+
+  async function submitDecision() {
+    if (!user || !review) return;
+    setBusy(true);
+    try {
+      await api.decideDeliverable({
+        id: d.id,
+        decision: review,
+        reviewComment: comment.trim() || undefined,
+        reviewedBy: user.name,
+        reviewedRole: user.role, // "client" saat klien login; role staf saat mode pratinjau
+      });
+      toast.success(
+        review === "approved"
+          ? `“${d.name}” disetujui — terima kasih`
+          : `Revisi diminta untuk “${d.name}” — tim kami akan menindaklanjuti`
+      );
+      setReview(null);
+      setComment("");
+      await onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan keputusan review");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100" aria-hidden>
+            <KindIcon className="h-3.5 w-3.5 text-zinc-500" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-zinc-900">{d.name}</p>
+            <p className="truncate text-[11px] text-zinc-500">
+              {d.kind === "file"
+                ? [d.fileName, d.sizeBytes ? formatSizeKb(d.sizeBytes) : null].filter(Boolean).join(" · ")
+                : d.url}
+            </p>
+            {d.note ? <p className="mt-1 text-xs text-zinc-500">{d.note}</p> : null}
+            <p className="mt-1 text-[11px] text-zinc-400">
+              Dikirim {timeAgo(d.createdAt)}{d.createdBy ? ` oleh ${d.createdBy}` : ""}
+            </p>
+            {d.status !== "pending" && d.reviewedBy ? (
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Anda sudah mereview{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
+              </p>
+            ) : null}
+            {d.reviewComment ? (
+              <p className="mt-0.5 text-[11px] italic text-zinc-500">Catatan review: “{d.reviewComment}”</p>
+            ) : null}
+          </div>
+        </div>
+        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>{meta.label}</Badge>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {d.kind === "link" && d.url ? (
+          <a
+            href={d.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Buka tautan
+          </a>
+        ) : null}
+        {d.kind === "file" && d.fileData ? (
+          <a
+            href={d.fileData}
+            download={d.fileName ?? undefined}
+            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+          >
+            <ReceiptText className="h-3.5 w-3.5" aria-hidden /> Unduh
+          </a>
+        ) : null}
+        {canReview ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 border-emerald-200 px-2 text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+              disabled={busy}
+              onClick={() => { setReview("approved"); setComment(d.reviewComment ?? ""); }}
+              aria-label={`Setujui deliverable ${d.name}`}
+            >
+              <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 border-amber-200 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+              disabled={busy}
+              onClick={() => { setReview("revision"); setComment(d.reviewComment ?? ""); }}
+              aria-label={`Minta revisi deliverable ${d.name}`}
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden /> Minta Revisi
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      {review !== null ? (
+        <div className="mt-2.5 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5">
+          <Textarea
+            rows={2}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder={review === "approved" ? "Catatan persetujuan (opsional)…" : "Jelaskan bagian yang perlu direvisi…"}
+            aria-label="Catatan review deliverable"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => { setReview(null); setComment(""); }}
+              aria-label="Batal review deliverable"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              onClick={() => void submitDecision()}
+              className={review === "approved" ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"}
+              aria-label="Konfirmasi keputusan review"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+              {review === "approved" ? "Konfirmasi Setujui" : "Kirim Permintaan Revisi"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Blok deliverable per project — lazy fetch saat dirender, refresh mandiri setelah review. */
+function PortalProjectDeliverables({ project, user, canReview }: {
+  project: ProjectDTO;
+  user: SessionUser | null;
+  canReview: boolean;
+}) {
+  const [deliverables, setDeliverables] = useState<ProjectDeliverableDTO[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
+
+  /** Fetch daftar deliverable project ini (dipakai effect awal & refresh setelah review). */
+  const reload = useCallback(async () => {
+    try {
+      const res = await api.projectDeliverables(project.id);
+      setDeliverables(res.deliverables);
+      setLoadError(false);
+    } catch {
+      setDeliverables([]);
+      setLoadError(true);
+    }
+  }, [project.id]);
+
+  // Initial fetch — pola .then() agar setState tidak berjalan sinkron di body effect.
+  useEffect(() => {
+    let cancelled = false;
+    api.projectDeliverables(project.id)
+      .then((res) => { if (!cancelled) { setDeliverables(res.deliverables); setLoadError(false); } })
+      .catch(() => { if (!cancelled) { setDeliverables([]); setLoadError(true); } });
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  const pendingCount = (deliverables ?? []).filter((d) => d.status === "pending").length;
+
+  return (
+    <div className="rounded-xl border bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-sm font-semibold text-zinc-900">{project.name}</p>
+          <span className="shrink-0 rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] text-zinc-500">{project.code}</span>
+        </div>
+        {deliverables !== null && deliverables.length > 0 ? (
+          pendingCount > 0 ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+              {pendingCount} menunggu review Anda
+            </span>
+          ) : (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+              semua sudah direview
+            </span>
+          )
+        ) : null}
+      </div>
+      <div className="mt-3">
+        {deliverables === null ? (
+          <div className="space-y-2" aria-hidden>
+            <Skeleton className="h-16 rounded-lg" />
+            <Skeleton className="h-16 rounded-lg" />
+          </div>
+        ) : loadError ? (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+            Gagal memuat deliverable.{" "}
+            <button type="button" className="font-medium underline" onClick={() => void reload()}>
+              Coba lagi
+            </button>
+          </div>
+        ) : deliverables.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-center text-xs text-zinc-400">
+            Belum ada deliverable untuk project ini.
+          </p>
+        ) : (
+          <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+            {deliverables.map((d) => (
+              <PortalDeliverableRow key={d.id} d={d} user={user} canReview={canReview} onChanged={reload} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -408,6 +666,15 @@ export default function PortalModule() {
     }
   }
 
+  async function copyDemoEmail() {
+    try {
+      await navigator.clipboard.writeText("hendra@nusantaranet.com");
+      toast.success("Email akun demo client disalin");
+    } catch {
+      toast.info("Salin manual: hendra@nusantaranet.com");
+    }
+  }
+
   if (loading && projects === null && !isClient) return <PortalSkeleton />;
   if (loading && isClient && linkInfo === null) return <PortalSkeleton />;
 
@@ -433,6 +700,40 @@ export default function PortalModule() {
 
       {error ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+      ) : null}
+
+      {/* Task 22-4 — petunjuk cara client masuk ke portal (khusus staf: super_admin/director) */}
+      {canPreview ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-amber-900">Cara Client Masuk ke Portal</p>
+              <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-amber-800">
+                <li>Client login di halaman login yang sama dengan email kontak perusahaannya.</li>
+                <li>PIN demo default: <span className="font-mono font-semibold">1234</span>.</li>
+                <li>
+                  Akun demo:{" "}
+                  <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
+                    <span className="rounded border border-amber-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-amber-900">
+                      hendra@nusantaranet.com
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void copyDemoEmail()}
+                      className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
+                      aria-label="Salin email akun demo client"
+                    >
+                      <Copy className="h-3 w-3" aria-hidden /> Salin
+                    </button>
+                    <span>— Hendra Wijaya (PT Nusantara Digital Raya)</span>
+                  </span>
+                </li>
+                <li>Client hanya melihat proyek, invoice, dan quotation perusahaannya sendiri.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {/* Role client: penanganan akun belum terkait */}
@@ -537,6 +838,29 @@ export default function PortalModule() {
             ) : (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {projects.map((p) => <PortalProjectCard key={p.id} project={p} />)}
+              </div>
+            )}
+          </section>
+
+          {/* Deliverable & Review (Task 22-4) — file/tautan dari tim untuk ditinjau klien */}
+          <section aria-label="Deliverable dan review" className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              <PackageCheck className="h-4 w-4 text-zinc-400" aria-hidden /> Deliverable &amp; Review
+            </h2>
+            <p className="text-xs text-zinc-500">
+              File dan tautan yang dikirim tim untuk Anda tinjau — buka tautannya, lalu Setujui atau minta revisi dengan catatan.
+            </p>
+            {projects === null ? (
+              <Skeleton className="h-40 rounded-xl" aria-hidden />
+            ) : projects.length === 0 ? (
+              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+                Belum ada deliverable — belum ada project berjalan untuk perusahaan ini.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {projects.map((p) => (
+                  <PortalProjectDeliverables key={p.id} project={p} user={user} canReview={canDecide} />
+                ))}
               </div>
             )}
           </section>

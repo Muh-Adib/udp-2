@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BellRing, CheckCircle2, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
-  Link2, Loader2, Mail, MessageCircle, Palette, Phone, Plus, RefreshCw, Tag, Video, Wand2,
+  Link2, Loader2, Mail, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Tag, Trash2, Video, Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -19,6 +19,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { BRAND_SERVICES, PIPELINE_STAGES, stageLabel } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
@@ -52,9 +54,23 @@ interface BrandDraft {
   color: string;
   logoEmoji: string;
   description: string;
+  website: string;
   primaryCurrency: string;
   invoicePrefix: string;
+  quotePrefix: string;
   slaHours: string;
+  portalDomain: string;
+  active: boolean;
+}
+
+interface TemplateDraft {
+  name: string;
+  channel: string;
+  brandId: string; // "all" = berlaku untuk semua brand
+  stage: string;
+  delayDays: string;
+  body: string;
+  approved: boolean;
 }
 
 function slugify(name: string): string {
@@ -71,12 +87,33 @@ function quotePrefixFrom(prefix: string): string {
 
 const EMPTY_DRAFT: BrandDraft = {
   name: "", slug: "", color: "#ea580c", logoEmoji: "✨",
-  description: "", primaryCurrency: "IDR", invoicePrefix: "", slaHours: "24",
+  description: "", website: "", primaryCurrency: "IDR",
+  invoicePrefix: "", quotePrefix: "", slaHours: "24", portalDomain: "", active: true,
 };
+
+const EMPTY_TEMPLATE_DRAFT: TemplateDraft = {
+  name: "", channel: "whatsapp", brandId: "all", stage: "", delayDays: "1", body: "", approved: false,
+};
+
+const TEMPLATE_CHANNELS = [
+  { key: "whatsapp", label: "WhatsApp" },
+  { key: "instagram", label: "Instagram" },
+  { key: "email", label: "Email" },
+] as const;
+
+const TEMPLATE_SAMPLE_VALUES: Record<string, string> = {
+  namaKontak: "Dian",
+  brand: "Unimasi",
+  layanan: "Website Profil",
+};
+
+function previewTemplateBody(body: string): string {
+  return body.replace(/\{(namaKontak|brand|layanan)\}/g, (_, key: string) => TEMPLATE_SAMPLE_VALUES[key] ?? _);
+}
 
 // ============ Sub-komponen kecil ============
 
-function BrandCard({ brand }: { brand: Brand }) {
+function BrandCard({ brand, onEdit }: { brand: Brand; onEdit: (brand: Brand) => void }) {
   const services = BRAND_SERVICES[brand.slug] ?? [];
   return (
     <div className="relative flex flex-col overflow-hidden rounded-xl border bg-white p-5 pl-6 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
@@ -99,6 +136,15 @@ function BrandCard({ brand }: { brand: Brand }) {
             <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{brand.description}</p>
           ) : null}
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-zinc-400 hover:text-zinc-800"
+          onClick={() => onEdit(brand)}
+          aria-label={`Edit brand ${brand.name}`}
+        >
+          <Pencil className="h-4 w-4" aria-hidden />
+        </Button>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
@@ -176,7 +222,14 @@ function PipelineStageCard({ stage, index }: { stage: (typeof PIPELINE_STAGES)[n
   );
 }
 
-function TemplateCard({ template, brandName }: { template: FollowUpTemplateDTO; brandName?: string }) {
+function TemplateCard({
+  template, brandName, onEdit, onDelete,
+}: {
+  template: FollowUpTemplateDTO;
+  brandName?: string;
+  onEdit: (template: FollowUpTemplateDTO) => void;
+  onDelete: (template: FollowUpTemplateDTO) => void;
+}) {
   const meta = channelMeta(template.channel);
   const ChannelIcon = meta.icon;
   return (
@@ -191,6 +244,26 @@ function TemplateCard({ template, brandName }: { template: FollowUpTemplateDTO; 
             {brandName ?? "Semua brand"}
             {template.stage ? ` · Stage ${stageLabel(template.stage)}` : ""}
           </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-zinc-400 hover:text-zinc-800"
+            onClick={() => onEdit(template)}
+            aria-label={`Edit template ${template.name}`}
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+            onClick={() => onDelete(template)}
+            aria-label={`Hapus template ${template.name}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          </Button>
         </div>
       </div>
 
@@ -273,6 +346,7 @@ export default function BrandsModule() {
   const [serviceFilter, setServiceFilter] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingBrand, setEditingBrand] = useState<Brand | null>(null);
   const [draft, setDraft] = useState<BrandDraft>(EMPTY_DRAFT);
   const [submitting, setSubmitting] = useState(false);
 
@@ -280,6 +354,11 @@ export default function BrandsModule() {
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [channelFilter, setChannelFilter] = useState("");
+
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<FollowUpTemplateDTO | null>(null);
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(EMPTY_TEMPLATE_DRAFT);
+  const [templateSubmitting, setTemplateSubmitting] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -342,8 +421,119 @@ export default function BrandsModule() {
     return map;
   }, [brands]);
 
+  const canApproveTemplates = user?.role === "director" || user?.role === "super_admin";
+
+  const templatePreview = useMemo(
+    () => previewTemplateBody(templateDraft.body),
+    [templateDraft.body],
+  );
+
+  function openTemplateCreate() {
+    setEditingTemplate(null);
+    setTemplateDraft(EMPTY_TEMPLATE_DRAFT);
+    setTemplateOpen(true);
+  }
+
+  function openTemplateEdit(t: FollowUpTemplateDTO) {
+    setEditingTemplate(t);
+    setTemplateDraft({
+      name: t.name,
+      channel: TEMPLATE_CHANNELS.some((c) => c.key === t.channel) ? t.channel : "whatsapp",
+      brandId: t.brandId ?? "all",
+      stage: t.stage ?? "",
+      delayDays: String(t.delayDays),
+      body: t.body,
+      approved: t.approved,
+    });
+    setTemplateOpen(true);
+  }
+
+  async function submitTemplate(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!templateDraft.name.trim()) { toast.error("Nama template wajib diisi"); return; }
+    if (!templateDraft.body.trim()) { toast.error("Isi template wajib diisi"); return; }
+    const delay = Number(templateDraft.delayDays);
+    if (!Number.isInteger(delay) || delay < 0 || delay > 30) { toast.error("Jeda hari harus antara 0 dan 30"); return; }
+    if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
+    setTemplateSubmitting(true);
+    try {
+      const payload = {
+        name: templateDraft.name.trim(),
+        channel: templateDraft.channel,
+        brandId: templateDraft.brandId === "all" ? null : templateDraft.brandId,
+        stage: templateDraft.stage.trim() || null,
+        delayDays: delay,
+        body: templateDraft.body.trim(),
+        approved: canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false),
+        actorName: user.name,
+        actorRole: user.role,
+      };
+      if (editingTemplate) {
+        await api.updateTemplate(editingTemplate.id, payload);
+        toast.success("Template diperbarui");
+      } else {
+        await api.createTemplate(payload);
+        toast.success("Template dibuat");
+      }
+      setTemplateDraft(EMPTY_TEMPLATE_DRAFT);
+      setEditingTemplate(null);
+      setTemplateOpen(false);
+      await loadTemplates();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan template");
+    } finally {
+      setTemplateSubmitting(false);
+    }
+  }
+
+  async function handleDeleteTemplate(t: FollowUpTemplateDTO) {
+    if (!window.confirm(`Hapus template "${t.name}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+    try {
+      await api.deleteTemplate(t.id);
+      toast.success(`Template "${t.name}" dihapus`);
+      await loadTemplates();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus template");
+    }
+  }
+
+  function openBrandCreate() {
+    setEditingBrand(null);
+    setDraft(EMPTY_DRAFT);
+    setCreateOpen(true);
+  }
+
+  function openBrandEdit(brand: Brand) {
+    setEditingBrand(brand);
+    setDraft({
+      name: brand.name,
+      slug: brand.slug,
+      color: brand.color,
+      logoEmoji: brand.logoEmoji,
+      description: brand.description ?? "",
+      website: brand.website ?? "",
+      primaryCurrency: brand.primaryCurrency,
+      invoicePrefix: brand.invoicePrefix,
+      quotePrefix: brand.quotePrefix,
+      slaHours: String(brand.slaHours),
+      portalDomain: brand.portalDomain ?? "",
+      active: brand.active,
+    });
+    setCreateOpen(true);
+  }
+
   function handleNameChange(name: string) {
-    setDraft((d) => ({ ...d, name, slug: slugify(name) }));
+    // Mode edit: slug tidak ikut berubah otomatis (bisa diatur manual).
+    setDraft((d) => (editingBrand ? { ...d, name } : { ...d, name, slug: slugify(name) }));
+  }
+
+  function handleInvoicePrefixChange(value: string) {
+    const upper = value.toUpperCase();
+    setDraft((d) =>
+      editingBrand
+        ? { ...d, invoicePrefix: upper }
+        : { ...d, invoicePrefix: upper, quotePrefix: quotePrefixFrom(upper) },
+    );
   }
 
   async function submitDraft(e: React.FormEvent<HTMLFormElement>) {
@@ -355,23 +545,33 @@ export default function BrandsModule() {
     if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
     setSubmitting(true);
     try {
-      const res = await api.createBrand({
+      const payload = {
         name: draft.name.trim(),
         slug: draft.slug.trim(),
         color: draft.color,
         logoEmoji: draft.logoEmoji.trim() || "✨",
         description: draft.description.trim(),
-        website: "",
+        website: draft.website.trim(),
         primaryCurrency: draft.primaryCurrency,
         invoicePrefix: draft.invoicePrefix.trim(),
-        quotePrefix: quotePrefixFrom(draft.invoicePrefix),
+        quotePrefix: editingBrand
+          ? (draft.quotePrefix.trim() || quotePrefixFrom(draft.invoicePrefix))
+          : quotePrefixFrom(draft.invoicePrefix),
         slaHours: sla,
-        portalDomain: "",
+        portalDomain: draft.portalDomain.trim(),
+        active: draft.active,
         actorName: user.name,
         actorRole: user.role,
-      });
-      toast.success(`Brand ${res.brand.name} dikonfigurasi`);
+      };
+      if (editingBrand) {
+        await api.updateBrand(editingBrand.id, payload);
+        toast.success("Brand diperbarui");
+      } else {
+        const res = await api.createBrand(payload);
+        toast.success(`Brand ${res.brand.name} dikonfigurasi`);
+      }
       setDraft(EMPTY_DRAFT);
+      setEditingBrand(null);
       setCreateOpen(false);
       await load(true);
     } catch (err) {
@@ -395,7 +595,7 @@ export default function BrandsModule() {
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar brand">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)} aria-label="Tambah brand baru">
+          <Button size="sm" onClick={openBrandCreate} aria-label="Tambah brand baru">
             <Plus className="h-4 w-4" aria-hidden /> Tambah Brand
           </Button>
         </div>
@@ -424,12 +624,12 @@ export default function BrandsModule() {
 
       {/* Grid brand */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} />)}
+        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onEdit={openBrandEdit} />)}
 
         {/* Kartu tambah */}
         <button
           type="button"
-          onClick={() => setCreateOpen(true)}
+          onClick={openBrandCreate}
           aria-label="Tambah brand baru"
           className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-300 p-5 text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-600"
         >
@@ -467,7 +667,10 @@ export default function BrandsModule() {
               Pesan siap pakai dengan variabel kontak/brand — terkirim otomatis sesuai jeda H+ dan kanal.
             </p>
           </div>
-          <div className="flex items-center gap-2 sm:shrink-0">
+          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+            <Button size="sm" variant="outline" onClick={openTemplateCreate} aria-label="Tambah template follow-up baru">
+              <Plus className="h-4 w-4" aria-hidden /> Template Baru
+            </Button>
             <Select value={channelFilter} onValueChange={setChannelFilter}>
               <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filter template berdasarkan kanal">
                 <SelectValue placeholder="Semua kanal" />
@@ -504,20 +707,28 @@ export default function BrandsModule() {
           <div className="crm-scroll max-h-96 overflow-y-auto pr-1">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {filteredTemplates.map((t) => (
-                <TemplateCard key={t.id} template={t} brandName={t.brandId ? brandNameById.get(t.brandId) : undefined} />
+                <TemplateCard
+                  key={t.id}
+                  template={t}
+                  brandName={t.brandId ? brandNameById.get(t.brandId) : undefined}
+                  onEdit={openTemplateEdit}
+                  onDelete={(tpl) => void handleDeleteTemplate(tpl)}
+                />
               ))}
             </div>
           </div>
         )}
       </section>
 
-      {/* Dialog tambah brand */}
-      <Dialog open={createOpen} onOpenChange={(open) => { if (!submitting) setCreateOpen(open); }}>
+      {/* Dialog tambah / edit brand */}
+      <Dialog open={createOpen} onOpenChange={(open) => { if (!submitting) { setCreateOpen(open); if (!open) setEditingBrand(null); } }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Tambah Brand Baru</DialogTitle>
+            <DialogTitle>{editingBrand ? "Edit Brand" : "Tambah Brand Baru"}</DialogTitle>
             <DialogDescription>
-              Detail brand akan tersimpan ke database dan langsung dipakai di seluruh modul CRM — tanpa mengubah source code.
+              {editingBrand
+                ? `Perubahan brand ${editingBrand.name} tersimpan ke database dan langsung dipakai di seluruh modul CRM.`
+                : "Detail brand akan tersimpan ke database dan langsung dipakai di seluruh modul CRM — tanpa mengubah source code."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitDraft} className="grid gap-4 py-2">
@@ -537,6 +748,7 @@ export default function BrandsModule() {
                   onChange={(e) => setDraft((d) => ({ ...d, slug: slugify(e.target.value) }))}
                   placeholder="zenith_creative"
                 />
+                <p className="text-[11px] text-zinc-400">Unik, dipakai di URL/invoice prefix</p>
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -588,7 +800,7 @@ export default function BrandsModule() {
                 <Label htmlFor="brand-prefix">Prefix Invoice</Label>
                 <Input
                   id="brand-prefix" value={draft.invoicePrefix}
-                  onChange={(e) => setDraft((d) => ({ ...d, invoicePrefix: e.target.value.toUpperCase() }))}
+                  onChange={(e) => handleInvoicePrefixChange(e.target.value)}
                   placeholder="ZTH-2026"
                 />
               </div>
@@ -601,11 +813,157 @@ export default function BrandsModule() {
                 />
               </div>
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="brand-quote-prefix">Prefix Quotation</Label>
+                <Input
+                  id="brand-quote-prefix" value={draft.quotePrefix}
+                  onChange={(e) => setDraft((d) => ({ ...d, quotePrefix: e.target.value.toUpperCase() }))}
+                  placeholder="QZTH"
+                />
+                {!editingBrand ? (
+                  <p className="text-[11px] text-zinc-400">Otomatis mengikuti prefix invoice — boleh diubah.</p>
+                ) : null}
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="brand-website">Website</Label>
+                <Input
+                  id="brand-website" type="url" value={draft.website}
+                  onChange={(e) => setDraft((d) => ({ ...d, website: e.target.value }))}
+                  placeholder="https://zenith.co.id"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="brand-portal">Portal Domain</Label>
+                <Input
+                  id="brand-portal" value={draft.portalDomain}
+                  onChange={(e) => setDraft((d) => ({ ...d, portalDomain: e.target.value }))}
+                  placeholder="portal.zenith.co.id"
+                />
+              </div>
+              <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="brand-active" className="text-sm">Brand aktif</Label>
+                  <p className="text-[11px] text-zinc-500">Brand nonaktif disembunyikan dari daftar brand.</p>
+                </div>
+                <Switch
+                  id="brand-active"
+                  checked={draft.active}
+                  onCheckedChange={(v) => setDraft((d) => ({ ...d, active: v }))}
+                  aria-label="Aktifkan atau nonaktifkan brand"
+                />
+              </div>
+            </div>
             <DialogFooter className="mt-2">
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={submitting}>Batal</Button>
-              <Button type="submit" disabled={submitting} aria-label="Simpan brand baru">
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
-                {submitting ? "Menyimpan…" : "Simpan Brand"}
+              <Button type="button" variant="outline" onClick={() => { setCreateOpen(false); setEditingBrand(null); }} disabled={submitting}>Batal</Button>
+              <Button type="submit" disabled={submitting} aria-label={editingBrand ? "Simpan perubahan brand" : "Simpan brand baru"}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : editingBrand ? <Pencil className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+                {submitting ? "Menyimpan…" : editingBrand ? "Simpan Perubahan" : "Simpan Brand"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog template follow-up (baru / edit) */}
+      <Dialog open={templateOpen} onOpenChange={(open) => { if (!templateSubmitting) { setTemplateOpen(open); if (!open) setEditingTemplate(null); } }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{editingTemplate ? "Edit Template Follow-up" : "Template Follow-up Baru"}</DialogTitle>
+            <DialogDescription>
+              {editingTemplate
+                ? `Mengubah isi pesan akan menaikkan versi template (saat ini v${editingTemplate.version}).`
+                : "Pesan siap pakai yang terkirim otomatis sesuai jeda H+ dan kanal — tanpa mengubah source code."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitTemplate} className="grid gap-4 py-2">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="tpl-name">Nama Template *</Label>
+                <Input
+                  id="tpl-name" value={templateDraft.name} required
+                  onChange={(e) => setTemplateDraft((d) => ({ ...d, name: e.target.value }))}
+                  placeholder="Contoh: Follow-up Kunjungan H+1"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="tpl-channel">Kanal *</Label>
+                <Select value={templateDraft.channel} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, channel: v }))}>
+                  <SelectTrigger id="tpl-channel"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {TEMPLATE_CHANNELS.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="tpl-brand">Cakupan Brand</Label>
+                <Select value={templateDraft.brandId} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, brandId: v }))}>
+                  <SelectTrigger id="tpl-brand"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua brand</SelectItem>
+                    {(brands ?? []).map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="tpl-delay">Jeda (hari, H+)</Label>
+                <Input
+                  id="tpl-delay" type="number" min={0} max={30} value={templateDraft.delayDays} required
+                  onChange={(e) => setTemplateDraft((d) => ({ ...d, delayDays: e.target.value }))}
+                  aria-label="Jeda follow-up dalam hari (0 sampai 30)"
+                />
+              </div>
+              <div className="grid gap-2 sm:col-span-2">
+                <Label htmlFor="tpl-stage">Stage Pipeline (opsional)</Label>
+                <Input
+                  id="tpl-stage" value={templateDraft.stage}
+                  onChange={(e) => setTemplateDraft((d) => ({ ...d, stage: e.target.value }))}
+                  placeholder="cth. after_visit"
+                />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="tpl-body">Isi Pesan *</Label>
+              <Textarea
+                id="tpl-body" rows={6} value={templateDraft.body} required
+                onChange={(e) => setTemplateDraft((d) => ({ ...d, body: e.target.value }))}
+                placeholder={"Halo {namaKontak}, terima kasih sudah bertemu dengan tim {brand}. Berikut penawaran {layanan} dari kami…"}
+              />
+              <p className="text-[11px] text-zinc-400">
+                Placeholder otomatis diganti saat pengiriman: <code className="font-mono">{"{namaKontak}"}</code>{" "}
+                <code className="font-mono">{"{brand}"}</code> <code className="font-mono">{"{layanan}"}</code>
+              </p>
+            </div>
+            <div className="rounded-lg border bg-zinc-50 p-3">
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Pratinjau</p>
+              {templateDraft.body.trim() ? (
+                <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-700">{templatePreview}</p>
+              ) : (
+                <p className="text-sm text-zinc-400">Isi pesan untuk melihat pratinjau dengan contoh nilai.</p>
+              )}
+            </div>
+            <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="tpl-approved" className="text-sm">Setujui template</Label>
+                <p className="text-[11px] text-zinc-500">
+                  {canApproveTemplates
+                    ? "Template disetujui siap dipakai pengiriman otomatis."
+                    : "Hanya Direktur/Super Admin yang bisa menandai disetujui."}
+                </p>
+              </div>
+              <Switch
+                id="tpl-approved"
+                checked={canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false)}
+                disabled={!canApproveTemplates}
+                onCheckedChange={(v) => setTemplateDraft((d) => ({ ...d, approved: v }))}
+                aria-label="Tandai template disetujui"
+              />
+            </div>
+            <DialogFooter className="mt-2">
+              <Button type="button" variant="outline" onClick={() => { setTemplateOpen(false); setEditingTemplate(null); }} disabled={templateSubmitting}>Batal</Button>
+              <Button type="submit" disabled={templateSubmitting} aria-label={editingTemplate ? "Simpan perubahan template" : "Simpan template baru"}>
+                {templateSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+                {templateSubmitting ? "Menyimpan…" : editingTemplate ? "Simpan Perubahan" : "Simpan Template"}
               </Button>
             </DialogFooter>
           </form>

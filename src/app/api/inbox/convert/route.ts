@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { extractEmailFromText } from "@/lib/crm/utils";
 
 /**
  * Konversi lead inbox menjadi contact (+company) dan opportunity.
@@ -34,7 +35,11 @@ export async function POST(req: NextRequest) {
 
     // Cegah duplikat: jika whatsapp/email sama dengan contact yang ada, gunakan yang lama
     const wa = c.whatsapp ? String(c.whatsapp) : null;
-    const em = c.email ? String(c.email).toLowerCase() : null;
+    // FIX r22: email divalidasi sungguhan — handle IG (@username) BUKAN email,
+    // disimpan sbg socialProfile agar tidak mencemari kolom email & pencocokan duplikat.
+    const rawEmailInput = c.email ? String(c.email).trim() : "";
+    const em = extractEmailFromText(rawEmailInput);
+    const socialHandle = !em && rawEmailInput.startsWith("@") && !rawEmailInput.includes(" ") ? rawEmailInput : null;
     const existing = await db.contact.findFirst({
       where: {
         OR: [
@@ -71,6 +76,7 @@ export async function POST(req: NextRequest) {
           firstName, lastName: lastName || null, fullName,
           position: c.position ? String(c.position) : null,
           email: em, whatsapp: wa, phone: c.phone ? String(c.phone) : null,
+          socialProfile: socialHandle,
           country: c.country ? String(c.country) : "Indonesia",
           city: c.city ? String(c.city) : null,
           preferredChannel: interaction.channel,

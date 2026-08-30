@@ -1,0 +1,1842 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
+     6→  Download, Factory, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Plus, ReceiptText, RefreshCw, User2, X, XCircle,
+     7→  type LucideIcon,
+     8→} from "lucide-react";
+     9→import { toast } from "sonner";
+    10→
+    11→import {
+    12→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    13→  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    14→} from "@/components/ui/alert-dialog";
+    15→import { Badge } from "@/components/ui/badge";
+    16→import { Button } from "@/components/ui/button";
+    17→import {
+    18→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    19→} from "@/components/ui/dialog";
+    20→import { Input } from "@/components/ui/input";
+    21→import { Label } from "@/components/ui/label";
+    22→import { Progress } from "@/components/ui/progress";
+    23→import {
+    24→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    25→} from "@/components/ui/select";
+    26→import {
+    27→  Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
+    28→} from "@/components/ui/sheet";
+    29→import { Skeleton } from "@/components/ui/skeleton";
+    30→import { Textarea } from "@/components/ui/textarea";
+    31→import { api } from "@/lib/crm/api-client";
+    32→import { useCrmStore } from "@/lib/crm/store";
+    33→import type { ChangeRequestDTO, MilestoneDTO, ProjectDTO } from "@/lib/crm/types";
+    34→import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
+    35→import { cn } from "@/lib/utils";
+    36→
+    37→// ============ Meta ============
+    38→
+    39→const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
+    40→  planning: { label: "Perencanaan", cls: "bg-zinc-100 text-zinc-600" },
+    41→  in_progress: { label: "Berjalan", cls: "bg-amber-100 text-amber-700" },
+    42→  review: { label: "Review", cls: "bg-violet-100 text-violet-700" },
+    43→  completed: { label: "Selesai", cls: "bg-emerald-100 text-emerald-700" },
+    44→};
+    45→
+    46→const MILESTONE_STATUS: Record<string, { label: string; cls: string; icon: LucideIcon }> = {
+    47→  done: { label: "Selesai", cls: "border-emerald-200 bg-emerald-50 text-emerald-700 line-through decoration-emerald-500", icon: CheckCircle2 },
+    48→  in_progress: { label: "Dikerjakan", cls: "border-amber-200 bg-amber-50 text-amber-700", icon: CircleDotDashed },
+    49→  pending: { label: "Menunggu", cls: "border-zinc-200 bg-white text-zinc-500", icon: CircleDashed },
+    50→};
+    51→
+    52→const CR_STATUS: Record<string, { label: string; cls: string }> = {
+    53→  pending: { label: "Menunggu Persetujuan", cls: "bg-amber-100 text-amber-700" },
+    54→  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+    55→  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+    56→  cancelled: { label: "Dibatalkan", cls: "bg-zinc-100 text-zinc-600" },
+    57→};
+    58→
+    59→function statusMeta(s: string) {
+    60→  return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+    61→}
+    62→
+    63→// ---------- Ekspor CSV project (Task 13): BOM + CRLF + separator titik-koma ----------
+    64→
+    65→const PROJECT_CSV_HEADERS = [
+    66→  "kode", "nama", "brand", "klien", "kategori_layanan", "status", "progress_pct",
+    67→  "pm", "mulai", "deadline", "nilai_kontrak", "budget_internal", "milestone_selesai", "milestone_total",
+    68→] as const;
+    69→
+    70→function escapeCsvField(value: string): string {
+    71→  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+    72→  return value;
+    73→}
+    74→
+    75→function buildProjectsCsv(projects: ProjectDTO[]): string {
+    76→  const lines: string[] = [PROJECT_CSV_HEADERS.join(";")];
+    77→  for (const p of projects) {
+    78→    const ms = p.milestones ?? [];
+    79→    const fields: string[] = [
+    80→      p.code,
+    81→      p.name,
+    82→      p.brand?.name ?? "",
+    83→      p.company?.name ?? "",
+    84→      p.serviceCategory ?? "",
+    85→      statusMeta(p.status).label,
+    86→      String(p.progress),
+    87→      p.pmName ?? "",
+    88→      p.startDate ? formatDate(p.startDate) : "",
+    89→      p.dueDate ? formatDate(p.dueDate) : "",
+    90→      p.contractValue != null ? String(p.contractValue) : "",
+    91→      p.budgetInternal != null ? String(p.budgetInternal) : "",
+    92→      String(ms.filter((m) => m.status === "done").length),
+    93→      String(ms.length),
+    94→    ];
+    95→    lines.push(fields.map(escapeCsvField).join(";"));
+    96→  }
+    97→  return "\uFEFF" + lines.join("\r\n");
+    98→}
+    99→
+   100→function crMeta(s: string) {
+   101→  return CR_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+   102→}
+   103→
+   104→function msMeta(s: string) {
+   105→  return MILESTONE_STATUS[s] ?? { label: s, cls: "border-zinc-200 bg-white text-zinc-500", icon: CircleDashed };
+   106→}
+   107→
+   108→function dueSoon(p: ProjectDTO): boolean {
+   109→  if (p.status === "completed" || !p.dueDate) return false;
+   110→  const diffDays = (new Date(p.dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+   111→  return diffDays < 7;
+   112→}
+   113→
+   114→// ============ Sub-komponen kecil ============
+   115→
+   116→function ProjectCard({ project, onOpen, onMilestoneClick }: {
+   117→  project: ProjectDTO;
+   118→  onOpen: () => void;
+   119→  onMilestoneClick: (m: MilestoneDTO) => void;
+   120→}) {
+   121→  const st = statusMeta(project.status);
+   122→  const brand = project.brand;
+   123→  const pendingCrCount = (project.changeRequests ?? []).filter((c) => c.status === "pending").length;
+   124→  return (
+   125→    <button
+   126→      type="button"
+   127→      onClick={onOpen}
+   128→      aria-label={`Buka detail project ${project.name}`}
+   129→      className="rounded-xl border bg-white p-4 text-left shadow-sm transition-colors hover:border-zinc-300 hover:shadow-md"
+   130→    >
+   131→      <div className="flex items-start justify-between gap-2">
+   132→        <div className="min-w-0">
+   133→          <p className="font-mono text-[11px] text-zinc-500">{project.code}</p>
+   134→          <p className="mt-0.5 truncate text-sm font-semibold text-zinc-900">{project.name}</p>
+   135→        </div>
+   136→        <div className="flex shrink-0 items-center gap-1.5">
+   137→          {pendingCrCount > 0 ? (
+   138→            <span
+   139→              title="Ada change request menunggu persetujuan klien"
+   140→              aria-label={`Ada ${pendingCrCount} change request menunggu`}
+   141→              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+   142→            >
+   143→              <GitPullRequestArrow className="h-3 w-3" aria-hidden />
+   144→              {pendingCrCount} CR
+   145→            </span>
+   146→          ) : null}
+   147→          <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+   148→        </div>
+   149→      </div>
+   150→
+   151→      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+   152→        {brand ? (
+   153→          <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
+   154→            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
+   155→            {brand.name}
+   156→          </span>
+   157→        ) : null}
+   158→        {project.company?.name ? <span className="truncate">{project.company.name}</span> : null}
+   159→      </div>
+   160→
+   161→      <div className="mt-3 space-y-1.5">
+   162→        <div className="flex items-center justify-between text-xs text-zinc-500">
+   163→          <span>Progress</span>
+   164→          <span className="font-semibold tabular-nums text-zinc-700">{project.progress}%</span>
+   165→        </div>
+   166→        <Progress value={project.progress} aria-label={`Progress project ${project.progress}%`} />
+   167→      </div>
+   168→
+   169→      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+   170→        <div className="flex items-center gap-1.5 text-zinc-600">
+   171→          <User2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+   172→          <span className="truncate">{project.pmName ?? "Belum ada PM"}</span>
+   173→        </div>
+   174→        <div className="flex items-center justify-end gap-1.5 text-zinc-600">
+   175→          <span className="truncate font-medium">{formatCurrency(project.contractValue)}</span>
+   176→        </div>
+   177→        <div className={`flex items-center gap-1.5 ${dueSoon(project) ? "font-medium text-rose-600" : "text-zinc-600"}`}>
+   178→          <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden />
+   179→          <span>Deadline {formatDate(project.dueDate)}</span>
+   180→        </div>
+   181→      </div>
+   182→
+   183→      {(project.milestones ?? []).length > 0 ? (
+   184→        <div className="mt-3 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+   185→          {(project.milestones ?? []).map((m) => {
+   186→            const meta = msMeta(m.status);
+   187→            const Icon = meta.icon;
+   188→            return (
+   189→              <span
+   190→                key={m.id}
+   191→                role="button"
+   192→                tabIndex={0}
+   193→                onClick={() => onMilestoneClick(m)}
+   194→                onKeyDown={(e) => {
+   195→                  if (e.key === "Enter" || e.key === " ") {
+   196→                    e.preventDefault();
+   197→                    e.stopPropagation();
+   198→                    onMilestoneClick(m);
+   199→                  }
+   200→                }}
+   201→                aria-label={`Milestone ${m.name} — ${meta.label}. Klik untuk menandai selesai`}
+   202→                className={`inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors hover:border-zinc-400 ${meta.cls}`}
+   203→              >
+   204→                <Icon className="h-3 w-3 shrink-0" aria-hidden />
+   205→                <span className="truncate">{m.name}</span>
+   206→              </span>
+   207→            );
+   208→          })}
+   209→        </div>
+   210→      ) : null}
+   211→    </button>
+   212→  );
+   213→}
+   214→
+   215→// ============ Timeline (Gantt) view ============
+   216→
+   217→const DAY_MS = 24 * 60 * 60 * 1000;
+   218→
+   219→function shortDate(ts: number): string {
+   220→  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(ts);
+   221→}
+   222→
+   223→function TimelineRow({ project, pct, onOpen }: {
+   224→  project: ProjectDTO;
+   225→  pct: (ts: number) => number;
+   226→  onOpen: (p: ProjectDTO) => void;
+   227→}) {
+   228→  const barCls =
+   229→    project.status === "in_progress" ? "bg-zinc-900/90"
+   230→    : project.status === "review" ? "bg-violet-500"
+   231→    : project.status === "completed" ? "bg-emerald-500"
+   232→    : "bg-zinc-400";
+   233→  const startTs = project.startDate ? new Date(project.startDate).getTime() : NaN;
+   234→  const endTs = project.dueDate ? new Date(project.dueDate).getTime() : NaN;
+   235→  const hasStart = Number.isFinite(startTs);
+   236→  const hasEnd = Number.isFinite(endTs);
+   237→  const leftPct = hasStart ? pct(startTs) : null;
+   238→  const widthPct = hasStart && hasEnd ? Math.max(pct(endTs) - pct(startTs), 2) : null;
+   239→  const barWidth = widthPct !== null ? Math.min(widthPct, 100 - (leftPct ?? 0)) : null;
+   240→  const barTitle = `${project.name} · ${formatDate(project.startDate)} → ${formatDate(project.dueDate)} · ${project.progress}%`;
+   241→
+   242→  return (
+   243→    <button
+   244→      type="button"
+   245→      onClick={() => onOpen(project)}
+   246→      aria-label={`Buka detail project ${project.name}`}
+   247→      className="flex h-11 w-full border-t border-zinc-100 text-left transition-colors hover:bg-zinc-50"
+   248→    >
+   249→      <div className="flex w-[200px] shrink-0 items-center gap-2 overflow-hidden pr-3">
+   250→        <span
+   251→          className="h-2 w-2 shrink-0 rounded-full"
+   252→          style={{ backgroundColor: project.brand?.color ?? "#a1a1aa" }}
+   253→          aria-hidden
+   254→        />
+   255→        <div className="min-w-0">
+   256→          <p className="truncate font-mono text-[11px] leading-tight text-zinc-500">{project.code}</p>
+   257→          <p className="truncate text-sm leading-tight text-zinc-800">{project.name}</p>
+   258→        </div>
+   259→      </div>
+   260→      <div className="relative flex-1">
+   261→        {leftPct !== null && barWidth !== null ? (
+   262→          <div
+   263→            className={`absolute top-1/2 h-5 -translate-y-1/2 rounded-full ${barCls}`}
+   264→            style={{ left: `${leftPct}%`, width: `${barWidth}%` }}
+   265→            title={barTitle}
+   266→          >
+   267→            {widthPct !== null && widthPct >= 14 ? (
+   268→              <span className="absolute inset-y-0 right-1.5 flex items-center text-[10px] font-semibold text-white">
+   269→                {project.progress}%
+   270→              </span>
+   271→            ) : null}
+   272→          </div>
+   273→        ) : null}
+   274→        {leftPct !== null && barWidth !== null && widthPct !== null && widthPct < 14 ? (
+   275→          <span
+   276→            className="absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-zinc-500"
+   277→            style={{ left: `calc(${leftPct + barWidth}% + 6px)` }}
+   278→          >
+   279→            {project.progress}%
+   280→          </span>
+   281→        ) : null}
+   282→        {leftPct !== null && barWidth === null ? (
+   283→          <span
+   284→            className={`absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full ${barCls}`}
+   285→            style={{ left: `${leftPct}%` }}
+   286→            title={barTitle}
+   287→          />
+   288→        ) : null}
+   289→        {!hasStart && !hasEnd ? (
+   290→          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-zinc-400">
+   291→            Tanpa tanggal
+   292→          </span>
+   293→        ) : null}
+   294→        {(project.milestones ?? []).map((m) => {
+   295→          if (!m.dueDate) return null;
+   296→          const ts = new Date(m.dueDate).getTime();
+   297→          if (!Number.isFinite(ts)) return null;
+   298→          const dCls =
+   299→            m.status === "done" ? "bg-emerald-500"
+   300→            : m.status === "in_progress" ? "bg-amber-500"
+   301→            : "bg-zinc-300";
+   302→          return (
+   303→            <span
+   304→              key={m.id}
+   305→              className={`absolute h-2.5 w-2.5 rounded-[2px] ${dCls}`}
+   306→              style={{
+   307→                left: `${pct(ts)}%`,
+   308→                top: "calc(50% - 10px)",
+   309→                transform: "translate(-50%, -50%) rotate(45deg)",
+   310→              }}
+   311→              title={`${m.name} · ${msMeta(m.status).label}`}
+   312→            />
+   313→          );
+   314→        })}
+   315→      </div>
+   316→    </button>
+   317→  );
+   318→}
+   319→
+   320→function TimelineView({ projects, onOpen }: { projects: ProjectDTO[]; onOpen: (p: ProjectDTO) => void }) {
+   321→  const range = useMemo(() => {
+   322→    const now = Date.now();
+   323→    let min: number | null = null;
+   324→    let max: number | null = null;
+   325→    for (const p of projects) {
+   326→      let contributed = false;
+   327→      const track = (raw?: string | Date | number | null) => {
+   328→        if (!raw) return;
+   329→        const ts = new Date(raw).getTime();
+   330→        if (!Number.isFinite(ts)) return;
+   331→        min = min === null ? ts : Math.min(min, ts);
+   332→        max = max === null ? ts : Math.max(max, ts);
+   333→        contributed = true;
+   334→      };
+   335→      track(p.startDate);
+   336→      track(p.dueDate);
+   337→      for (const m of p.milestones ?? []) track(m.dueDate);
+   338→      if (!contributed) track(now); // fallback: project tanpa tanggal → acuan hari ini
+   339→    }
+   340→    if (min === null || max === null) return { min: now - 15 * DAY_MS, max: now + 15 * DAY_MS };
+   341→    const pad = 7 * DAY_MS;
+   342→    return { min: min - pad, max: max + pad };
+   343→  }, [projects]);
+   344→
+   345→  const span = Math.max(range.max - range.min, DAY_MS);
+   346→  const pct = useCallback((ts: number) => Math.max(0, Math.min(100, ((ts - range.min) / span) * 100)), [range.min, span]);
+   347→  const nowPct = pct(Date.now());
+   348→
+   349→  const gridlines = useMemo(() => {
+   350→    const n = 6;
+   351→    return Array.from({ length: n }, (_, i) => {
+   352→      const ratio = i / (n - 1);
+   353→      return { pct: ratio * 100, label: shortDate(range.min + ratio * span) };
+   354→    });
+   355→  }, [range.min, span]);
+   356→
+   357→  const todayTransform = nowPct <= 5 ? "translateX(0)" : nowPct >= 95 ? "translateX(-100%)" : "translateX(-50%)";
+   358→
+   359→  return (
+   360→    <div className="overflow-x-auto crm-scroll rounded-xl border bg-white p-4 shadow-sm">
+   361→      <div className="min-w-[760px]">
+   362→        {/* Sumbu waktu (header) */}
+   363→        <div className="flex">
+   364→          <div className="w-[200px] shrink-0" />
+   365→          <div className="relative h-7 flex-1">
+   366→            {gridlines.map((g, i) => (
+   367→              <span
+   368→                key={i}
+   369→                className="absolute top-0 whitespace-nowrap text-[10px] tabular-nums text-zinc-400"
+   370→                style={{
+   371→                  left: `${g.pct}%`,
+   372→                  transform: i === 0 ? "translateX(0)" : i === gridlines.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+   373→                }}
+   374→              >
+   375→                {g.label}
+   376→              </span>
+   377→            ))}
+   378→            <span
+   379→              className="absolute top-0 whitespace-nowrap text-[10px] font-semibold text-rose-500"
+   380→              style={{ left: `${nowPct}%`, transform: todayTransform }}
+   381→            >
+   382→              Hari ini
+   383→            </span>
+   384→          </div>
+   385→        </div>
+   386→
+   387→        {/* Baris project + gridline vertikal */}
+   388→        <div className="relative">
+   389→          <div className="pointer-events-none absolute inset-y-0 left-[200px] right-0" aria-hidden>
+   390→            {gridlines.map((g, i) => (
+   391→              <div key={i} className="absolute inset-y-0 border-l border-dashed border-zinc-200" style={{ left: `${g.pct}%` }} />
+   392→            ))}
+   393→            <div className="absolute inset-y-0 border-l-2 border-rose-400" style={{ left: `${nowPct}%` }} />
+   394→          </div>
+   395→          {projects.map((p) => (
+   396→            <TimelineRow key={p.id} project={p} pct={pct} onOpen={onOpen} />
+   397→          ))}
+   398→        </div>
+   399→
+   400→        {/* Legenda */}
+   401→        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-500">
+   402→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-400" aria-hidden /> Perencanaan</span>
+   403→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-zinc-900/90" aria-hidden /> Berjalan</span>
+   404→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-violet-500" aria-hidden /> Review</span>
+   405→          <span className="flex items-center gap-1.5"><span className="h-2.5 w-5 rounded-full bg-emerald-500" aria-hidden /> Selesai</span>
+   406→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
+   407→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
+   408→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+   409→          <span className="flex items-center gap-1.5"><span className="h-3.5 border-l-2 border-rose-400" aria-hidden /> Hari ini</span>
+   410→        </div>
+   411→      </div>
+   412→    </div>
+   413→  );
+   414→}
+   415→
+   416→// ============ Calendar (bulanan) view ============
+   417→
+   418→type CalendarEvent =
+   419→  | { kind: "project"; project: ProjectDTO }
+   420→  | { kind: "milestone"; project: ProjectDTO; milestone: MilestoneDTO };
+   421→
+   422→// 2024-01-01 adalah Senin → ["Sen","Sel","Rab","Kam","Jum","Sab","Min"]
+   423→const WEEKDAY_LABELS: string[] = Array.from({ length: 7 }, (_, i) =>
+   424→  new Intl.DateTimeFormat("id-ID", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2024, 0, 1 + i)))
+   425→);
+   426→
+   427→function dateKey(d: Date): string {
+   428→  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+   429→}
+   430→
+   431→// ---------- Fallback "Jadwalkan ulang" (menu konteks / keyboard — Task 15-c) ----------
+   432→
+   433→/** Format Date → nilai untuk <input type="date"> (yyyy-mm-dd lokal). */
+   434→function toDateInputValue(d: Date | null): string {
+   435→  if (!d || Number.isNaN(d.getTime())) return "";
+   436→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   437→}
+   438→
+   439→/** Parse nilai <input type="date"> → Date lokal pukul 12:00 (aman dari geser tanggal). */
+   440→function parseDateInputValue(v: string): Date | null {
+   441→  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim());
+   442→  if (!m) return null;
+   443→  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+   444→  return Number.isNaN(d.getTime()) ? null : d;
+   445→}
+   446→
+   447→function isSameLocalDay(a: Date, b: Date): boolean {
+   448→  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+   449→}
+   450→
+   451→function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenReschedule, onRescheduleProject, onOpenRescheduleProject }: {
+   452→  projects: ProjectDTO[];
+   453→  onOpenDetail: (p: ProjectDTO) => void;
+   454→  /** Fase 3 — drag-reschedule: pindahkan deadline milestone ke tanggal lain. */
+   455→  onRescheduleMilestone?: (project: ProjectDTO, m: MilestoneDTO, newDate: Date) => void;
+   456→  /** Fase 3c — fallback touch/keyboard: buka dialog "Jadwalkan Ulang Milestone". */
+   457→  onOpenReschedule?: (project: ProjectDTO, m: MilestoneDTO) => void;
+   458→  /** Ronde 16 — drag-reschedule deadline project (chip "deadline"). */
+   459→  onRescheduleProject?: (p: ProjectDTO, newDate: Date) => void;
+   460→  /** Ronde 16 — dialog "Jadwalkan Ulang Deadline Project" (klik kanan / Shift+F10). */
+   461→  onOpenRescheduleProject?: (p: ProjectDTO) => void;
+   462→}) {
+   463→  const [cursor, setCursor] = useState(() => {
+   464→    const n = new Date();
+   465→    return { year: n.getFullYear(), month: n.getMonth() };
+   466→  });
+   467→  // State drag-reschedule (HTML5 drag events — ringan tanpa library).
+   468→  // Ronde 16: mendukung chip milestone DAN chip deadline project.
+   469→  const [dragging, setDragging] = useState<
+   470→    | { kind: "project"; projectId: string }
+   471→    | { kind: "milestone"; projectId: string; milestoneId: string }
+   472→    | null
+   473→  >(null);
+   474→  const [dropDayKey, setDropDayKey] = useState<string | null>(null);
+   475→
+   476→  // Event per tanggal (key "y-m-d" lokal). Project/milestone tanpa dueDate diabaikan.
+   477→  // Milestone hanya dari project berstatus bukan completed/cancelled.
+   478→  const eventsByDay = useMemo(() => {
+   479→    const map = new Map<string, CalendarEvent[]>();
+   480→    const push = (d: Date, ev: CalendarEvent) => {
+   481→      const key = dateKey(d);
+   482→      const arr = map.get(key);
+   483→      if (arr) arr.push(ev);
+   484→      else map.set(key, [ev]);
+   485→    };
+   486→    for (const p of projects) {
+   487→      if (p.dueDate) {
+   488→        const d = new Date(p.dueDate);
+   489→        if (!Number.isNaN(d.getTime())) push(d, { kind: "project", project: p });
+   490→      }
+   491→      if (p.status !== "completed" && p.status !== "cancelled") {
+   492→        for (const m of p.milestones ?? []) {
+   493→          if (!m.dueDate) continue;
+   494→          const d = new Date(m.dueDate);
+   495→          if (!Number.isNaN(d.getTime())) push(d, { kind: "milestone", project: p, milestone: m });
+   496→        }
+   497→      }
+   498→    }
+   499→    return map;
+   500→  }, [projects]);
+   501→
+   502→  // Grid 6 baris × 7 kolom (Senin-based) — tinggi konsisten antar bulan.
+   503→  const cells = useMemo(() => {
+   504→    const offset = (new Date(cursor.year, cursor.month, 1).getDay() + 6) % 7;
+   505→    const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+   506→    return Array.from({ length: 42 }, (_, i) => {
+   507→      const day = i - offset + 1;
+   508→      const valid = day >= 1 && day <= daysInMonth;
+   509→      return { i, day: valid ? day : null, date: valid ? new Date(cursor.year, cursor.month, day) : null };
+   510→    });
+   511→  }, [cursor]);
+   512→
+   513→  const now = new Date();
+   514→  const todayKey = dateKey(now);
+   515→  const isCurrentMonth = cursor.year === now.getFullYear() && cursor.month === now.getMonth();
+   516→  const monthLabel = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric" })
+   517→    .format(new Date(cursor.year, cursor.month, 1));
+   518→
+   519→  // Warna brand unik (maks 4) untuk legenda "Deadline project".
+   520→  const brandColors = useMemo(() => {
+   521→    const seen: string[] = [];
+   522→    for (const p of projects) {
+   523→      if (p.brand?.color && !seen.includes(p.brand.color)) seen.push(p.brand.color);
+   524→      if (seen.length >= 4) break;
+   525→    }
+   526→    return seen;
+   527→  }, [projects]);
+   528→
+   529→  function shiftMonth(delta: number) {
+   530→    setCursor((c) => {
+   531→      const d = new Date(c.year, c.month + delta, 1);
+   532→      return { year: d.getFullYear(), month: d.getMonth() };
+   533→    });
+   534→  }
+   535→
+   536→  if (projects.length === 0) {
+   537→    return (
+   538→      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+   539→        <CalendarDays className="h-8 w-8 text-zinc-300" aria-hidden />
+   540→        <p className="text-sm text-zinc-400">Tidak ada project untuk filter ini.</p>
+   541→      </div>
+   542→    );
+   543→  }
+   544→
+   545→  return (
+   546→    <div className="overflow-x-auto crm-scroll rounded-xl border bg-white shadow-sm">
+   547→      <div className="min-w-[680px] p-4">
+   548→        {/* Header bulan */}
+   549→        <div className="flex items-center gap-1">
+   550→          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => shiftMonth(-1)} aria-label="Bulan sebelumnya">
+   551→            <ChevronLeft className="h-4 w-4" aria-hidden />
+   552→          </Button>
+   553→          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => shiftMonth(1)} aria-label="Bulan berikutnya">
+   554→            <ChevronRight className="h-4 w-4" aria-hidden />
+   555→          </Button>
+   556→          <p className="ml-1 text-sm font-semibold text-zinc-900">{monthLabel}</p>
+   557→          <Button
+   558→            type="button"
+   559→            variant="outline"
+   560→            size="sm"
+   561→            className="ml-auto h-8"
+   562→            onClick={() => setCursor({ year: now.getFullYear(), month: now.getMonth() })}
+   563→            disabled={isCurrentMonth}
+   564→          >
+   565→            Hari ini
+   566→          </Button>
+   567→        </div>
+   568→
+   569→        {/* Grid kalender */}
+   570→        <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200">
+   571→          <div className="grid grid-cols-7 border-b border-zinc-200 bg-zinc-50">
+   572→            {WEEKDAY_LABELS.map((w, i) => (
+   573→              <div
+   574→                key={w}
+   575→                className={`px-2 py-1.5 text-[11px] font-semibold text-zinc-500 ${i < 6 ? "border-r border-zinc-200" : ""}`}
+   576→              >
+   577→                {w}
+   578→              </div>
+   579→            ))}
+   580→          </div>
+   581→          <div className="grid grid-cols-7">
+   582→            {cells.map((cell) => {
+   583→              const dayEvents = cell.date ? eventsByDay.get(dateKey(cell.date)) ?? [] : [];
+   584→              const visible = dayEvents.slice(0, 3);
+   585→              const rest = dayEvents.slice(3);
+   586→              const restTitle = rest
+   587→                .map((ev) => (ev.kind === "project" ? `${ev.project.code} · deadline` : `${ev.project.code} · ${ev.milestone.name}`))
+   588→                .join("\n");
+   589→              const isWeekend = cell.i % 7 >= 5;
+   590→              const isToday = cell.date ? dateKey(cell.date) === todayKey : false;
+   591→              const bgCls = !cell.date ? "bg-zinc-50/40" : isToday ? "bg-zinc-100" : isWeekend ? "bg-zinc-50/60" : "";
+   592→              const cellKey = cell.date ? dateKey(cell.date) : null;
+   593→              const isDropTarget = Boolean(dragging) && cellKey !== null && dropDayKey === cellKey;
+   594→              return (
+   595→                <div
+   596→                  key={cell.i}
+   597→                  className={`min-h-[92px] p-1.5 ${bgCls} ${cell.i % 7 !== 6 ? "border-r border-zinc-100" : ""} ${cell.i < 35 ? "border-b border-zinc-100" : ""} ${
+   598→                    isDropTarget ? "ring-2 ring-inset ring-zinc-900 bg-zinc-100" : ""
+   599→                  }`}
+   600→                  onDragOver={(e) => {
+   601→                    if (!dragging || !cell.date) return;
+   602→                    e.preventDefault();
+   603→                    e.dataTransfer.dropEffect = "move";
+   604→                    if (dropDayKey !== cellKey) setDropDayKey(cellKey);
+   605→                  }}
+   606→                  onDragLeave={() => {
+   607→                    if (cellKey && dropDayKey === cellKey) setDropDayKey(null);
+   608→                  }}
+   609→                  onDrop={(e) => {
+   610→                    e.preventDefault();
+   611→                    const target = dragging;
+   612→                    setDragging(null);
+   613→                    setDropDayKey(null);
+   614→                    if (!target || !cell.date) return;
+   615→                    const project = projects.find((p) => p.id === target.projectId);
+   616→                    if (!project) return;
+   617→                    if (target.kind === "project") {
+   618→                      onRescheduleProject?.(project, cell.date);
+   619→                      return;
+   620→                    }
+   621→                    if (!onRescheduleMilestone) return;
+   622→                    const ms = project.milestones?.find((m) => m.id === target.milestoneId);
+   623→                    if (ms) onRescheduleMilestone(project, ms, cell.date);
+   624→                  }}
+   625→                >
+   626→                  <div className="flex items-center">
+   627→                    {cell.day !== null ? (
+   628→                      isToday ? (
+   629→                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-900 px-1 text-[11px] font-bold leading-none text-white tabular-nums">
+   630→                          {cell.day}
+   631→                        </span>
+   632→                      ) : (
+   633→                        <span className="text-[11px] leading-none text-zinc-500 tabular-nums">{cell.day}</span>
+   634→                      )
+   635→                    ) : null}
+   636→                  </div>
+   637→                  {visible.length > 0 ? (
+   638→                    <div className="mt-1 space-y-1">
+   639→                      {visible.map((ev) =>
+   640→                        ev.kind === "project" ? (
+   641→                          <button
+   642→                            key={`p-${ev.project.id}`}
+   643→                            type="button"
+   644→                            onClick={() => onOpenDetail(ev.project)}
+   645→                            draggable={Boolean(onRescheduleProject)}
+   646→                            onDragStart={(e) => {
+   647→                              if (!onRescheduleProject) return;
+   648→                              e.dataTransfer.setData("text/plain", ev.project.id);
+   649→                              e.dataTransfer.effectAllowed = "move";
+   650→                              setDragging({ kind: "project", projectId: ev.project.id });
+   651→                            }}
+   652→                            onDragEnd={() => {
+   653→                              setDragging(null);
+   654→                              setDropDayKey(null);
+   655→                            }}
+   656→                            onContextMenu={(e) => {
+   657→                              // Klik kanan & long-press mobile → dialog jadwalkan ulang deadline project
+   658→                              if (!onOpenRescheduleProject) return;
+   659→                              e.preventDefault();
+   660→                              onOpenRescheduleProject(ev.project);
+   661→                            }}
+   662→                            onKeyDown={(e) => {
+   663→                              // Shift+F10 / tombol ContextMenu → dialog jadwalkan ulang deadline project
+   664→                              if (!onOpenRescheduleProject) return;
+   665→                              if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+   666→                                e.preventDefault();
+   667→                                e.stopPropagation();
+   668→                                onOpenRescheduleProject(ev.project);
+   669→                              }
+   670→                            }}
+   671→                            title={`${ev.project.code} · ${ev.project.name} · deadline · ${ev.project.progress}%${onRescheduleProject ? " · seret untuk menjadwalkan ulang deadline" : ""}${onOpenRescheduleProject ? " · klik kanan atau Shift+F10 untuk dialog jadwalkan ulang" : ""}`}
+   672→                            aria-label={`Buka detail project ${ev.project.name} (deadline)${onRescheduleProject ? ", seret untuk menjadwalkan ulang deadline" : ""}${onOpenRescheduleProject ? ", klik kanan atau Shift+F10 untuk jadwalkan ulang" : ""}`}
+   673→                            className={cn(
+   674→                              "group flex w-full select-none items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10px] font-medium text-white transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-1",
+   675→                              onRescheduleProject && "cursor-grab active:cursor-grabbing",
+   676→                              dragging?.kind === "project" && dragging.projectId === ev.project.id && "opacity-40"
+   677→                            )}
+   678→                            style={{ backgroundColor: ev.project.brand?.color ?? "#3f3f46" }}
+   679→                          >
+   680→                            <span className="truncate">{ev.project.code} · deadline</span>
+   681→                            {onRescheduleProject ? (
+   682→                              <GripVertical className="ml-auto h-3 w-3 shrink-0 text-white/80 opacity-0 transition-opacity group-hover:opacity-60" aria-hidden />
+   683→                            ) : null}
+   684→                          </button>
+   685→                        ) : (
+   686→                          <button
+   687→                            key={`m-${ev.milestone.id}`}
+   688→                            type="button"
+   689→                            onClick={() => onOpenDetail(ev.project)}
+   690→                            draggable={ev.milestone.status !== "done" && Boolean(onRescheduleMilestone)}
+   691→                            onDragStart={(e) => {
+   692→                              if (ev.milestone.status === "done") return;
+   693→                              e.dataTransfer.setData("text/plain", ev.milestone.id);
+   694→                              e.dataTransfer.effectAllowed = "move";
+   695→                              setDragging({ kind: "milestone", projectId: ev.project.id, milestoneId: ev.milestone.id });
+   696→                            }}
+   697→                            onDragEnd={() => {
+   698→                              setDragging(null);
+   699→                              setDropDayKey(null);
+   700→                            }}
+   701→                            onContextMenu={(e) => {
+   702→                              // Klik kanan & long-press mobile → dialog jadwalkan ulang (fallback touch)
+   703→                              if (!onOpenReschedule) return;
+   704→                              e.preventDefault();
+   705→                              onOpenReschedule(ev.project, ev.milestone);
+   706→                            }}
+   707→                            onKeyDown={(e) => {
+   708→                              // Shift+F10 / tombol ContextMenu → dialog jadwalkan ulang
+   709→                              if (!onOpenReschedule) return;
+   710→                              if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+   711→                                e.preventDefault();
+   712→                                e.stopPropagation();
+   713→                                onOpenReschedule(ev.project, ev.milestone);
+   714→                              }
+   715→                            }}
+   716→                            title={`${ev.project.code} · ${ev.milestone.name} · ${msMeta(ev.milestone.status).label}${onOpenReschedule ? (ev.milestone.status !== "done" && onRescheduleMilestone ? " · seret atau klik kanan untuk menjadwalkan ulang" : " · klik kanan untuk menjadwalkan ulang") : ""}`}
+   717→                            aria-label={`Buka detail project ${ev.project.name} — milestone ${ev.milestone.name} (${msMeta(ev.milestone.status).label})${onOpenReschedule ? ", klik kanan atau Shift+F10 untuk jadwalkan ulang" : ""}`}
+   718→                            className={cn(
+   719→                              "flex w-full select-none items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-1",
+   720→                              ev.milestone.status !== "done" && onRescheduleMilestone && "cursor-grab active:cursor-grabbing hover:border-zinc-400",
+   721→                              dragging?.kind === "milestone" && dragging.milestoneId === ev.milestone.id && "opacity-40"
+   722→                            )}
+   723→                            style={{ borderLeftWidth: 2, borderLeftColor: ev.project.brand?.color ?? "#a1a1aa" }}
+   724→                          >
+   725→                            <span
+   726→                              className={`h-1.5 w-1.5 shrink-0 rotate-45 rounded-[1px] ${
+   727→                                ev.milestone.status === "done" ? "bg-emerald-500" : ev.milestone.status === "in_progress" ? "bg-amber-500" : "bg-zinc-300"
+   728→                              }`}
+   729→                              aria-hidden
+   730→                            />
+   731→                            <span className="truncate">{ev.milestone.name}</span>
+   732→                            {ev.milestone.status !== "done" && onRescheduleMilestone ? (
+   733→                              <GripVertical className="ml-auto h-2.5 w-2.5 shrink-0 text-zinc-300" aria-hidden />
+   734→                            ) : null}
+   735→                          </button>
+   736→                        )
+   737→                      )}
+   738→                    </div>
+   739→                  ) : null}
+   740→                  {rest.length > 0 ? (
+   741→                    <span className="mt-1 block truncate text-[10px] font-medium text-zinc-500" title={restTitle}>
+   742→                      +{rest.length} lagi
+   743→                    </span>
+   744→                  ) : null}
+   745→                </div>
+   746→              );
+   747→            })}
+   748→          </div>
+   749→        </div>
+   750→
+   751→        {/* Legenda */}
+   752→        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-500">
+   753→          <span className="flex items-center gap-1.5">
+   754→            <span className="flex -space-x-1" aria-hidden>
+   755→              {(brandColors.length > 0 ? brandColors : [null]).map((c, idx) => (
+   756→                <span
+   757→                  key={idx}
+   758→                  className="h-2.5 w-3 rounded-full ring-1 ring-white"
+   759→                  style={{ backgroundColor: c ?? "#a1a1aa" }}
+   760→                />
+   761→              ))}
+   762→            </span>
+   763→            Deadline project
+   764→          </span>
+   765→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
+   766→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
+   767→          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
+   768→          {onOpenReschedule || onOpenRescheduleProject ? (
+   769→            <span className="flex items-center gap-1.5 text-zinc-400">
+   770→              <GripVertical className="h-3 w-3" aria-hidden />
+   771→              Seret atau klik-kanan milestone / deadline project untuk menjadwalkan ulang
+   772→            </span>
+   773→          ) : null}
+   774→        </div>
+   775→      </div>
+   776→    </div>
+   777→  );
+   778→}
+   779→
+   780→function ProjectsSkeleton() {
+   781→  return (
+   782→    <div className="space-y-6" aria-hidden>
+   783→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   784→        <div className="space-y-2">
+   785→          <Skeleton className="h-7 w-36" />
+   786→          <Skeleton className="h-4 w-80" />
+   787→        </div>
+   788→        <Skeleton className="h-9 w-28 rounded-lg" />
+   789→      </div>
+   790→      <Skeleton className="h-16 rounded-xl" />
+   791→      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   792→        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56 rounded-xl" />)}
+   793→      </div>
+   794→    </div>
+   795→  );
+   796→}
+   797→
+   798→// ============ Module utama ============
+   799→
+   800→// Fase 3c / Ronde 16 — target dialog jadwalkan ulang: milestone ATAU deadline project
+   801→type RescheduleTarget =
+   802→  | { kind: "project"; project: ProjectDTO }
+   803→  | { kind: "milestone"; project: ProjectDTO; milestone: MilestoneDTO };
+   804→
+   805→export default function ProjectsModule() {
+   806→  const storeBrands = useCrmStore((s) => s.brands);
+   807→  const user = useCrmStore((s) => s.user);
+   808→
+   809→  const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
+   810→  const [loading, setLoading] = useState(true);
+   811→  const [error, setError] = useState<string | null>(null);
+   812→  const [statusFilter, setStatusFilter] = useState("all");
+   813→  const [brandFilter, setBrandFilter] = useState("all");
+   814→  const [view, setView] = useState<"cards" | "timeline" | "calendar">("cards");
+   815→
+   816→  const [detail, setDetail] = useState<ProjectDTO | null>(null);
+   817→  const [editStatus, setEditStatus] = useState("planning");
+   818→  const [editProgress, setEditProgress] = useState("0");
+   819→  const [savingDetail, setSavingDetail] = useState(false);
+   820→
+   821→  // Change request (Fase 2 — Produksi)
+   822→  const [crDialogOpen, setCrDialogOpen] = useState(false);
+   823→  const [crTitle, setCrTitle] = useState("");
+   824→  const [crDesc, setCrDesc] = useState("");
+   825→  const [crCost, setCrCost] = useState("");
+   826→  const [crDays, setCrDays] = useState("");
+   827→  const [crSaving, setCrSaving] = useState(false);
+   828→  const [decideTarget, setDecideTarget] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" | "cancel" } | null>(null);
+   829→  const [decideNote, setDecideNote] = useState("");
+   830→  const [deciding, setDeciding] = useState(false);
+   831→
+   832→  // Fase 3c — dialog "Jadwalkan Ulang" (fallback klik kanan / long-press / keyboard).
+   833→  // Ronde 16: juga untuk deadline project (varian tanpa status).
+   834→  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
+   835→  const [rescheduleDate, setRescheduleDate] = useState("");
+   836→  const [rescheduleStatus, setRescheduleStatus] = useState("pending");
+   837→  const [rescheduleSaving, setRescheduleSaving] = useState(false);
+   838→
+   839→  const canDecideCr = user?.role === "director" || user?.role === "super_admin";
+   840→  const detailCrs = detail?.changeRequests ?? [];
+   841→  const approvedCrSum = detailCrs
+   842→    .filter((c) => c.status === "approved")
+   843→    .reduce((s, c) => s + (c.additionalCost ?? 0), 0);
+   844→
+   845→  // Item aktif pada dialog jadwalkan ulang (lookup terkini dari state agar guard same-day akurat).
+   846→  // Untuk kind "project" item-nya adalah project itu sendiri; untuk milestone tetap milestone-nya.
+   847→  const rescheduleCurrent = (() => {
+   848→    if (!rescheduleTarget) return null;
+   849→    const fresh = (projects ?? []).find((p) => p.id === rescheduleTarget.project.id) ?? rescheduleTarget.project;
+   850→    return rescheduleTarget.kind === "project"
+   851→      ? fresh
+   852→      : fresh.milestones?.find((x) => x.id === rescheduleTarget.milestone.id) ?? rescheduleTarget.milestone;
+   853→  })();
+   854→  // Guard "same-day no-change": Simpan disabled bila tanggal sama DAN (utk milestone) status tidak berubah.
+   855→  // Catatan: ProjectDTO JUGA punya field status (planning/in_progress/…) — jadi varian project TIDAK boleh
+   856→  // membandingkan rescheduleStatus; hanya varian milestone yang memakai status chip.
+   857→  const rescheduleDirty = (() => {
+   858→    if (!rescheduleTarget || !rescheduleCurrent) return false;
+   859→    const curDue = rescheduleCurrent.dueDate ? new Date(rescheduleCurrent.dueDate) : null;
+   860→    const dateDirty = rescheduleDate !== toDateInputValue(curDue);
+   861→    if (rescheduleTarget.kind !== "milestone") return dateDirty;
+   862→    const ms = rescheduleCurrent as MilestoneDTO; // kind milestone → rescheduleCurrent pasti milestone
+   863→    return dateDirty || rescheduleStatus !== ms.status;
+   864→  })();
+   865→
+   866→  const load = useCallback(async (silent = false): Promise<ProjectDTO[]> => {
+   867→    if (!silent) setLoading(true);
+   868→    setError(null);
+   869→    try {
+   870→      const res = await api.projects({
+   871→        status: statusFilter,
+   872→        brandId: brandFilter !== "all" ? brandFilter : undefined,
+   873→      });
+   874→      setProjects(res.projects);
+   875→      return res.projects;
+   876→    } catch (err) {
+   877→      setError(err instanceof Error ? err.message : "Gagal memuat project");
+   878→      if (!silent) toast.error("Gagal memuat data project");
+   879→      return [];
+   880→    } finally {
+   881→      setLoading(false);
+   882→    }
+   883→  }, [statusFilter, brandFilter]);
+   884→
+   885→  useEffect(() => { void load(); }, [load]);
+   886→
+   887→  const stats = useMemo(() => {
+   888→    const list = projects ?? [];
+   889→    return {
+   890→      active: list.filter((p) => p.status === "in_progress" || p.status === "review").length,
+   891→      total: list.length,
+   892→      avgProgress: list.length > 0 ? Math.round(list.reduce((s, p) => s + p.progress, 0) / list.length) : 0,
+   893→    };
+   894→  }, [projects]);
+   895→
+   896→  function openDetail(p: ProjectDTO) {
+   897→    setDetail(p);
+   898→    setEditStatus(p.status);
+   899→    setEditProgress(String(p.progress));
+   900→  }
+   901→
+   902→  function confirmMilestone(project: ProjectDTO, m: MilestoneDTO) {
+   903→    if (m.status === "done") {
+   904→      toast.info(`Milestone "${m.name}" sudah selesai`);
+   905→      return;
+   906→    }
+   907→    toast.info(`Tandai milestone "${m.name}" selesai?`, {
+   908→      description: `Project ${project.code} · progress akan dihitung ulang otomatis`,
+   909→      action: {
+   910→        label: "Ya, selesaikan",
+   911→        onClick: () => { void markMilestoneDone(project, m); },
+   912→      },
+   913→    });
+   914→  }
+   915→
+   916→  /** Ambil ulang daftar project lalu sinkronkan sheet detail dengan data terbaru. */
+   917→  async function refreshDetail() {
+   918→    const fresh = await load(true);
+   919→    setDetail((d) => (d ? fresh.find((p) => p.id === d.id) ?? d : d));
+   920→  }
+   921→
+   922→  async function markMilestoneDone(project: ProjectDTO, m: MilestoneDTO) {
+   923→    try {
+   924→      await api.updateProject({
+   925→        id: project.id,
+   926→        milestoneId: m.id,
+   927→        milestoneStatus: "done",
+   928→      });
+   929→      // API menghitung ulang progress & status project di server — ambil data terbaru
+   930→      toast.success(`Milestone "${m.name}" ditandai selesai`);
+   931→      await refreshDetail();
+   932→    } catch (err) {
+   933→      toast.error(err instanceof Error ? err.message : "Gagal memperbarui milestone");
+   934→    }
+   935→  }
+   936→
+   937→  /** Sinkronkan perubahan milestone ke daftar project + sheet detail (jika terbuka) — dipakai drag & dialog. */
+   938→  function patchMilestoneState(projectId: string, milestoneId: string, patch: { dueDate?: string | null; status?: string }) {
+   939→    const apply = (x: MilestoneDTO): MilestoneDTO => ({
+   940→      ...x,
+   941→      ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : null),
+   942→      ...(patch.status !== undefined ? { status: patch.status } : null),
+   943→    });
+   944→    setProjects((prev) => (prev ?? []).map((p) =>
+   945→      p.id !== projectId ? p : { ...p, milestones: (p.milestones ?? []).map((x) => (x.id === milestoneId ? apply(x) : x)) }
+   946→    ));
+   947→    setDetail((d) => (d && d.id === projectId
+   948→      ? { ...d, milestones: (d.milestones ?? []).map((x) => (x.id === milestoneId ? apply(x) : x)) }
+   949→      : d));
+   950→  }
+   951→
+   952→  /** Ronde 16 — sinkronkan perubahan dueDate project ke daftar + sheet detail (dipakai drag & dialog). */
+   953→  function patchProjectDueDateState(projectId: string, dueDate: string | null) {
+   954→    setProjects((prev) => (prev ?? []).map((p) => (p.id === projectId ? { ...p, dueDate } : p)));
+   955→    setDetail((d) => (d && d.id === projectId ? { ...d, dueDate } : d));
+   956→  }
+   957→
+   958→  /** Fase 3 — drag-reschedule milestone di kalender: update optimis + revert bila gagal. */
+   959→  async function handleRescheduleMilestone(project: ProjectDTO, m: MilestoneDTO, newDate: Date) {
+   960→    const oldDue = m.dueDate ? new Date(m.dueDate) : null;
+   961→    if (oldDue && isSameLocalDay(oldDue, newDate)) return;
+   962→    if (m.status === "done") {
+   963→      toast.info(`Milestone "${m.name}" sudah selesai — tidak dapat dijadwalkan ulang`);
+   964→      return;
+   965→    }
+   966→
+   967→    patchMilestoneState(project.id, m.id, { dueDate: newDate.toISOString() }); // optimis
+   968→    try {
+   969→      await api.updateMilestone({
+   970→        milestoneId: m.id,
+   971→        dueDate: newDate.toISOString(),
+   972→        actorName: user?.name ?? "Produksi",
+   973→        actorRole: user?.role ?? "production",
+   974→      });
+   975→      toast.success(`Milestone "${m.name}" dijadwalkan ulang`, {
+   976→        description: oldDue ? `${formatDate(oldDue)} → ${formatDate(newDate)}` : `Deadline baru: ${formatDate(newDate)}`,
+   977→      });
+   978→    } catch (err) {
+   979→      patchMilestoneState(project.id, m.id, { dueDate: oldDue ? oldDue.toISOString() : null }); // revert
+   980→      toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang milestone");
+   981→    }
+   982→  }
+   983→
+   984→  /** Ronde 16 — drag-reschedule deadline project di kalender: update optimis + revert bila gagal. */
+   985→  async function handleRescheduleProject(p: ProjectDTO, newDate: Date) {
+   986→    const oldDue = p.dueDate ? new Date(p.dueDate) : null;
+   987→    if (oldDue && isSameLocalDay(oldDue, newDate)) return; // guard: drop di sel tanggal yang sama = no-op
+   988→
+   989→    patchProjectDueDateState(p.id, newDate.toISOString()); // optimis
+   990→    try {
+   991→      await api.updateProject({
+   992→        id: p.id,
+   993→        dueDate: newDate.toISOString(),
+   994→        actorName: user?.name ?? "Produksi",
+   995→        actorRole: user?.role ?? "production",
+   996→      });
+   997→      toast.success(`Deadline ${p.code}: ${oldDue ? formatDate(oldDue) : "tanpa tanggal"} → ${formatDate(newDate)}`, {
+   998→        description: p.name,
+   999→      });
+  1000→    } catch (err) {
+  1001→      patchProjectDueDateState(p.id, oldDue ? oldDue.toISOString() : null); // revert
+  1002→      toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang deadline project");
+  1003→    }
+  1004→  }
+  1005→
+  1006→  /** Fase 3c — buka dialog jadwalkan ulang dari chip kalender (klik kanan / Shift+F10 / long-press). */
+  1007→  function openRescheduleDialog(project: ProjectDTO, m: MilestoneDTO) {
+  1008→    setRescheduleTarget({ kind: "milestone", project, milestone: m });
+  1009→    setRescheduleDate(toDateInputValue(m.dueDate ? new Date(m.dueDate) : null));
+  1010→    setRescheduleStatus(m.status);
+  1011→  }
+  1012→
+  1013→  /** Ronde 16 — buka dialog jadwalkan ulang deadline project dari chip kalender (klik kanan / Shift+F10). */
+  1014→  function openRescheduleProjectDialog(p: ProjectDTO) {
+  1015→    setRescheduleTarget({ kind: "project", project: p });
+  1016→    setRescheduleDate(toDateInputValue(p.dueDate ? new Date(p.dueDate) : null));
+  1017→  }
+  1018→
+  1019→  function bumpRescheduleDate(days: number) {
+  1020→    const targetDue = rescheduleTarget
+  1021→      ? rescheduleTarget.kind === "project"
+  1022→        ? rescheduleTarget.project.dueDate
+  1023→        : rescheduleTarget.milestone.dueDate
+  1024→      : null;
+  1025→    const base = parseDateInputValue(rescheduleDate) ?? (targetDue ? new Date(targetDue) : new Date());
+  1026→    const next = new Date(base.getFullYear(), base.getMonth(), base.getDate() + days, 12);
+  1027→    setRescheduleDate(toDateInputValue(next));
+  1028→  }
+  1029→
+  1030→  /** Fase 3c / Ronde 16 — simpan dialog: ubah dueDate project ATAU dueDate+status milestone (optimis + revert bila gagal). */
+  1031→  async function handleSaveRescheduleDialog() {
+  1032→    if (!rescheduleTarget || !user) return;
+  1033→    // Ambil data terkini dari state (snapshot dialog bisa basi setelah update optimis sebelumnya)
+  1034→    const project = (projects ?? []).find((p) => p.id === rescheduleTarget.project.id) ?? rescheduleTarget.project;
+  1035→    const newDate = parseDateInputValue(rescheduleDate);
+  1036→    if (!newDate) {
+  1037→      toast.error("Pilih tanggal deadline yang valid");
+  1038→      return;
+  1039→    }
+  1040→
+  1041→    // --- Ronde 16: varian deadline project (tanpa status) ---
+  1042→    if (rescheduleTarget.kind === "project") {
+  1043→      const oldDue = project.dueDate ? new Date(project.dueDate) : null;
+  1044→      if (oldDue && isSameLocalDay(oldDue, newDate)) return; // guard: tidak ada perubahan
+  1045→
+  1046→      setRescheduleSaving(true);
+  1047→      patchProjectDueDateState(project.id, newDate.toISOString()); // optimis
+  1048→      try {
+  1049→        await api.updateProject({
+  1050→          id: project.id,
+  1051→          dueDate: newDate.toISOString(),
+  1052→          actorName: user.name,
+  1053→          actorRole: user.role,
+  1054→        });
+  1055→        toast.success(`Deadline ${project.code}: ${oldDue ? formatDate(oldDue) : "tanpa tanggal"} → ${formatDate(newDate)}`, {
+  1056→          description: project.name,
+  1057→        });
+  1058→        setRescheduleTarget(null); // tutup pada sukses
+  1059→      } catch (err) {
+  1060→        patchProjectDueDateState(project.id, oldDue ? oldDue.toISOString() : null); // revert
+  1061→        toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang deadline project");
+  1062→      } finally {
+  1063→        setRescheduleSaving(false);
+  1064→      }
+  1065→      return;
+  1066→    }
+  1067→
+  1068→    // --- Fase 3c: varian milestone (dueDate + status) ---
+  1069→    const m = project.milestones?.find((x) => x.id === rescheduleTarget.milestone.id) ?? rescheduleTarget.milestone;
+  1070→    const oldDue = m.dueDate ? new Date(m.dueDate) : null;
+  1071→    const dateChanged = !oldDue || !isSameLocalDay(oldDue, newDate);
+  1072→    const statusChanged = rescheduleStatus !== m.status;
+  1073→    if (!dateChanged && !statusChanged) return; // guard: tidak ada perubahan
+  1074→
+  1075→    setRescheduleSaving(true);
+  1076→    patchMilestoneState(project.id, m.id, {
+  1077→      dueDate: dateChanged ? newDate.toISOString() : undefined,
+  1078→      status: statusChanged ? rescheduleStatus : undefined,
+  1079→    }); // optimis
+  1080→    try {
+  1081→      await api.updateMilestone({
+  1082→        milestoneId: m.id,
+  1083→        dueDate: dateChanged ? newDate.toISOString() : undefined,
+  1084→        status: statusChanged ? rescheduleStatus : undefined,
+  1085→        actorName: user.name,
+  1086→        actorRole: user.role,
+  1087→      });
+  1088→      if (dateChanged) {
+  1089→        toast.success(`${m.name}: ${oldDue ? formatDate(oldDue) : "tanpa tanggal"} → ${formatDate(newDate)}`, {
+  1090→          description: statusChanged ? `Status: ${msMeta(m.status).label} → ${msMeta(rescheduleStatus).label}` : undefined,
+  1091→        });
+  1092→      } else {
+  1093→        toast.success(`Status milestone "${m.name}" diperbarui`, {
+  1094→          description: `${msMeta(m.status).label} → ${msMeta(rescheduleStatus).label}`,
+  1095→        });
+  1096→      }
+  1097→      setRescheduleTarget(null); // tutup pada sukses
+  1098→      if (statusChanged) await refreshDetail(); // sinkronkan ulang data project
+  1099→    } catch (err) {
+  1100→      patchMilestoneState(project.id, m.id, {
+  1101→        dueDate: dateChanged ? (oldDue ? oldDue.toISOString() : null) : undefined,
+  1102→        status: statusChanged ? m.status : undefined,
+  1103→      }); // revert
+  1104→      toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang milestone");
+  1105→    } finally {
+  1106→      setRescheduleSaving(false);
+  1107→    }
+  1108→  }
+  1109→
+  1110→  function openCrDialog() {
+  1111→    setCrTitle("");
+  1112→    setCrDesc("");
+  1113→    setCrCost("");
+  1114→    setCrDays("");
+  1115→    setCrDialogOpen(true);
+  1116→  }
+  1117→
+  1118→  async function submitCreateCr(e: React.FormEvent) {
+  1119→    e?.preventDefault();
+  1120→    if (!detail || !user) {
+  1121→      toast.error("Sesi tidak ditemukan — muat ulang halaman");
+  1122→      return;
+  1123→    }
+  1124→    const title = crTitle.trim();
+  1125→    const description = crDesc.trim();
+  1126→    if (!title || !description) {
+  1127→      toast.error("Judul dan deskripsi change request wajib diisi");
+  1128→      return;
+  1129→    }
+  1130→    setCrSaving(true);
+  1131→    try {
+  1132→      const res = await api.createChangeRequest({
+  1133→        projectId: detail.id,
+  1134→        title,
+  1135→        description,
+  1136→        additionalCost: Math.max(0, Number(crCost) || 0),
+  1137→        additionalDays: Math.max(0, Number(crDays) || 0),
+  1138→        requestedBy: user.name,
+  1139→        actorRole: user.role,
+  1140→      });
+  1141→      toast.success(`Change Request ${res.changeRequest.number} diajukan — menunggu persetujuan klien`);
+  1142→      setCrDialogOpen(false);
+  1143→      await refreshDetail();
+  1144→    } catch (err) {
+  1145→      toast.error(err instanceof Error ? err.message : "Gagal mengajukan change request");
+  1146→    } finally {
+  1147→      setCrSaving(false);
+  1148→    }
+  1149→  }
+  1150→
+  1151→  function openDecide(cr: ChangeRequestDTO, decision: "approve" | "reject" | "cancel") {
+  1152→    setDecideNote("");
+  1153→    setDecideTarget({ cr, decision });
+  1154→  }
+  1155→
+  1156→  async function submitDecision() {
+  1157→    if (!decideTarget || !user) return;
+  1158→    setDeciding(true);
+  1159→    try {
+  1160→      const res = await api.decideChangeRequest({
+  1161→        id: decideTarget.cr.id,
+  1162→        decision: decideTarget.decision,
+  1163→        decisionNote: decideNote.trim() || undefined,
+  1164→        actorName: user.name,
+  1165→        actorRole: user.role,
+  1166→      });
+  1167→      if (decideTarget.decision === "approve") {
+  1168→        toast.success(res.invoice
+  1169→          ? `CR ${res.changeRequest.number} disetujui — invoice ${res.invoice.number} dibuat`
+  1170→          : `CR ${res.changeRequest.number} disetujui`);
+  1171→      } else if (decideTarget.decision === "cancel") {
+  1172→        toast.info(`CR ${res.changeRequest.number} dibatalkan`);
+  1173→      } else {
+  1174→        toast.success(`CR ${res.changeRequest.number} ditolak`);
+  1175→      }
+  1176→      setDecideTarget(null);
+  1177→      await refreshDetail();
+  1178→    } catch (err) {
+  1179→      toast.error(err instanceof Error ? err.message : "Gagal memutuskan change request");
+  1180→    } finally {
+  1181→      setDeciding(false);
+  1182→    }
+  1183→  }
+  1184→
+  1185→  async function saveDetail(e: React.FormEvent) {
+  1186→    e?.preventDefault();
+  1187→    if (!detail) return;
+  1188→    const progress = Math.max(0, Math.min(100, Number(editProgress)));
+  1189→    if (!Number.isFinite(progress)) { toast.error("Progress harus angka 0–100"); return; }
+  1190→    setSavingDetail(true);
+  1191→    try {
+  1192→      const res = await api.updateProject({ id: detail.id, status: editStatus, progress });
+  1193→      setProjects((prev) => (prev ?? []).map((p) => (p.id === res.project.id ? { ...p, ...res.project } : p)));
+  1194→      setDetail((d) => (d ? { ...d, ...res.project, status: editStatus, progress } : d));
+  1195→      toast.success(`Project ${res.project.code} diperbarui`);
+  1196→    } catch (err) {
+  1197→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan project");
+  1198→    } finally {
+  1199→      setSavingDetail(false);
+  1200→    }
+  1201→  }
+  1202→
+  1203→  if (loading && projects === null) return <ProjectsSkeleton />;
+  1204→
+  1205→  return (
+  1206→    <div className="space-y-6">
+  1207→      {/* Header */}
+  1208→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+  1209→        <div>
+  1210→          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Projects</h1>
+  1211→          <p className="text-sm text-zinc-500">Produksi setelah deal berhasil — template workflow per layanan</p>
+  1212→        </div>
+  1213→        <div className="flex items-center gap-2">
+  1214→          <Button
+  1215→            variant="outline"
+  1216→            size="sm"
+  1217→            onClick={() => {
+  1218→              const rows = projects ?? [];
+  1219→              if (rows.length === 0) {
+  1220→                toast.error("Tidak ada project untuk diekspor");
+  1221→                return;
+  1222→              }
+  1223→              const csv = buildProjectsCsv(rows);
+  1224→              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  1225→              const url = URL.createObjectURL(blob);
+  1226→              const a = document.createElement("a");
+  1227→              const ymd = new Date().toISOString().slice(0, 10);
+  1228→              a.href = url;
+  1229→              a.download = `project-grupcrm-${ymd}.csv`;
+  1230→              document.body.appendChild(a);
+  1231→              a.click();
+  1232→              a.remove();
+  1233→              URL.revokeObjectURL(url);
+  1234→              toast.success(`Ekspor CSV selesai — ${rows.length} project diunduh`);
+  1235→            }}
+  1236→            aria-label="Ekspor project ke CSV"
+  1237→          >
+  1238→            <Download className="h-4 w-4" aria-hidden /> Ekspor CSV
+  1239→          </Button>
+  1240→          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar project">
+  1241→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+  1242→          </Button>
+  1243→        </div>
+  1244→      </div>
+  1245→
+  1246→      {/* Filter */}
+  1247→      <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+  1248→        <Select value={statusFilter} onValueChange={setStatusFilter}>
+  1249→          <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter status project">
+  1250→            <SelectValue placeholder="Status" />
+  1251→          </SelectTrigger>
+  1252→          <SelectContent>
+  1253→            <SelectItem value="all">Semua Status</SelectItem>
+  1254→            <SelectItem value="planning">Perencanaan</SelectItem>
+  1255→            <SelectItem value="in_progress">Berjalan</SelectItem>
+  1256→            <SelectItem value="review">Review</SelectItem>
+  1257→            <SelectItem value="completed">Selesai</SelectItem>
+  1258→          </SelectContent>
+  1259→        </Select>
+  1260→        <Select value={brandFilter} onValueChange={setBrandFilter}>
+  1261→          <SelectTrigger className="w-full sm:w-[200px]" aria-label="Filter brand project">
+  1262→            <SelectValue placeholder="Brand" />
+  1263→          </SelectTrigger>
+  1264→          <SelectContent>
+  1265→            <SelectItem value="all">Semua Brand</SelectItem>
+  1266→            {storeBrands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+  1267→          </SelectContent>
+  1268→        </Select>
+  1269→        <div className="flex flex-wrap items-center gap-3 sm:ml-auto">
+  1270→          <span className="text-xs text-zinc-500">
+  1271→            {stats.total} project · {stats.active} aktif · rata-rata progress {stats.avgProgress}%
+  1272→          </span>
+  1273→          <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5" role="group" aria-label="Mode tampilan project">
+  1274→            <Button
+  1275→              type="button"
+  1276→              variant="ghost"
+  1277→              size="sm"
+  1278→              onClick={() => setView("cards")}
+  1279→              aria-pressed={view === "cards"}
+  1280→              aria-label="Tampilan kartu"
+  1281→              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "cards" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+  1282→            >
+  1283→              <LayoutGrid className="h-3.5 w-3.5" aria-hidden /> Kartu
+  1284→            </Button>
+  1285→            <Button
+  1286→              type="button"
+  1287→              variant="ghost"
+  1288→              size="sm"
+  1289→              onClick={() => setView("timeline")}
+  1290→              aria-pressed={view === "timeline"}
+  1291→              aria-label="Tampilan timeline"
+  1292→              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "timeline" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+  1293→            >
+  1294→              <ChartGantt className="h-3.5 w-3.5" aria-hidden /> Timeline
+  1295→            </Button>
+  1296→            <Button
+  1297→              type="button"
+  1298→              variant="ghost"
+  1299→              size="sm"
+  1300→              onClick={() => setView("calendar")}
+  1301→              aria-pressed={view === "calendar"}
+  1302→              aria-label="Tampilan kalender"
+  1303→              className={`h-7 gap-1.5 rounded-md px-2.5 ${view === "calendar" ? "bg-zinc-900 text-white hover:bg-zinc-900 hover:text-white" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"}`}
+  1304→            >
+  1305→              <CalendarDays className="h-3.5 w-3.5" aria-hidden /> Kalender
+  1306→            </Button>
+  1307→          </div>
+  1308→        </div>
+  1309→      </div>
+  1310→
+  1311→      {error ? (
+  1312→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+  1313→      ) : null}
+  1314→
+  1315→      {/* Tampilan kartu / timeline / kalender */}
+  1316→      {view === "cards" ? (
+  1317→        (projects ?? []).length === 0 ? (
+  1318→          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+  1319→            <FolderKanban className="h-8 w-8 text-zinc-300" aria-hidden />
+  1320→            <p className="text-sm text-zinc-400">Belum ada project untuk filter ini.</p>
+  1321→          </div>
+  1322→        ) : (
+  1323→          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+  1324→            {(projects ?? []).map((p) => (
+  1325→              <ProjectCard
+  1326→                key={p.id}
+  1327→                project={p}
+  1328→                onOpen={() => openDetail(p)}
+  1329→                onMilestoneClick={(m) => confirmMilestone(p, m)}
+  1330→              />
+  1331→            ))}
+  1332→          </div>
+  1333→        )
+  1334→      ) : view === "calendar" ? (
+  1335→        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} onRescheduleMilestone={handleRescheduleMilestone} onOpenReschedule={openRescheduleDialog} onRescheduleProject={handleRescheduleProject} onOpenRescheduleProject={openRescheduleProjectDialog} />
+  1336→      ) : (projects ?? []).length === 0 ? (
+  1337→        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
+  1338→          <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />
+  1339→          <p className="text-sm text-zinc-400">Tidak ada project untuk filter ini.</p>
+  1340→        </div>
+  1341→      ) : (
+  1342→        <TimelineView projects={projects ?? []} onOpen={openDetail} />
+  1343→      )}
+  1344→
+  1345→      {/* Sheet detail */}
+  1346→      <Sheet open={detail !== null} onOpenChange={(open) => { if (!open) setDetail(null); }}>
+  1347→        <SheetContent className="w-full overflow-y-auto crm-scroll sm:max-w-md">
+  1348→          {detail ? (
+  1349→            <>
+  1350→              <SheetHeader>
+  1351→                <SheetTitle className="leading-snug">{detail.name}</SheetTitle>
+  1352→                <SheetDescription>
+  1353→                  <span className="font-mono">{detail.code}</span>
+  1354→                  {detail.brand ? ` · ${detail.brand.name}` : ""}
+  1355→                  {detail.company?.name ? ` · ${detail.company.name}` : ""}
+  1356→                </SheetDescription>
+  1357→              </SheetHeader>
+  1358→              <div className="mt-4 space-y-5 px-4 pb-8">
+  1359→                <div className="flex items-center gap-2">
+  1360→                  <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
+  1361→                    {statusMeta(detail.status).label}
+  1362→                  </Badge>
+  1363→                  {detail.serviceCategory ? (
+  1364→                    <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-zinc-600">
+  1365→                      {detail.serviceCategory}
+  1366→                    </Badge>
+  1367→                  ) : null}
+  1368→                </div>
+  1369→
+  1370→                <div className="space-y-1.5">
+  1371→                  <div className="flex items-center justify-between text-xs text-zinc-500">
+  1372→                    <span>Progress</span>
+  1373→                    <span className="font-semibold tabular-nums text-zinc-700">{detail.progress}%</span>
+  1374→                  </div>
+  1375→                  <Progress value={detail.progress} aria-label={`Progress ${detail.progress}%`} />
+  1376→                </div>
+  1377→
+  1378→                <div className="grid grid-cols-2 gap-3 text-sm">
+  1379→                  <div>
+  1380→                    <p className="text-xs text-zinc-500">Project Manager</p>
+  1381→                    <p className="mt-0.5 text-zinc-800">{detail.pmName ?? "-"}</p>
+  1382→                  </div>
+  1383→                  <div>
+  1384→                    <p className="text-xs text-zinc-500">Nilai Kontrak</p>
+  1385→                    <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{formatCurrency(detail.contractValue)}</p>
+  1386→                    {approvedCrSum > 0 ? (
+  1387→                      <p className="mt-0.5 text-[11px] font-medium text-emerald-600">
+  1388→                        +{formatCurrency(approvedCrSum)} dari change request
+  1389→                      </p>
+  1390→                    ) : null}
+  1391→                  </div>
+  1392→                  <div>
+  1393→                    <p className="text-xs text-zinc-500">Mulai</p>
+  1394→                    <p className="mt-0.5 text-zinc-800">{formatDate(detail.startDate)}</p>
+  1395→                  </div>
+  1396→                  <div>
+  1397→                    <p className="text-xs text-zinc-500">Deadline</p>
+  1398→                    <p className={`mt-0.5 ${dueSoon(detail) ? "font-medium text-rose-600" : "text-zinc-800"}`}>
+  1399→                      {formatDate(detail.dueDate)}
+  1400→                    </p>
+  1401→                  </div>
+  1402→                </div>
+  1403→
+  1404→                {/* Milestones */}
+  1405→                <div>
+  1406→                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+  1407→                    Milestone ({(detail.milestones ?? []).filter((m) => m.status === "done").length}/{(detail.milestones ?? []).length} selesai)
+  1408→                  </p>
+  1409→                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+  1410→                    {(detail.milestones ?? []).map((m) => {
+  1411→                      const meta = msMeta(m.status);
+  1412→                      const Icon = meta.icon;
+  1413→                      return (
+  1414→                        <div key={m.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white p-3">
+  1415→                          <div className="flex min-w-0 items-center gap-2">
+  1416→                            <Icon className={`h-4 w-4 shrink-0 ${m.status === "done" ? "text-emerald-600" : m.status === "in_progress" ? "text-amber-600" : "text-zinc-400"}`} aria-hidden />
+  1417→                            <div className="min-w-0">
+  1418→                              <p className={`truncate text-sm font-medium ${m.status === "done" ? "text-emerald-700 line-through decoration-emerald-500" : "text-zinc-800"}`}>
+  1419→                                {m.name}
+  1420→                              </p>
+  1421→                              <p className="text-[11px] text-zinc-400">
+  1422→                                #{m.order} {m.dueDate ? `· due ${formatDate(m.dueDate)}` : ""}
+  1423→                              </p>
+  1424→                            </div>
+  1425→                          </div>
+  1426→                          {m.status !== "done" ? (
+  1427→                            <Button
+  1428→                              variant="outline"
+  1429→                              size="sm"
+  1430→                              onClick={() => confirmMilestone(detail, m)}
+  1431→                              aria-label={`Tandai milestone ${m.name} selesai`}
+  1432→                            >
+  1433→                              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Selesaikan
+  1434→                            </Button>
+  1435→                          ) : (
+  1436→                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-100 text-emerald-700">Selesai</Badge>
+  1437→                          )}
+  1438→                        </div>
+  1439→                      );
+  1440→                    })}
+  1441→                  </div>
+  1442→                </div>
+  1443→
+  1444→                {/* Change Request (Fase 2 — Produksi) */}
+  1445→                <div>
+  1446→                  <div className="mb-2 flex items-center justify-between gap-2">
+  1447→                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+  1448→                      <GitPullRequestArrow className="h-3.5 w-3.5" aria-hidden />
+  1449→                      Change Request ({detailCrs.length})
+  1450→                    </p>
+  1451→                    <Button
+  1452→                      variant="outline"
+  1453→                      size="sm"
+  1454→                      onClick={openCrDialog}
+  1455→                      aria-label="Ajukan change request baru"
+  1456→                    >
+  1457→                      <Plus className="h-3.5 w-3.5" aria-hidden /> Ajukan Change Request
+  1458→                    </Button>
+  1459→                  </div>
+  1460→                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+  1461→                    {detailCrs.length === 0 ? (
+  1462→                      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+  1463→                        Belum ada change request untuk project ini.
+  1464→                      </div>
+  1465→                    ) : (
+  1466→                      detailCrs.map((cr) => {
+  1467→                        const meta = crMeta(cr.status);
+  1468→                        return (
+  1469→                          <div key={cr.id} className="rounded-lg border bg-white p-3">
+  1470→                            <div className="flex items-center justify-between gap-2">
+  1471→                              <span className="font-mono text-[11px] text-zinc-500">{cr.number}</span>
+  1472→                              <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>
+  1473→                                {meta.label}
+  1474→                              </Badge>
+  1475→                            </div>
+  1476→                            <p className="mt-1.5 text-sm font-semibold text-zinc-900">{cr.title}</p>
+  1477→                            <p className="mt-0.5 text-xs text-zinc-500">{cr.description}</p>
+  1478→                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+  1479→                              <span className="font-semibold tabular-nums text-emerald-700">
+  1480→                                +{formatCurrency(cr.additionalCost)}
+  1481→                              </span>
+  1482→                              <span className="inline-flex items-center gap-1">
+  1483→                                <CalendarClock className="h-3.5 w-3.5 text-zinc-500" aria-hidden />
+  1484→                                {cr.additionalDays} hari tambahan
+  1485→                              </span>
+  1486→                              <span>Diajukan oleh {cr.requestedBy}</span>
+  1487→                              <span>{timeAgo(cr.createdAt)}</span>
+  1488→                            </div>
+  1489→                            {cr.status !== "pending" ? (
+  1490→                              <div className="mt-2 border-t border-zinc-100 pt-2">
+  1491→                                <p className="text-[11px] text-zinc-500">
+  1492→                                  Diputuskan oleh {cr.decidedBy ?? "-"}
+  1493→                                  {cr.decidedAt ? ` · ${timeAgo(cr.decidedAt)}` : ""}
+  1494→                                </p>
+  1495→                                {cr.decisionNote ? (
+  1496→                                  <p className="mt-0.5 text-[11px] italic text-zinc-500">“{cr.decisionNote}”</p>
+  1497→                                ) : null}
+  1498→                                {cr.status === "approved" && cr.invoiceId ? (
+  1499→                                  <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+  1500→                                    <ReceiptText className="h-3 w-3" aria-hidden /> Invoice tambahan diterbitkan
+  1501→                                  </span>
+  1502→                                ) : null}
+  1503→                              </div>
+  1504→                            ) : null}
+  1505→                            {cr.status === "pending" ? (
+  1506→                              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+  1507→                                {canDecideCr ? (
+  1508→                                  <>
+  1509→                                    <Button
+  1510→                                      size="sm"
+  1511→                                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+  1512→                                      onClick={() => openDecide(cr, "approve")}
+  1513→                                      aria-label={`Setujui change request ${cr.number}`}
+  1514→                                    >
+  1515→                                      <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+  1516→                                    </Button>
+  1517→                                    <Button
+  1518→                                      size="sm"
+  1519→                                      variant="outline"
+  1520→                                      className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+  1521→                                      onClick={() => openDecide(cr, "reject")}
+  1522→                                      aria-label={`Tolak change request ${cr.number}`}
+  1523→                                    >
+  1524→                                      <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+  1525→                                    </Button>
+  1526→                                  </>
+  1527→                                ) : null}
+  1528→                                <Button
+  1529→                                  size="sm"
+  1530→                                  variant="outline"
+  1531→                                  className="border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-800"
+  1532→                                  onClick={() => openDecide(cr, "cancel")}
+  1533→                                  aria-label={`Batalkan change request ${cr.number}`}
+  1534→                                >
+  1535→                                  <XCircle className="h-3.5 w-3.5" aria-hidden /> Batalkan
+  1536→                                </Button>
+  1537→                              </div>
+  1538→                            ) : null}
+  1539→                          </div>
+  1540→                        );
+  1541→                      })
+  1542→                    )}
+  1543→                  </div>
+  1544→                </div>
+  1545→
+  1546→                {/* Update status & progress */}
+  1547→                <form onSubmit={saveDetail} className="space-y-3 rounded-xl border bg-zinc-50 p-4">
+  1548→                  <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+  1549→                    <Factory className="h-3.5 w-3.5" aria-hidden /> Update Produksi
+  1550→                  </p>
+  1551→                  <div className="grid gap-3 sm:grid-cols-2">
+  1552→                    <div className="grid gap-1.5">
+  1553→                      <Label htmlFor="proj-status">Status</Label>
+  1554→                      <Select value={editStatus} onValueChange={setEditStatus}>
+  1555→                        <SelectTrigger id="proj-status"><SelectValue /></SelectTrigger>
+  1556→                        <SelectContent>
+  1557→                          <SelectItem value="planning">Perencanaan</SelectItem>
+  1558→                          <SelectItem value="in_progress">Berjalan</SelectItem>
+  1559→                          <SelectItem value="review">Review</SelectItem>
+  1560→                          <SelectItem value="completed">Selesai</SelectItem>
+  1561→                        </SelectContent>
+  1562→                      </Select>
+  1563→                    </div>
+  1564→                    <div className="grid gap-1.5">
+  1565→                      <Label htmlFor="proj-progress">Progress (0–100)</Label>
+  1566→                      <Input
+  1567→                        id="proj-progress" type="number" min={0} max={100}
+  1568→                        value={editProgress}
+  1569→                        onChange={(e) => setEditProgress(e.target.value)}
+  1570→                      />
+  1571→                    </div>
+  1572→                  </div>
+  1573→                  <SheetFooter className="px-0">
+  1574→                    <Button type="submit" disabled={savingDetail} aria-label="Simpan perubahan project">
+  1575→                      {savingDetail ? "Menyimpan…" : "Simpan Perubahan"}
+  1576→                    </Button>
+  1577→                  </SheetFooter>
+  1578→                </form>
+  1579→              </div>
+  1580→            </>
+  1581→          ) : null}
+  1582→        </SheetContent>
+  1583→      </Sheet>
+  1584→
+  1585→      {/* Dialog pengajuan change request */}
+  1586→      <Dialog open={crDialogOpen} onOpenChange={setCrDialogOpen}>
+  1587→        <DialogContent className="sm:max-w-md" aria-label="Form pengajuan change request">
+  1588→          <DialogHeader>
+  1589→            <DialogTitle>Ajukan Change Request</DialogTitle>
+  1590→            <DialogDescription>
+  1591→              Usulkan perubahan scope untuk {detail?.code ?? "project"}. Setelah klien menyetujui, nilai kontrak &amp;
+  1592→              deadline project otomatis diperbarui dan invoice tambahan dibuat.
+  1593→            </DialogDescription>
+  1594→          </DialogHeader>
+  1595→          <form onSubmit={submitCreateCr} className="space-y-3">
+  1596→            <div className="grid gap-1.5">
+  1597→              <Label htmlFor="cr-title">Judul</Label>
+  1598→              <Input
+  1599→                id="cr-title"
+  1600→                value={crTitle}
+  1601→                onChange={(e) => setCrTitle(e.target.value)}
+  1602→                placeholder="Contoh: Tambahan halaman landing page"
+  1603→                required
+  1604→                aria-label="Judul change request"
+  1605→              />
+  1606→            </div>
+  1607→            <div className="grid gap-1.5">
+  1608→              <Label htmlFor="cr-desc">Deskripsi perubahan scope</Label>
+  1609→              <Textarea
+  1610→                id="cr-desc"
+  1611→                value={crDesc}
+  1612→                onChange={(e) => setCrDesc(e.target.value)}
+  1613→                placeholder="Jelaskan perubahan scope yang diminta…"
+  1614→                rows={3}
+  1615→                required
+  1616→                aria-label="Deskripsi perubahan scope"
+  1617→              />
+  1618→            </div>
+  1619→            <div className="grid gap-3 sm:grid-cols-2">
+  1620→              <div className="grid gap-1.5">
+  1621→                <Label htmlFor="cr-cost">Biaya tambahan (IDR)</Label>
+  1622→                <Input
+  1623→                  id="cr-cost"
+  1624→                  type="number"
+  1625→                  min={0}
+  1626→                  step={1}
+  1627→                  inputMode="numeric"
+  1628→                  value={crCost}
+  1629→                  onChange={(e) => setCrCost(e.target.value)}
+  1630→                  placeholder="0"
+  1631→                  aria-label="Biaya tambahan dalam rupiah"
+  1632→                />
+  1633→              </div>
+  1634→              <div className="grid gap-1.5">
+  1635→                <Label htmlFor="cr-days">Perpanjangan deadline (hari)</Label>
+  1636→                <Input
+  1637→                  id="cr-days"
+  1638→                  type="number"
+  1639→                  min={0}
+  1640→                  step={1}
+  1641→                  inputMode="numeric"
+  1642→                  value={crDays}
+  1643→                  onChange={(e) => setCrDays(e.target.value)}
+  1644→                  placeholder="0"
+  1645→                  aria-label="Perpanjangan deadline dalam hari"
+  1646→                />
+  1647→              </div>
+  1648→            </div>
+  1649→            <p className="text-[11px] text-zinc-500">
+  1650→              Diajukan oleh {user?.name ?? "-"} — menunggu persetujuan Direktur, Super Admin, atau klien.
+  1651→            </p>
+  1652→            <DialogFooter className="gap-2">
+  1653→              <Button
+  1654→                type="button"
+  1655→                variant="outline"
+  1656→                onClick={() => setCrDialogOpen(false)}
+  1657→                disabled={crSaving}
+  1658→                aria-label="Batal ajukan change request"
+  1659→              >
+  1660→                Batal
+  1661→              </Button>
+  1662→              <Button type="submit" disabled={crSaving} aria-label="Kirim pengajuan change request">
+  1663→                {crSaving ? "Mengirim…" : "Ajukan Change Request"}
+  1664→              </Button>
+  1665→            </DialogFooter>
+  1666→          </form>
+  1667→        </DialogContent>
+  1668→      </Dialog>
+  1669→
+  1670→      {/* AlertDialog konfirmasi keputusan change request */}
+  1671→      <AlertDialog
+  1672→        open={decideTarget !== null}
+  1673→        onOpenChange={(open) => { if (!open) setDecideTarget(null); }}
+  1674→      >
+  1675→        <AlertDialogContent>
+  1676→          <AlertDialogHeader>
+  1677→            <AlertDialogTitle>
+  1678→              {decideTarget?.decision === "approve"
+  1679→                ? "Setujui change request?"
+  1680→                : decideTarget?.decision === "cancel"
+  1681→                  ? "Batalkan change request?"
+  1682→                  : "Tolak change request?"}
+  1683→            </AlertDialogTitle>
+  1684→            <AlertDialogDescription>
+  1685→              {decideTarget?.decision === "cancel" ? (
+  1686→                decideTarget
+  1687→                  ? `${decideTarget.cr.number} akan dibatalkan dan tidak diproses lebih lanjut.`
+  1688→                  : ""
+  1689→              ) : (
+  1690→                <>
+  1691→                  {decideTarget
+  1692→                    ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
+  1693→                    : ""}
+  1694→                  {decideTarget?.decision === "approve"
+  1695→                    ? " Nilai kontrak &amp; deadline project akan diperbarui dan invoice tambahan diterbitkan otomatis."
+  1696→                    : " Perubahan scope tidak akan diterapkan."}
+  1697→                </>
+  1698→              )}
+  1699→            </AlertDialogDescription>
+  1700→          </AlertDialogHeader>
+  1701→          <div className="grid gap-1.5">
+  1702→            <Label htmlFor="cr-decision-note">Catatan keputusan (opsional)</Label>
+  1703→            <Textarea
+  1704→              id="cr-decision-note"
+  1705→              value={decideNote}
+  1706→              onChange={(e) => setDecideNote(e.target.value)}
+  1707→              placeholder={
+  1708→                decideTarget?.decision === "approve" ? "Contoh: Disetujui sesuai diskusi dengan klien"
+  1709→                : decideTarget?.decision === "cancel" ? "Contoh: Change request diajukan keliru"
+  1710→                : "Contoh: Scope di luar anggaran tahun ini"
+  1711→              }
+  1712→              rows={3}
+  1713→              aria-label="Catatan keputusan change request"
+  1714→            />
+  1715→          </div>
+  1716→          <AlertDialogFooter>
+  1717→            <AlertDialogCancel disabled={deciding} aria-label="Batal memutuskan change request">Batal</AlertDialogCancel>
+  1718→            <AlertDialogAction
+  1719→              disabled={deciding}
+  1720→              onClick={(e) => { e.preventDefault(); void submitDecision(); }}
+  1721→              className={
+  1722→                decideTarget?.decision === "approve"
+  1723→                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+  1724→                  : decideTarget?.decision === "cancel"
+  1725→                    ? "bg-zinc-900 text-white hover:bg-zinc-700"
+  1726→                    : "bg-rose-600 text-white hover:bg-rose-700"
+  1727→              }
+  1728→              aria-label={`Konfirmasi ${decideTarget?.decision === "approve" ? "setujui" : decideTarget?.decision === "cancel" ? "batalkan" : "tolak"} change request`}
+  1729→            >
+  1730→              {deciding
+  1731→                ? "Memproses…"
+  1732→                : decideTarget?.decision === "approve"
+  1733→                  ? "Ya, Setujui"
+  1734→                  : decideTarget?.decision === "cancel"
+  1735→                    ? "Ya, Batalkan"
+  1736→                    : "Ya, Tolak"}
+  1737→            </AlertDialogAction>
+  1738→          </AlertDialogFooter>
+  1739→        </AlertDialogContent>
+  1740→      </AlertDialog>
+  1741→
+  1742→      {/* Fase 3c / Ronde 16 — dialog "Jadwalkan Ulang" (fallback klik kanan / long-press / Shift+F10).
+  1743→           Varian milestone: tanggal + status. Varian deadline project: tanggal saja. */}
+  1744→      <Dialog
+  1745→        open={rescheduleTarget !== null}
+  1746→        onOpenChange={(open) => { if (!open && !rescheduleSaving) setRescheduleTarget(null); }}
+  1747→      >
+  1748→        <DialogContent
+  1749→          className="rounded-xl sm:max-w-sm"
+  1750→          aria-label={rescheduleTarget?.kind === "project" ? "Jadwalkan ulang deadline project" : "Jadwalkan ulang milestone"}
+  1751→        >
+  1752→          <DialogHeader>
+  1753→            <DialogTitle>
+  1754→              {rescheduleTarget?.kind === "project" ? "Jadwalkan Ulang Deadline Project" : "Jadwalkan Ulang Milestone"}
+  1755→            </DialogTitle>
+  1756→            <DialogDescription>
+  1757→              {rescheduleTarget
+  1758→                ? rescheduleTarget.kind === "project"
+  1759→                  ? `${rescheduleTarget.project.code} · ${rescheduleTarget.project.name}`
+  1760→                  : `${rescheduleTarget.project.code} · ${rescheduleTarget.project.name} — ${rescheduleTarget.milestone.name}`
+  1761→                : "Pilih tanggal deadline baru."}
+  1762→            </DialogDescription>
+  1763→          </DialogHeader>
+  1764→          {rescheduleCurrent ? (
+  1765→            <div className="space-y-3">
+  1766→              <p className="text-xs text-zinc-500">
+  1767→                Tanggal saat ini:{" "}
+  1768→                <span className="font-medium text-zinc-700">
+  1769→                  {rescheduleCurrent.dueDate ? formatDate(rescheduleCurrent.dueDate) : "belum diatur"}
+  1770→                </span>
+  1771→              </p>
+  1772→              <div className="grid gap-1.5">
+  1773→                <Label htmlFor="ms-reschedule-date" className="text-xs uppercase tracking-wide text-zinc-500">
+  1774→                  Tanggal deadline
+  1775→                </Label>
+  1776→                <Input
+  1777→                  id="ms-reschedule-date"
+  1778→                  type="date"
+  1779→                  value={rescheduleDate}
+  1780→                  onChange={(e) => setRescheduleDate(e.target.value)}
+  1781→                  aria-label={rescheduleTarget?.kind === "project" ? "Tanggal deadline baru project" : "Tanggal deadline baru milestone"}
+  1782→                />
+  1783→              </div>
+  1784→              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Pintasan geser tanggal">
+  1785→                {[1, 7, 14].map((n) => (
+  1786→                  <Button
+  1787→                    key={n}
+  1788→                    type="button"
+  1789→                    variant="outline"
+  1790→                    size="sm"
+  1791→                    className="h-7 hover:bg-zinc-50"
+  1792→                    onClick={() => bumpRescheduleDate(n)}
+  1793→                    aria-label={`Geser tanggal maju ${n} hari`}
+  1794→                  >
+  1795→                    +{n} hari
+  1796→                  </Button>
+  1797→                ))}
+  1798→              </div>
+  1799→              {rescheduleTarget?.kind === "milestone" ? (
+  1800→                <div className="grid gap-1.5">
+  1801→                  <Label htmlFor="ms-reschedule-status" className="text-xs uppercase tracking-wide text-zinc-500">
+  1802→                    Status
+  1803→                  </Label>
+  1804→                  <Select value={rescheduleStatus} onValueChange={setRescheduleStatus}>
+  1805→                    <SelectTrigger id="ms-reschedule-status" aria-label="Status milestone">
+  1806→                      <SelectValue />
+  1807→                    </SelectTrigger>
+  1808→                    <SelectContent>
+  1809→                      <SelectItem value="pending">Menunggu</SelectItem>
+  1810→                      <SelectItem value="in_progress">Dikerjakan</SelectItem>
+  1811→                      <SelectItem value="done">Selesai</SelectItem>
+  1812→                    </SelectContent>
+  1813→                  </Select>
+  1814→                </div>
+  1815→              ) : null}
+  1816→            </div>
+  1817→          ) : null}
+  1818→          <DialogFooter className="gap-2">
+  1819→            <Button
+  1820→              type="button"
+  1821→              variant="outline"
+  1822→              onClick={() => setRescheduleTarget(null)}
+  1823→              disabled={rescheduleSaving}
+  1824→              aria-label={rescheduleTarget?.kind === "project" ? "Batal jadwalkan ulang deadline project" : "Batal jadwalkan ulang milestone"}
+  1825→            >
+  1826→              Batal
+  1827→            </Button>
+  1828→            <Button
+  1829→              type="button"
+  1830→              onClick={() => void handleSaveRescheduleDialog()}
+  1831→              disabled={!rescheduleDirty || rescheduleSaving}
+  1832→              aria-label={rescheduleTarget?.kind === "project" ? "Simpan deadline project" : "Simpan jadwal milestone"}
+  1833→            >
+  1834→              {rescheduleSaving ? "Menyimpan…" : "Simpan"}
+  1835→            </Button>
+  1836→          </DialogFooter>
+  1837→        </DialogContent>
+  1838→      </Dialog>
+  1839→    </div>
+  1840→  );
+  1841→}
+  1842→
