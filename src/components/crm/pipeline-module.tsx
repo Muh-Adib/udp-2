@@ -17,6 +17,7 @@ import {
   ArrowDownWideNarrow,
   ArrowUp,
   ArrowUpDown,
+  Copy,
   Download,
   FileUp,
   Flame,
@@ -693,6 +694,8 @@ function ImportOpportunitiesDialog({
   const [fileName, setFileName] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, string>[]>([]);
   const [preview, setPreview] = useState<ImportOpportunityPreviewResponseDTO | null>(null);
+  // Keputusan per baris duplikat (16-b): "Lewati" (default) | "Buat baru" | "Perbarui yang ada".
+  const [rowActions, setRowActions] = useState<Record<number, "skip" | "create" | "update">>({});
   const [analyzing, setAnalyzing] = useState(false);
   const [committing, setCommitting] = useState(false);
 
@@ -701,6 +704,7 @@ function ImportOpportunitiesDialog({
       setFileName(null);
       setRows([]);
       setPreview(null);
+      setRowActions({});
       setAnalyzing(false);
       setCommitting(false);
     }
@@ -715,7 +719,14 @@ function ImportOpportunitiesDialog({
         actorName: user?.name ?? "System",
         actorRole: user?.role ?? "system",
       });
-      setPreview(res as ImportOpportunityPreviewResponseDTO);
+      const data = res as ImportOpportunityPreviewResponseDTO;
+      setPreview(data);
+      // Baris duplikat default "Lewati".
+      const init: Record<number, "skip" | "create" | "update"> = {};
+      for (const r of data.preview) {
+        if (r.duplicateOf) init[r.index] = "skip";
+      }
+      setRowActions(init);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menganalisis data impor");
     } finally {
@@ -756,9 +767,14 @@ function ImportOpportunitiesDialog({
         commit: true,
         actorName: user?.name ?? "System",
         actorRole: user?.role ?? "system",
+        rowActions,
       });
       const data = res as ImportOpportunityCommitResponseDTO;
-      toast.success(`Impor selesai — ${data.summary.created} opportunity dibuat, ${data.summary.skipped} dilewati`);
+      const parts = [`${data.summary.created} opportunity dibuat`];
+      if (data.summary.updated > 0) parts.push(`${data.summary.updated} diperbarui`);
+      parts.push(`${data.summary.skipped} dilewati`);
+      if (data.summary.invalid > 0) parts.push(`${data.summary.invalid} invalid`);
+      toast.success(`Impor selesai — ${parts.join(", ")}`);
       onImported();
       onOpenChange(false);
     } catch (err) {
@@ -772,6 +788,22 @@ function ImportOpportunitiesDialog({
     setPreview(null);
     setRows([]);
     setFileName(null);
+    setRowActions({});
+  }
+
+  // Rencana aksi untuk footer: baris valid non-duplikat = buat baru, duplikat sesuai pilihan (default lewati).
+  const duplicateCount = preview?.summary.duplicateCount ?? 0;
+  let plannedCreate = 0;
+  let plannedUpdate = 0;
+  let plannedSkip = 0;
+  if (preview) {
+    for (const r of preview.preview) {
+      if (r.status !== "valid") continue;
+      const a = r.duplicateOf ? (rowActions[r.index] ?? "skip") : "create";
+      if (a === "create") plannedCreate++;
+      else if (a === "update") plannedUpdate++;
+      else plannedSkip++;
+    }
   }
 
   return (
@@ -851,6 +883,22 @@ function ImportOpportunitiesDialog({
               </span>
             </div>
 
+            {/* Ringkasan dedupe (16-b) — hanya bila ada baris duplikat */}
+            {preview.summary.duplicateCount > 0 && (
+              <div
+                className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
+                role="status"
+                aria-label={`${preview.summary.duplicateCount} duplikat terdeteksi`}
+              >
+                <Copy className="mt-0.5 size-3.5 shrink-0 text-amber-600" aria-hidden />
+                <span>
+                  <span className="font-semibold">{preview.summary.duplicateCount} duplikat terdeteksi</span>
+                  {" "}— pilih tindakan per baris pada kolom Tindakan. Baris duplikat default dilewati; saat
+                  memilih perbarui, judul, brand, perusahaan, dan kontak tidak akan ditimpa.
+                </span>
+              </div>
+            )}
+
             {/* Tabel pratinjau per baris */}
             <div className="crm-scroll max-h-96 overflow-y-auto overflow-x-auto rounded-xl border bg-white shadow-sm">
               <Table>
@@ -863,11 +911,15 @@ function ImportOpportunitiesDialog({
                     <TableHead className="text-right">Nilai</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Catatan</TableHead>
+                    <TableHead className="text-right">Tindakan</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {preview.preview.map((row) => (
-                    <TableRow key={row.index}>
+                    <TableRow
+                      key={row.index}
+                      className={row.duplicateOf ? "bg-amber-50/50" : undefined}
+                    >
                       <TableCell className="max-w-40 truncate font-medium text-zinc-800" title={row.judul}>
                         {row.judul || "-"}
                       </TableCell>
@@ -882,13 +934,25 @@ function ImportOpportunitiesDialog({
                         {formatNilaiImport(row.nilai)}
                       </TableCell>
                       <TableCell>
-                        <span
-                          className={cn(
-                            "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                            importStatusChipClass(row.status)
+                        <span className="flex flex-wrap items-center gap-1">
+                          <span
+                            className={cn(
+                              "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                              importStatusChipClass(row.status)
+                            )}
+                          >
+                            {row.status === "valid" ? "Valid" : row.status === "review" ? "Review" : "Invalid"}
+                          </span>
+                          {row.duplicateOf && (
+                            <span
+                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
+                              title={`Duplikat dari opportunity existing: "${row.duplicateOf.title}" (dibuat ${formatDate(row.duplicateOf.createdAt)})`}
+                              aria-label={`Duplikat dari: ${row.duplicateOf.title}`}
+                            >
+                              <Copy className="size-3" aria-hidden />
+                              Duplikat
+                            </span>
                           )}
-                        >
-                          {row.status === "valid" ? "Valid" : row.status === "review" ? "Review" : "Invalid"}
                         </span>
                       </TableCell>
                       <TableCell className="max-w-44">
@@ -900,6 +964,35 @@ function ImportOpportunitiesDialog({
                           <span className="text-xs text-zinc-400">—</span>
                         )}
                       </TableCell>
+                      <TableCell className="text-right">
+                        {row.duplicateOf ? (
+                          <div className="flex justify-end">
+                            <Select
+                              value={rowActions[row.index] ?? "skip"}
+                              onValueChange={(v) =>
+                                setRowActions((prev) => ({
+                                  ...prev,
+                                  [row.index]: v as "skip" | "create" | "update",
+                                }))
+                              }
+                            >
+                              <SelectTrigger
+                                className="h-8 w-[136px] text-xs"
+                                aria-label={`Tindakan baris ${row.index + 1} (${row.judul || "tanpa judul"})`}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="skip">Lewati</SelectItem>
+                                <SelectItem value="create">Buat baru</SelectItem>
+                                <SelectItem value="update">Perbarui yang ada</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-zinc-300">—</span>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -908,8 +1001,17 @@ function ImportOpportunitiesDialog({
 
             <DialogFooter>
               <span className="mr-auto hidden self-center text-xs text-zinc-500 sm:block">
-                {preview.summary.valid} siap diimpor · {preview.summary.review} review dilewati ·{" "}
-                {preview.summary.invalid} invalid
+                {duplicateCount > 0 ? (
+                  <>
+                    {plannedCreate} dibuat baru · {plannedUpdate} diperbarui · {plannedSkip} duplikat dilewati ·{" "}
+                    {preview.summary.review} review · {preview.summary.invalid} invalid
+                  </>
+                ) : (
+                  <>
+                    {preview.summary.valid} siap diimpor · {preview.summary.review} review dilewati ·{" "}
+                    {preview.summary.invalid} invalid
+                  </>
+                )}
               </span>
               <Button variant="outline" onClick={backToInput} disabled={committing}>
                 Unggah ulang

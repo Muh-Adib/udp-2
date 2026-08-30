@@ -441,3 +441,18 @@ model NotificationState {
   @@unique([userKey, notifKey])
   @@index([userKey])
 }
+
+// ============ PREFERENSI PENGGUNA (Fase 3 — sinkron antar perangkat) ============
+// KV store preferensi per pengguna; value berupa JSON string.
+// Sumber kebenaran lintas perangkat (localStorage hanya cache instan/offline).
+model UserPreference {
+  id        String   @id @default(cuid())
+  userKey   String // email user (persona demo) — kunci stabilitas per pengguna
+  key       String // kunci preferensi, mis. "notif-prefs"
+  value     String // JSON string
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userKey, key])
+  @@index([userKey])
+}

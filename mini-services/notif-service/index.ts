@@ -8,7 +8,9 @@
  *  - "unsubscribe"                  → leave room socket tsb
  *  - "ping"                         → "pong" {at}
  *  - Poll loop 15 dtk: utk tiap room aktif → GET http://localhost:3000/api/notifications?user=... (+brandId)
- *    → hash sha1(`${unread}|${items.map(i=>i.key).join(",")}`) → berubah? emit "notif:changed".
+ *    → hash sha1(`${unread}|${items.map(i=>i.key).join(",")}|${prefsUpdatedAt}`) → berubah? emit "notif:changed".
+ *    Ronde 16-c: updatedAt dari GET /api/notif-prefs?user=<email> ikut di-hash, sehingga perubahan
+ *    preferensi di perangkat B mendorong "notif:changed" ke perangkat A (adopsi prefs tanpa reload).
  *    Observasi pertama per room = baseline saja (tanpa emit).
  */
 import { createServer } from "http";
@@ -113,6 +115,10 @@ io.on("connection", (socket) => {
   });
 });
 
+/** room key → stamp updatedAt preferensi terakhir yang berhasil diambil (cache agar
+ * kegagalan fetch prefs sesaat tidak memicu emit palsu). */
+const prefsStamps = new Map<string, string>();
+
 function sha1(s: string): string {
   return createHash("sha1").update(s).digest("hex");
 }
@@ -135,7 +141,20 @@ async function pollOnce(): Promise<void> {
       const unread = Number(data?.unread ?? 0);
       const items = Array.isArray(data?.items) ? data.items : [];
       const keyList = items.map((i) => String(i.key ?? "")).join(",");
-      const hash = sha1(`${unread}|${keyList}`);
+      // Ronde 16-c: sertakan updatedAt preferensi notifikasi dalam hash —
+      // perubahan prefs di perangkat lain juga mendorong "notif:changed".
+      let prefsStamp = prefsStamps.get(key) ?? "";
+      try {
+        const pres = await fetch(`${APP_ORIGIN}/api/notif-prefs?user=${encodeURIComponent(email)}`);
+        if (pres.ok) {
+          const pjson = (await pres.json()) as { updatedAt?: string | null };
+          prefsStamp = typeof pjson?.updatedAt === "string" ? pjson.updatedAt : "";
+          prefsStamps.set(key, prefsStamp);
+        }
+      } catch {
+        // prefs tak terjangkau sesaat — pakai stamp cache terakhir (hindari emit palsu)
+      }
+      const hash = sha1(`${unread}|${keyList}|${prefsStamp}`);
       const prev = baselines.get(key);
       baselines.set(key, hash);
       fetchFailLogged = false;

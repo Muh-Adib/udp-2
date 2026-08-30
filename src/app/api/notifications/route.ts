@@ -52,32 +52,40 @@ export async function GET(req: NextRequest) {
     if (drafts.length < 60) drafts.push(d);
   };
 
-  // 1. SLA breach — lead inbound belum dikonversi melewati slaHours brand
+  // 1. SLA breach — lead inbound BELUM direspons & belum dikonversi melewati slaHours brand
+  //    Fix ronde 16: filter respondedAt:null (lead terrespons tak boleh menggantung),
+  //    ambil 150 terbaru (desc) agar breach baru SELALU masuk walau backlog besar,
+  //    lalu urutkan breach dgn jam-tunggu terbesar dulu (paling kritis di atas).
   if (MARKETING_ROLES.has(role)) {
     const leads = await db.interaction.findMany({
-      where: { direction: "inbound", opportunityId: null, ...(brandWhere ? { brand: brandWhere } : {}) },
+      where: {
+        direction: "inbound",
+        opportunityId: null,
+        respondedAt: null,
+        ...(brandWhere ? { brand: brandWhere } : {}),
+      },
       include: { brand: true, contact: true },
-      orderBy: { createdAt: "asc" },
-      take: 30,
+      orderBy: { createdAt: "desc" },
+      take: 150,
     });
-    for (const lead of leads) {
-      const sla = lead.brand?.slaHours ?? 4;
-      const waited = ageHours(lead.createdAt);
-      if (waited > sla) {
-        push({
-          key: `sla:${lead.id}`,
-          type: "sla",
-          severity: "danger",
-          title: `SLA terlampaui: ${lead.contact?.fullName ?? lead.senderName ?? "Lead baru"}`,
-          description: `Menunggu respons ${waited} jam (SLA ${sla} jam) via ${lead.channel}.`,
-          module: "inbox",
-          brandName: lead.brand?.name ?? null,
-          brandColor: lead.brand?.color ?? null,
-          entityLabel: null,
-          at: lead.createdAt.toISOString(),
-          ageHours: waited,
-        });
-      }
+    const breached = leads
+      .map((lead) => ({ lead, sla: lead.brand?.slaHours ?? 4, waited: ageHours(lead.createdAt) }))
+      .filter((x) => x.waited > x.sla)
+      .sort((a, b) => b.waited - a.waited);
+    for (const { lead, sla, waited } of breached) {
+      push({
+        key: `sla:${lead.id}`,
+        type: "sla",
+        severity: "danger",
+        title: `SLA terlampaui: ${lead.contact?.fullName ?? lead.senderName ?? "Lead baru"}`,
+        description: `Menunggu respons ${waited} jam (SLA ${sla} jam) via ${lead.channel}.`,
+        module: "inbox",
+        brandName: lead.brand?.name ?? null,
+        brandColor: lead.brand?.color ?? null,
+        entityLabel: null,
+        at: lead.createdAt.toISOString(),
+        ageHours: waited,
+      });
     }
   }
 

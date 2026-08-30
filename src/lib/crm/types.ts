@@ -372,7 +372,14 @@ export interface ImportCommitResponseDTO {
 
 // ============ IMPORT CSV OPPORTUNITY (round-trip dgn ekspor ronde 13) ============
 
-/** Baris preview impor opportunity — status valid/review/invalid + alasan validasi. */
+/** Opportunity existing yang dicocokkan sebagai duplikat saat impor (16-b). */
+export interface ImportDuplicateOfDTO {
+  id: string;
+  title: string;
+  createdAt: string;
+}
+
+/** Baris preview impor opportunity — status valid/review/invalid + alasan validasi + deteksi duplikat. */
 export interface ImportOpportunityRowDTO {
   index: number;
   judul: string;
@@ -386,23 +393,28 @@ export interface ImportOpportunityRowDTO {
   nilai: string;
   status: "valid" | "review" | "invalid";
   errors: string[];
+  /** Terisi bila baris valid cocok dengan opportunity existing (judul+brand+perusahaan sama). */
+  duplicateOf: ImportDuplicateOfDTO | null;
 }
 
 export interface ImportOpportunityPreviewResponseDTO {
   preview: ImportOpportunityRowDTO[];
-  summary: { total: number; valid: number; invalid: number; review: number };
+  summary: { total: number; valid: number; invalid: number; review: number; duplicateCount: number };
 }
 
 export interface ImportOpportunityCommitResultRowDTO {
   index: number;
-  action: "create" | "skip" | "invalid";
+  action: "create" | "skip" | "invalid" | "update";
   opportunityId?: string;
   label?: string;
   error?: string;
+  duplicateOf?: ImportDuplicateOfDTO | null;
+  /** Rincian field yang berubah (hanya untuk action "update"). */
+  changed?: string[];
 }
 
 export interface ImportOpportunityCommitResponseDTO {
-  summary: { created: number; skipped: number; invalid: number };
+  summary: { created: number; skipped: number; invalid: number; updated: number };
   results: ImportOpportunityCommitResultRowDTO[];
 }
 

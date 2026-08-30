@@ -105,8 +105,15 @@ export const api = {
     request<import("@/lib/crm/types").ImportPreviewResponseDTO | import("@/lib/crm/types").ImportCommitResponseDTO>(
       "/api/contacts/import", { method: "POST", body: JSON.stringify(payload) }
     ),
-  /** Import CSV opportunity (round-trip dgn ekspor ronde 13): preview validasi atau commit pembuatan. */
-  importOpportunities: (payload: { rows: Record<string, string>[]; commit: boolean; actorName: string; actorRole: string }) =>
+  /** Import CSV opportunity (round-trip dgn ekspor ronde 13): preview validasi+dedupe atau commit dgn keputusan per baris duplikat (16-b). */
+  importOpportunities: (payload: {
+    rows: Record<string, string>[];
+    commit: boolean;
+    actorName: string;
+    actorRole: string;
+    /** Keputusan per baris duplikat (keyed by row index): default duplikat = "skip". */
+    rowActions?: Record<number, "skip" | "create" | "update">;
+  }) =>
     request<import("@/lib/crm/types").ImportOpportunityPreviewResponseDTO | import("@/lib/crm/types").ImportOpportunityCommitResponseDTO>(
       "/api/opportunities/import", { method: "POST", body: JSON.stringify(payload) }
     ),
@@ -207,6 +214,16 @@ export const api = {
   },
   markNotifications: (payload: { user: string; action: "read" | "unread" | "dismiss"; keys: string[] }) =>
     request<{ ok: boolean; updated: number }>("/api/notifications", { method: "POST", body: JSON.stringify(payload) }),
+
+  // Preferensi notifikasi (ronde 16-c) — tersinkron antar perangkat via tabel UserPreference
+  getNotifPrefs: (email: string) =>
+    request<{ prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }; updatedAt: string | null }>(
+      `/api/notif-prefs?user=${encodeURIComponent(email)}`
+    ),
+  putNotifPrefs: (email: string, prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }) =>
+    request<{ prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }; updatedAt: string | null }>(
+      "/api/notif-prefs", { method: "PUT", body: JSON.stringify({ user: email, ...prefs }) }
+    ),
 
   // Audit
   auditLogs: (params?: { limit?: number; entity?: string; action?: string }) => {

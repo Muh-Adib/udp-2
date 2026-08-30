@@ -448,20 +448,29 @@ function isSameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenReschedule }: {
+function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenReschedule, onRescheduleProject, onOpenRescheduleProject }: {
   projects: ProjectDTO[];
   onOpenDetail: (p: ProjectDTO) => void;
   /** Fase 3 — drag-reschedule: pindahkan deadline milestone ke tanggal lain. */
   onRescheduleMilestone?: (project: ProjectDTO, m: MilestoneDTO, newDate: Date) => void;
   /** Fase 3c — fallback touch/keyboard: buka dialog "Jadwalkan Ulang Milestone". */
   onOpenReschedule?: (project: ProjectDTO, m: MilestoneDTO) => void;
+  /** Ronde 16 — drag-reschedule deadline project (chip "deadline"). */
+  onRescheduleProject?: (p: ProjectDTO, newDate: Date) => void;
+  /** Ronde 16 — dialog "Jadwalkan Ulang Deadline Project" (klik kanan / Shift+F10). */
+  onOpenRescheduleProject?: (p: ProjectDTO) => void;
 }) {
   const [cursor, setCursor] = useState(() => {
     const n = new Date();
     return { year: n.getFullYear(), month: n.getMonth() };
   });
-  // State drag-reschedule (HTML5 drag events — ringan tanpa library)
-  const [dragging, setDragging] = useState<{ milestoneId: string; projectId: string } | null>(null);
+  // State drag-reschedule (HTML5 drag events — ringan tanpa library).
+  // Ronde 16: mendukung chip milestone DAN chip deadline project.
+  const [dragging, setDragging] = useState<
+    | { kind: "project"; projectId: string }
+    | { kind: "milestone"; projectId: string; milestoneId: string }
+    | null
+  >(null);
   const [dropDayKey, setDropDayKey] = useState<string | null>(null);
 
   // Event per tanggal (key "y-m-d" lokal). Project/milestone tanpa dueDate diabaikan.
@@ -602,10 +611,16 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
                     const target = dragging;
                     setDragging(null);
                     setDropDayKey(null);
-                    if (!target || !cell.date || !onRescheduleMilestone) return;
+                    if (!target || !cell.date) return;
                     const project = projects.find((p) => p.id === target.projectId);
-                    const ms = project?.milestones?.find((m) => m.id === target.milestoneId);
-                    if (project && ms) onRescheduleMilestone(project, ms, cell.date);
+                    if (!project) return;
+                    if (target.kind === "project") {
+                      onRescheduleProject?.(project, cell.date);
+                      return;
+                    }
+                    if (!onRescheduleMilestone) return;
+                    const ms = project.milestones?.find((m) => m.id === target.milestoneId);
+                    if (ms) onRescheduleMilestone(project, ms, cell.date);
                   }}
                 >
                   <div className="flex items-center">
@@ -627,12 +642,45 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
                             key={`p-${ev.project.id}`}
                             type="button"
                             onClick={() => onOpenDetail(ev.project)}
-                            title={`${ev.project.code} · ${ev.project.name} · deadline · ${ev.project.progress}%`}
-                            aria-label={`Buka detail project ${ev.project.name} (deadline)`}
-                            className="block w-full truncate rounded px-1.5 py-0.5 text-left text-[10px] font-medium text-white transition-opacity hover:opacity-80"
+                            draggable={Boolean(onRescheduleProject)}
+                            onDragStart={(e) => {
+                              if (!onRescheduleProject) return;
+                              e.dataTransfer.setData("text/plain", ev.project.id);
+                              e.dataTransfer.effectAllowed = "move";
+                              setDragging({ kind: "project", projectId: ev.project.id });
+                            }}
+                            onDragEnd={() => {
+                              setDragging(null);
+                              setDropDayKey(null);
+                            }}
+                            onContextMenu={(e) => {
+                              // Klik kanan & long-press mobile → dialog jadwalkan ulang deadline project
+                              if (!onOpenRescheduleProject) return;
+                              e.preventDefault();
+                              onOpenRescheduleProject(ev.project);
+                            }}
+                            onKeyDown={(e) => {
+                              // Shift+F10 / tombol ContextMenu → dialog jadwalkan ulang deadline project
+                              if (!onOpenRescheduleProject) return;
+                              if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onOpenRescheduleProject(ev.project);
+                              }
+                            }}
+                            title={`${ev.project.code} · ${ev.project.name} · deadline · ${ev.project.progress}%${onRescheduleProject ? " · seret untuk menjadwalkan ulang deadline" : ""}${onOpenRescheduleProject ? " · klik kanan atau Shift+F10 untuk dialog jadwalkan ulang" : ""}`}
+                            aria-label={`Buka detail project ${ev.project.name} (deadline)${onRescheduleProject ? ", seret untuk menjadwalkan ulang deadline" : ""}${onOpenRescheduleProject ? ", klik kanan atau Shift+F10 untuk jadwalkan ulang" : ""}`}
+                            className={cn(
+                              "group flex w-full select-none items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10px] font-medium text-white transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-1",
+                              onRescheduleProject && "cursor-grab active:cursor-grabbing",
+                              dragging?.kind === "project" && dragging.projectId === ev.project.id && "opacity-40"
+                            )}
                             style={{ backgroundColor: ev.project.brand?.color ?? "#3f3f46" }}
                           >
-                            {ev.project.code} · deadline
+                            <span className="truncate">{ev.project.code} · deadline</span>
+                            {onRescheduleProject ? (
+                              <GripVertical className="ml-auto h-3 w-3 shrink-0 text-white/80 opacity-0 transition-opacity group-hover:opacity-60" aria-hidden />
+                            ) : null}
                           </button>
                         ) : (
                           <button
@@ -644,7 +692,7 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
                               if (ev.milestone.status === "done") return;
                               e.dataTransfer.setData("text/plain", ev.milestone.id);
                               e.dataTransfer.effectAllowed = "move";
-                              setDragging({ milestoneId: ev.milestone.id, projectId: ev.project.id });
+                              setDragging({ kind: "milestone", projectId: ev.project.id, milestoneId: ev.milestone.id });
                             }}
                             onDragEnd={() => {
                               setDragging(null);
@@ -668,9 +716,9 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
                             title={`${ev.project.code} · ${ev.milestone.name} · ${msMeta(ev.milestone.status).label}${onOpenReschedule ? (ev.milestone.status !== "done" && onRescheduleMilestone ? " · seret atau klik kanan untuk menjadwalkan ulang" : " · klik kanan untuk menjadwalkan ulang") : ""}`}
                             aria-label={`Buka detail project ${ev.project.name} — milestone ${ev.milestone.name} (${msMeta(ev.milestone.status).label})${onOpenReschedule ? ", klik kanan atau Shift+F10 untuk jadwalkan ulang" : ""}`}
                             className={cn(
-                              "flex w-full select-none items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50",
+                              "flex w-full select-none items-center gap-1 truncate rounded border border-zinc-200 bg-white px-1 py-0.5 text-left text-[10px] text-zinc-700 transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-1",
                               ev.milestone.status !== "done" && onRescheduleMilestone && "cursor-grab active:cursor-grabbing hover:border-zinc-400",
-                              dragging?.milestoneId === ev.milestone.id && "opacity-40"
+                              dragging?.kind === "milestone" && dragging.milestoneId === ev.milestone.id && "opacity-40"
                             )}
                             style={{ borderLeftWidth: 2, borderLeftColor: ev.project.brand?.color ?? "#a1a1aa" }}
                           >
@@ -717,10 +765,10 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-emerald-500" aria-hidden /> Milestone selesai</span>
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-amber-500" aria-hidden /> Dikerjakan</span>
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rotate-45 rounded-[2px] bg-zinc-300" aria-hidden /> Menunggu</span>
-          {onOpenReschedule ? (
+          {onOpenReschedule || onOpenRescheduleProject ? (
             <span className="flex items-center gap-1.5 text-zinc-400">
               <GripVertical className="h-3 w-3" aria-hidden />
-              Seret atau klik-kanan milestone untuk menjadwalkan ulang
+              Seret atau klik-kanan milestone / deadline project untuk menjadwalkan ulang
             </span>
           ) : null}
         </div>
@@ -749,6 +797,11 @@ function ProjectsSkeleton() {
 
 // ============ Module utama ============
 
+// Fase 3c / Ronde 16 — target dialog jadwalkan ulang: milestone ATAU deadline project
+type RescheduleTarget =
+  | { kind: "project"; project: ProjectDTO }
+  | { kind: "milestone"; project: ProjectDTO; milestone: MilestoneDTO };
+
 export default function ProjectsModule() {
   const storeBrands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
@@ -776,8 +829,9 @@ export default function ProjectsModule() {
   const [decideNote, setDecideNote] = useState("");
   const [deciding, setDeciding] = useState(false);
 
-  // Fase 3c — dialog "Jadwalkan Ulang Milestone" (fallback klik kanan / long-press / keyboard)
-  const [rescheduleTarget, setRescheduleTarget] = useState<{ project: ProjectDTO; milestone: MilestoneDTO } | null>(null);
+  // Fase 3c — dialog "Jadwalkan Ulang" (fallback klik kanan / long-press / keyboard).
+  // Ronde 16: juga untuk deadline project (varian tanpa status).
+  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleStatus, setRescheduleStatus] = useState("pending");
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
@@ -788,16 +842,26 @@ export default function ProjectsModule() {
     .filter((c) => c.status === "approved")
     .reduce((s, c) => s + (c.additionalCost ?? 0), 0);
 
-  // Milestone aktif pada dialog jadwalkan ulang (lookup terkini dari state agar guard same-day akurat)
-  const rescheduleCurrent = rescheduleTarget
-    ? (projects ?? []).find((p) => p.id === rescheduleTarget.project.id)?.milestones?.find((x) => x.id === rescheduleTarget.milestone.id)
-      ?? rescheduleTarget.milestone
-    : null;
-  // Guard "same-day no-change": Simpan disabled bila tanggal sama DAN status tidak berubah
-  const rescheduleDirty = rescheduleCurrent
-    ? rescheduleDate !== toDateInputValue(rescheduleCurrent.dueDate ? new Date(rescheduleCurrent.dueDate) : null)
-      || rescheduleStatus !== rescheduleCurrent.status
-    : false;
+  // Item aktif pada dialog jadwalkan ulang (lookup terkini dari state agar guard same-day akurat).
+  // Untuk kind "project" item-nya adalah project itu sendiri; untuk milestone tetap milestone-nya.
+  const rescheduleCurrent = (() => {
+    if (!rescheduleTarget) return null;
+    const fresh = (projects ?? []).find((p) => p.id === rescheduleTarget.project.id) ?? rescheduleTarget.project;
+    return rescheduleTarget.kind === "project"
+      ? fresh
+      : fresh.milestones?.find((x) => x.id === rescheduleTarget.milestone.id) ?? rescheduleTarget.milestone;
+  })();
+  // Guard "same-day no-change": Simpan disabled bila tanggal sama DAN (utk milestone) status tidak berubah.
+  // Catatan: ProjectDTO JUGA punya field status (planning/in_progress/…) — jadi varian project TIDAK boleh
+  // membandingkan rescheduleStatus; hanya varian milestone yang memakai status chip.
+  const rescheduleDirty = (() => {
+    if (!rescheduleTarget || !rescheduleCurrent) return false;
+    const curDue = rescheduleCurrent.dueDate ? new Date(rescheduleCurrent.dueDate) : null;
+    const dateDirty = rescheduleDate !== toDateInputValue(curDue);
+    if (rescheduleTarget.kind !== "milestone") return dateDirty;
+    const ms = rescheduleCurrent as MilestoneDTO; // kind milestone → rescheduleCurrent pasti milestone
+    return dateDirty || rescheduleStatus !== ms.status;
+  })();
 
   const load = useCallback(async (silent = false): Promise<ProjectDTO[]> => {
     if (!silent) setLoading(true);
@@ -885,6 +949,12 @@ export default function ProjectsModule() {
       : d));
   }
 
+  /** Ronde 16 — sinkronkan perubahan dueDate project ke daftar + sheet detail (dipakai drag & dialog). */
+  function patchProjectDueDateState(projectId: string, dueDate: string | null) {
+    setProjects((prev) => (prev ?? []).map((p) => (p.id === projectId ? { ...p, dueDate } : p)));
+    setDetail((d) => (d && d.id === projectId ? { ...d, dueDate } : d));
+  }
+
   /** Fase 3 — drag-reschedule milestone di kalender: update optimis + revert bila gagal. */
   async function handleRescheduleMilestone(project: ProjectDTO, m: MilestoneDTO, newDate: Date) {
     const oldDue = m.dueDate ? new Date(m.dueDate) : null;
@@ -911,31 +981,92 @@ export default function ProjectsModule() {
     }
   }
 
+  /** Ronde 16 — drag-reschedule deadline project di kalender: update optimis + revert bila gagal. */
+  async function handleRescheduleProject(p: ProjectDTO, newDate: Date) {
+    const oldDue = p.dueDate ? new Date(p.dueDate) : null;
+    if (oldDue && isSameLocalDay(oldDue, newDate)) return; // guard: drop di sel tanggal yang sama = no-op
+
+    patchProjectDueDateState(p.id, newDate.toISOString()); // optimis
+    try {
+      await api.updateProject({
+        id: p.id,
+        dueDate: newDate.toISOString(),
+        actorName: user?.name ?? "Produksi",
+        actorRole: user?.role ?? "production",
+      });
+      toast.success(`Deadline ${p.code}: ${oldDue ? formatDate(oldDue) : "tanpa tanggal"} → ${formatDate(newDate)}`, {
+        description: p.name,
+      });
+    } catch (err) {
+      patchProjectDueDateState(p.id, oldDue ? oldDue.toISOString() : null); // revert
+      toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang deadline project");
+    }
+  }
+
   /** Fase 3c — buka dialog jadwalkan ulang dari chip kalender (klik kanan / Shift+F10 / long-press). */
   function openRescheduleDialog(project: ProjectDTO, m: MilestoneDTO) {
-    setRescheduleTarget({ project, milestone: m });
+    setRescheduleTarget({ kind: "milestone", project, milestone: m });
     setRescheduleDate(toDateInputValue(m.dueDate ? new Date(m.dueDate) : null));
     setRescheduleStatus(m.status);
   }
 
+  /** Ronde 16 — buka dialog jadwalkan ulang deadline project dari chip kalender (klik kanan / Shift+F10). */
+  function openRescheduleProjectDialog(p: ProjectDTO) {
+    setRescheduleTarget({ kind: "project", project: p });
+    setRescheduleDate(toDateInputValue(p.dueDate ? new Date(p.dueDate) : null));
+  }
+
   function bumpRescheduleDate(days: number) {
-    const base = parseDateInputValue(rescheduleDate)
-      ?? (rescheduleTarget?.milestone.dueDate ? new Date(rescheduleTarget.milestone.dueDate) : new Date());
+    const targetDue = rescheduleTarget
+      ? rescheduleTarget.kind === "project"
+        ? rescheduleTarget.project.dueDate
+        : rescheduleTarget.milestone.dueDate
+      : null;
+    const base = parseDateInputValue(rescheduleDate) ?? (targetDue ? new Date(targetDue) : new Date());
     const next = new Date(base.getFullYear(), base.getMonth(), base.getDate() + days, 12);
     setRescheduleDate(toDateInputValue(next));
   }
 
-  /** Fase 3c — simpan dialog: ubah dueDate dan/atau status milestone (optimis + revert bila gagal). */
+  /** Fase 3c / Ronde 16 — simpan dialog: ubah dueDate project ATAU dueDate+status milestone (optimis + revert bila gagal). */
   async function handleSaveRescheduleDialog() {
     if (!rescheduleTarget || !user) return;
-    // Ambil milestone terkini dari state (snapshot dialog bisa basi setelah update optimis sebelumnya)
+    // Ambil data terkini dari state (snapshot dialog bisa basi setelah update optimis sebelumnya)
     const project = (projects ?? []).find((p) => p.id === rescheduleTarget.project.id) ?? rescheduleTarget.project;
-    const m = project.milestones?.find((x) => x.id === rescheduleTarget.milestone.id) ?? rescheduleTarget.milestone;
     const newDate = parseDateInputValue(rescheduleDate);
     if (!newDate) {
       toast.error("Pilih tanggal deadline yang valid");
       return;
     }
+
+    // --- Ronde 16: varian deadline project (tanpa status) ---
+    if (rescheduleTarget.kind === "project") {
+      const oldDue = project.dueDate ? new Date(project.dueDate) : null;
+      if (oldDue && isSameLocalDay(oldDue, newDate)) return; // guard: tidak ada perubahan
+
+      setRescheduleSaving(true);
+      patchProjectDueDateState(project.id, newDate.toISOString()); // optimis
+      try {
+        await api.updateProject({
+          id: project.id,
+          dueDate: newDate.toISOString(),
+          actorName: user.name,
+          actorRole: user.role,
+        });
+        toast.success(`Deadline ${project.code}: ${oldDue ? formatDate(oldDue) : "tanpa tanggal"} → ${formatDate(newDate)}`, {
+          description: project.name,
+        });
+        setRescheduleTarget(null); // tutup pada sukses
+      } catch (err) {
+        patchProjectDueDateState(project.id, oldDue ? oldDue.toISOString() : null); // revert
+        toast.error(err instanceof Error ? err.message : "Gagal menjadwalkan ulang deadline project");
+      } finally {
+        setRescheduleSaving(false);
+      }
+      return;
+    }
+
+    // --- Fase 3c: varian milestone (dueDate + status) ---
+    const m = project.milestones?.find((x) => x.id === rescheduleTarget.milestone.id) ?? rescheduleTarget.milestone;
     const oldDue = m.dueDate ? new Date(m.dueDate) : null;
     const dateChanged = !oldDue || !isSameLocalDay(oldDue, newDate);
     const statusChanged = rescheduleStatus !== m.status;
@@ -1201,7 +1332,7 @@ export default function ProjectsModule() {
           </div>
         )
       ) : view === "calendar" ? (
-        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} onRescheduleMilestone={handleRescheduleMilestone} onOpenReschedule={openRescheduleDialog} />
+        <CalendarView projects={projects ?? []} onOpenDetail={openDetail} onRescheduleMilestone={handleRescheduleMilestone} onOpenReschedule={openRescheduleDialog} onRescheduleProject={handleRescheduleProject} onOpenRescheduleProject={openRescheduleProjectDialog} />
       ) : (projects ?? []).length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-white p-10 text-center shadow-sm">
           <ChartGantt className="h-8 w-8 text-zinc-300" aria-hidden />
@@ -1608,18 +1739,26 @@ export default function ProjectsModule() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Fase 3c — dialog "Jadwalkan Ulang Milestone" (fallback klik kanan / long-press / Shift+F10) */}
+      {/* Fase 3c / Ronde 16 — dialog "Jadwalkan Ulang" (fallback klik kanan / long-press / Shift+F10).
+           Varian milestone: tanggal + status. Varian deadline project: tanggal saja. */}
       <Dialog
         open={rescheduleTarget !== null}
         onOpenChange={(open) => { if (!open && !rescheduleSaving) setRescheduleTarget(null); }}
       >
-        <DialogContent className="rounded-xl sm:max-w-sm" aria-label="Jadwalkan ulang milestone">
+        <DialogContent
+          className="rounded-xl sm:max-w-sm"
+          aria-label={rescheduleTarget?.kind === "project" ? "Jadwalkan ulang deadline project" : "Jadwalkan ulang milestone"}
+        >
           <DialogHeader>
-            <DialogTitle>Jadwalkan Ulang Milestone</DialogTitle>
+            <DialogTitle>
+              {rescheduleTarget?.kind === "project" ? "Jadwalkan Ulang Deadline Project" : "Jadwalkan Ulang Milestone"}
+            </DialogTitle>
             <DialogDescription>
               {rescheduleTarget
-                ? `${rescheduleTarget.project.code} · ${rescheduleTarget.project.name} — ${rescheduleTarget.milestone.name}`
-                : "Pilih tanggal dan status milestone."}
+                ? rescheduleTarget.kind === "project"
+                  ? `${rescheduleTarget.project.code} · ${rescheduleTarget.project.name}`
+                  : `${rescheduleTarget.project.code} · ${rescheduleTarget.project.name} — ${rescheduleTarget.milestone.name}`
+                : "Pilih tanggal deadline baru."}
             </DialogDescription>
           </DialogHeader>
           {rescheduleCurrent ? (
@@ -1639,7 +1778,7 @@ export default function ProjectsModule() {
                   type="date"
                   value={rescheduleDate}
                   onChange={(e) => setRescheduleDate(e.target.value)}
-                  aria-label="Tanggal deadline baru milestone"
+                  aria-label={rescheduleTarget?.kind === "project" ? "Tanggal deadline baru project" : "Tanggal deadline baru milestone"}
                 />
               </div>
               <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Pintasan geser tanggal">
@@ -1657,21 +1796,23 @@ export default function ProjectsModule() {
                   </Button>
                 ))}
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="ms-reschedule-status" className="text-xs uppercase tracking-wide text-zinc-500">
-                  Status
-                </Label>
-                <Select value={rescheduleStatus} onValueChange={setRescheduleStatus}>
-                  <SelectTrigger id="ms-reschedule-status" aria-label="Status milestone">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pending">Menunggu</SelectItem>
-                    <SelectItem value="in_progress">Dikerjakan</SelectItem>
-                    <SelectItem value="done">Selesai</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {rescheduleTarget?.kind === "milestone" ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ms-reschedule-status" className="text-xs uppercase tracking-wide text-zinc-500">
+                    Status
+                  </Label>
+                  <Select value={rescheduleStatus} onValueChange={setRescheduleStatus}>
+                    <SelectTrigger id="ms-reschedule-status" aria-label="Status milestone">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">Menunggu</SelectItem>
+                      <SelectItem value="in_progress">Dikerjakan</SelectItem>
+                      <SelectItem value="done">Selesai</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
             </div>
           ) : null}
           <DialogFooter className="gap-2">
@@ -1680,7 +1821,7 @@ export default function ProjectsModule() {
               variant="outline"
               onClick={() => setRescheduleTarget(null)}
               disabled={rescheduleSaving}
-              aria-label="Batal jadwalkan ulang milestone"
+              aria-label={rescheduleTarget?.kind === "project" ? "Batal jadwalkan ulang deadline project" : "Batal jadwalkan ulang milestone"}
             >
               Batal
             </Button>
@@ -1688,7 +1829,7 @@ export default function ProjectsModule() {
               type="button"
               onClick={() => void handleSaveRescheduleDialog()}
               disabled={!rescheduleDirty || rescheduleSaving}
-              aria-label="Simpan jadwal milestone"
+              aria-label={rescheduleTarget?.kind === "project" ? "Simpan deadline project" : "Simpan jadwal milestone"}
             >
               {rescheduleSaving ? "Menyimpan…" : "Simpan"}
             </Button>

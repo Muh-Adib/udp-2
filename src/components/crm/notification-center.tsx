@@ -22,8 +22,10 @@ import {
 /** Event global untuk membuka pusat notifikasi dari widget dashboard. */
 export const OPEN_NOTIF_EVENT = "crm:open-notifications";
 
-/** Event global: notifikasi berubah (realtime) — widget dashboard ikut refresh. */
-export const NOTIF_CHANGED_EVENT = "crm:notif-changed";
+/** Event global: notifikasi berubah (realtime) — widget dashboard ikut refresh.
+ * Konstanta didefinisikan di notif-prefs (dipakai juga utk sync prefs antar perangkat). */
+export { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
+import { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
 
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
   sla: Timer,
@@ -116,13 +118,16 @@ export default function NotificationCenter() {
     void load();
   }, [user, activeBrandFilter, load]);
 
-  // Polling 60 detik untuk refresh unread — skip saat tab tidak terlihat atau realtime aktif
+  // Polling 60 detik untuk refresh unread — skip saat tab tidak terlihat atau realtime aktif.
+  // Ronde 16-c: polling fallback JUGA men-dispatch crm:notif-changed agar preferensi notifikasi
+  // (UserPreference) & widget dashboard tetap tersinkron antar perangkat walau socket tidak aktif.
   useEffect(() => {
     if (!user) return;
     const id = setInterval(() => {
       if (document.hidden) return;
       if (realtimeRef.current) return; // push realtime menang — hindari fetch dobel
       void load(true);
+      window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
     }, 60_000);
     return () => clearInterval(id);
   }, [user, load]);
@@ -257,7 +262,7 @@ export default function NotificationCenter() {
         {showPrefs ? (
           <div className="border-b border-zinc-200 bg-zinc-50/60 px-4 py-3" role="region" aria-label="Preferensi notifikasi">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Tipe notifikasi</p>
-            <p className="mt-0.5 text-[10px] text-zinc-400">Tipe yang dimatikan tidak tampil & tidak dihitung sebagai belum dibaca. Tersimpan per pengguna di perangkat ini.</p>
+            <p className="mt-0.5 text-[10px] text-zinc-400">Tipe yang dimatikan tidak tampil & tidak dihitung sebagai belum dibaca. Tersimpan per pengguna & tersinkron antar perangkat.</p>
             <ul className="mt-2 space-y-1">
               {NOTIF_TYPES.map((t) => {
                 const muted = prefs.muted.includes(t.key);
@@ -289,6 +294,21 @@ export default function NotificationCenter() {
                 aria-label="Sembunyikan notifikasi yang sudah dibaca"
               />
             </label>
+            {/* Status sinkronisasi antar perangkat (ronde 16-c) */}
+            <p
+              className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500"
+              aria-live="polite"
+              data-testid="prefs-sync-status"
+            >
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 shrink-0 rounded-full",
+                  realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+                )}
+                aria-hidden
+              />
+              {realtimeConnected ? "Tersinkron antar perangkat" : "Sinkron antar perangkat menunggu koneksi realtime"}
+            </p>
           </div>
         ) : null}
 
