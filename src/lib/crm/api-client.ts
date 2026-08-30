@@ -314,10 +314,16 @@ export const channelsApi = {
     displayName: string;
     accountRef: string;
     credentials: Record<string, string>;
+    isDemo?: boolean;
     actorName?: string;
     actorRole?: string;
   }) =>
     request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  demoConnect: (payload: { channel: string; brandId?: string | null; actorName?: string; actorRole?: string }) =>
+    request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels/demo", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

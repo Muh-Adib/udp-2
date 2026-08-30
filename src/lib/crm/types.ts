@@ -619,6 +619,7 @@ export interface ChannelConfigDTO {
   credentials: MaskedCredentials;
   status: "connected" | "disconnected" | "error";
   statusNote?: string | null;
+  isDemo?: boolean;
   connectedAt?: string | null;
   lastTestedAt?: string | null;
   createdAt: string;
@@ -636,8 +637,15 @@ export interface ChannelWebhookInfo {
 }
 
 /** Respons GET /api/channels. */
+export interface ChannelActivityStats {
+  inbound7d: number;
+  outbound7d: number;
+  inboundTotal: number;
+}
+
 export interface ChannelsData {
   configs: ChannelConfigDTO[];
   webhook: { whatsapp: ChannelWebhookInfo };
+  stats: Record<string, ChannelActivityStats>;
   types: Record<string, import("@/lib/crm/channels").ChannelTypeMeta>;
 }

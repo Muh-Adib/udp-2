@@ -56,6 +56,7 @@ function serialize(row: NonNullable<Awaited<ReturnType<typeof load>>>) {
     credentials: maskCredentials(row.credentials),
     status: row.status,
     statusNote: row.statusNote,
+    isDemo: row.isDemo,
     connectedAt: row.connectedAt,
     lastTestedAt: row.lastTestedAt,
     createdAt: row.createdAt,

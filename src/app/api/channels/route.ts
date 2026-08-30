@@ -1,12 +1,13 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
-import { CHANNEL_TYPES, requiredCredentialKeys, maskCredentialValue } from "@/lib/crm/channels";
+import { CHANNEL_TYPES, CHANNEL_TYPE_KEYS, requiredCredentialKeys, maskCredentialValue } from "@/lib/crm/channels";
 
 /**
- * Ronde 19 — Saluran & Integrasi (Fase 3).
+ * Ronde 19/20 — Saluran & Integrasi.
  *
- * GET  /api/channels — daftar koneksi (kredensial TERSENSA) + info webhook + katalog tipe.
+ * GET  /api/channels — daftar koneksi (kredensial TERSENSA) + info webhook +
+ *                      statistik aktivitas 7 hari per kanal + katalog tipe.
  * POST /api/channels — hubungkan kanal (satu konfigurasi per kanal+brand).
  */
 
@@ -38,11 +39,36 @@ function maskCredentials(raw: string): Record<string, string> {
   return masked;
 }
 
-export async function GET() {
-  const rows = await db.channelConfig.findMany({
+type ConfigRow = Awaited<ReturnType<typeof listChannelConfigs>>[number];
+
+function listChannelConfigs() {
+  return db.channelConfig.findMany({
     include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
     orderBy: { updatedAt: "desc" },
   });
+}
+
+function serializeConfig(r: ConfigRow) {
+  return {
+    id: r.id,
+    channel: r.channel,
+    brandId: r.brandId,
+    brand: r.brand,
+    displayName: r.displayName,
+    accountRef: r.accountRef,
+    credentials: maskCredentials(r.credentials),
+    status: r.status,
+    statusNote: r.statusNote,
+    isDemo: r.isDemo,
+    connectedAt: r.connectedAt,
+    lastTestedAt: r.lastTestedAt,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
+}
+
+export async function GET() {
+  const rows = await listChannelConfigs();
 
   // Info webhook WhatsApp utk panduan setup Meta (path relatif — gateway menanganinya).
   const whatsappRows = rows.filter(
@@ -55,22 +81,43 @@ export async function GET() {
   const effectiveVerifyToken =
     process.env.WHATSAPP_VERIFY_TOKEN || configuredVerifyTokens[0] || "grupcrm-demo-token";
 
+  // Statistik aktivitas per kanal (lead masuk & balasan) — 7 hari + total.
+  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [recent, allTime] = await Promise.all([
+    db.interaction.groupBy({
+      by: ["channel", "direction"],
+      where: { createdAt: { gte: since7d }, channel: { in: CHANNEL_TYPE_KEYS } },
+      _count: { _all: true },
+    }),
+    db.interaction.groupBy({
+      by: ["channel", "direction"],
+      where: { channel: { in: CHANNEL_TYPE_KEYS } },
+      _count: { _all: true },
+    }),
+  ]);
+  const bucket = (rowsIn: Array<{ channel: string; direction: string; _count: { _all: number } }>) => {
+    const map: Record<string, { inbound: number; outbound: number }> = {};
+    for (const r of rowsIn) {
+      const entry = map[r.channel] ?? { inbound: 0, outbound: 0 };
+      if (r.direction === "inbound") entry.inbound += r._count._all;
+      else if (r.direction === "outbound") entry.outbound += r._count._all;
+      map[r.channel] = entry;
+    }
+    return map;
+  };
+  const recentMap = bucket(recent);
+  const allTimeMap = bucket(allTime);
+  const stats: Record<string, { inbound7d: number; outbound7d: number; inboundTotal: number }> = {};
+  for (const key of CHANNEL_TYPE_KEYS) {
+    stats[key] = {
+      inbound7d: recentMap[key]?.inbound ?? 0,
+      outbound7d: recentMap[key]?.outbound ?? 0,
+      inboundTotal: allTimeMap[key]?.inbound ?? 0,
+    };
+  }
+
   return ok({
-    configs: rows.map((r) => ({
-      id: r.id,
-      channel: r.channel,
-      brandId: r.brandId,
-      brand: r.brand,
-      displayName: r.displayName,
-      accountRef: r.accountRef,
-      credentials: maskCredentials(r.credentials),
-      status: r.status,
-      statusNote: r.statusNote,
-      connectedAt: r.connectedAt,
-      lastTestedAt: r.lastTestedAt,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-    })),
+    configs: rows.map(serializeConfig),
     webhook: {
       whatsapp: {
         path: "/api/webhooks/whatsapp",
@@ -81,6 +128,7 @@ export async function GET() {
         dbSecretCount: configuredSecretCount,
       },
     },
+    stats,
     types: CHANNEL_TYPES,
   });
 }
@@ -129,6 +177,8 @@ export async function POST(req: NextRequest) {
     if (typeof v === "string" && v.trim()) safeCreds[f.key] = v.trim();
   }
 
+  const isDemo = body.isDemo === true;
+
   const row = await db.channelConfig.create({
     data: {
       channel,
@@ -137,7 +187,10 @@ export async function POST(req: NextRequest) {
       accountRef,
       credentials: JSON.stringify(safeCreds),
       status: "connected",
-      statusNote: "Kredensial tersimpan (mode demo: belum ada panggilan jaringan)",
+      statusNote: isDemo
+        ? "Koneksi mode demo — kredensial buatan, tidak memanggil API penyedia"
+        : "Kredensial tersimpan (mode demo: belum ada panggilan jaringan)",
+      isDemo,
       connectedAt: new Date(),
       lastTestedAt: new Date(),
     },
@@ -150,26 +203,10 @@ export async function POST(req: NextRequest) {
     action: "connect",
     entity: "channel",
     entityId: row.id,
-    entityLabel: `hubungkan kanal ${channel} (${displayName}${accountRef ? ` · ${accountRef}` : ""})`,
-    newValue: { channel, displayName, accountRef, brandId },
+    entityLabel: `hubungkan kanal ${channel}${isDemo ? " [demo]" : ""} (${displayName}${accountRef ? ` · ${accountRef}` : ""})`,
+    newValue: { channel, displayName, accountRef, brandId, isDemo },
     req,
   });
 
-  return ok({
-    config: {
-      id: row.id,
-      channel: row.channel,
-      brandId: row.brandId,
-      brand: row.brand,
-      displayName: row.displayName,
-      accountRef: row.accountRef,
-      credentials: maskCredentials(row.credentials),
-      status: row.status,
-      statusNote: row.statusNote,
-      connectedAt: row.connectedAt,
-      lastTestedAt: row.lastTestedAt,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    },
-  }, 201);
+  return ok({ config: serializeConfig(row) }, 201);
 }

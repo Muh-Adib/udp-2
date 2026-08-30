@@ -509,6 +509,7 @@ model ChannelConfig {
   credentials  String    @default("{}") // JSON per kanal (token, ids, secret)
   status       String    @default("connected") // connected, disconnected, error
   statusNote   String? // hasil test/verifikasi terakhir
+  isDemo       Boolean   @default(false) // koneksi demo (kredensial buatan, 1-klik)
   connectedAt  DateTime?
   lastTestedAt DateTime?
   createdAt    DateTime  @default(now())

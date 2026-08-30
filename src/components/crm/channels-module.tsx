@@ -10,6 +10,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  BookOpen,
   Building2,
   Check,
   CircleAlert,
@@ -21,9 +24,9 @@ import {
   Pencil,
   Plug,
   PlugZap,
-  Plus,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Unplug,
   Webhook,
@@ -59,11 +62,12 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { channelsApi } from "@/lib/crm/api-client";
-import { CHANNEL_TYPES } from "@/lib/crm/channels";
+import { CHANNEL_TYPES, SETUP_GUIDES } from "@/lib/crm/channels";
 import { useCrmStore } from "@/lib/crm/store";
-import type { ChannelConfigDTO } from "@/lib/crm/types";
+import type { ChannelActivityStats, ChannelConfigDTO } from "@/lib/crm/types";
 import { formatDate } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
+import ChannelSetupWizard from "./channel-setup-wizard";
 
 const CHANNEL_ICONS: Record<string, LucideIcon> = {
   whatsapp: MessageCircle,
@@ -90,6 +94,7 @@ async function copyText(text: string) {
 
 function ConfigCard({
   config,
+  stats,
   busy,
   onTest,
   onEdit,
@@ -97,6 +102,7 @@ function ConfigCard({
   onDelete,
 }: {
   config: ChannelConfigDTO;
+  stats?: ChannelActivityStats;
   busy: string | null;
   onTest: () => void;
   onEdit: () => void;
@@ -124,6 +130,12 @@ function ConfigCard({
               <span className={cn("size-1.5 rounded-full", status.dotCls)} aria-hidden="true" />
               {status.label}
             </Badge>
+            {config.isDemo ? (
+              <Badge variant="outline" className="gap-0.5 border-amber-200 bg-amber-50 px-1.5 py-0 text-[10px] text-amber-700">
+                <Sparkles className="size-2.5" aria-hidden="true" />
+                Demo
+              </Badge>
+            ) : null}
           </div>
           <p className="truncate text-xs text-zinc-500">{config.accountRef}</p>
           <p className="mt-0.5 text-[11px] text-zinc-400">
@@ -166,6 +178,23 @@ function ConfigCard({
         </div>
       ) : null}
 
+      {/* Statistik aktivitas kanal (7 hari) */}
+      {stats && (stats.inbound7d > 0 || stats.outbound7d > 0 || stats.inboundTotal > 0) ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1 rounded-md bg-zinc-50 px-1.5 py-0.5 text-[10px] text-zinc-500" title="Lead masuk 7 hari terakhir">
+            <ArrowDownLeft className="size-3 text-emerald-500" aria-hidden="true" />
+            {stats.inbound7d} masuk/7h
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-md bg-zinc-50 px-1.5 py-0.5 text-[10px] text-zinc-500" title="Balasan terkirim 7 hari terakhir">
+            <ArrowUpRight className="size-3 text-orange-500" aria-hidden="true" />
+            {stats.outbound7d} balasan/7h
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-md bg-zinc-50 px-1.5 py-0.5 text-[10px] text-zinc-400" title="Total lead masuk sepanjang waktu">
+            {stats.inboundTotal} total
+          </span>
+        </div>
+      ) : null}
+
       <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-3">
         <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onTest} disabled={busy === `test-${config.id}`}>
           {busy === `test-${config.id}` ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-3" aria-hidden="true" />}
@@ -185,6 +214,19 @@ function ConfigCard({
           )}
           {config.status === "disconnected" ? "Sambungkan" : "Putuskan"}
         </Button>
+        {/* Tautan dokumentasi resmi kanal */}
+        {SETUP_GUIDES[config.channel] ? (
+          <a
+            href={SETUP_GUIDES[config.channel].steps.find((s) => s.docLink)?.docLink?.href ?? "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Buka dokumentasi resmi ${config.displayName}`}
+            title="Dokumentasi resmi"
+            className="inline-flex h-7 items-center rounded-md px-1.5 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+          >
+            <BookOpen className="size-3.5" aria-hidden="true" />
+          </a>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
@@ -201,7 +243,17 @@ function ConfigCard({
 
 // ---------- Kartu tipe kanal (belum ada koneksi) ----------
 
-function TypeCard({ channelKey, onConnect }: { channelKey: string; onConnect: () => void }) {
+function TypeCard({
+  channelKey,
+  onConnect,
+  onDemo,
+  demoBusy,
+}: {
+  channelKey: string;
+  onConnect: () => void;
+  onDemo: () => void;
+  demoBusy: boolean;
+}) {
   const meta = CHANNEL_TYPES[channelKey];
   if (!meta) return null;
   const Icon = CHANNEL_ICONS[channelKey] ?? Plug;
@@ -220,16 +272,28 @@ function TypeCard({ channelKey, onConnect }: { channelKey: string; onConnect: ()
           <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-zinc-500">{meta.description}</p>
         </div>
       </div>
-      <Button
-        size="sm"
-        variant="outline"
-        className="mt-auto w-fit pt-2 text-xs"
-        style={{ borderColor: `${meta.color}66`, color: meta.color }}
-        onClick={onConnect}
-      >
-        <Plus className="size-3.5" aria-hidden="true" />
-        Hubungkan
-      </Button>
+      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-3">
+        <Button
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs text-white hover:opacity-90"
+          style={{ backgroundColor: meta.color }}
+          onClick={onConnect}
+        >
+          <PlugZap className="size-3.5" aria-hidden="true" />
+          Setup berpandu
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 gap-1 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+          onClick={onDemo}
+          disabled={demoBusy}
+          title="Hubungkan instan dengan kredensial demo (tanpa akun asli)"
+        >
+          {demoBusy ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3" aria-hidden="true" />}
+          Demo cepat
+        </Button>
+      </div>
     </div>
   );
 }
@@ -237,11 +301,16 @@ function TypeCard({ channelKey, onConnect }: { channelKey: string; onConnect: ()
 // ---------- Komponen utama ----------
 
 export default function ChannelsModule() {
-  const { user, brands } = useCrmStore();
+  const { user, brands, setActiveModule } = useCrmStore();
 
-  const [data, setData] = useState<{ configs: ChannelConfigDTO[]; webhook: { whatsapp: { path: string; envVerifyToken: boolean; envAppSecret: boolean; effectiveVerifyToken: string; dbTokenCount: number; dbSecretCount: number } } } | null>(null);
+  const [data, setData] = useState<{ configs: ChannelConfigDTO[]; webhook: { whatsapp: { path: string; envVerifyToken: boolean; envAppSecret: boolean; effectiveVerifyToken: string; dbTokenCount: number; dbSecretCount: number } }; stats: Record<string, ChannelActivityStats> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+
+  // Wizard setup berpandu (ronde 20)
+  const [wizardChannel, setWizardChannel] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
   // Form connect/edit
   const [formOpen, setFormOpen] = useState(false);
@@ -278,14 +347,24 @@ export default function ChannelsModule() {
   const waInfo = data?.webhook?.whatsapp;
 
   function openConnect(channelKey: string) {
-    setEditing(null);
-    setFormChannel(channelKey);
-    setFormBrand("all");
-    setFormName("");
-    setFormAccount("");
-    setFormCreds({});
-    setFormError(null);
-    setFormOpen(true);
+    // Ronde 20: connect selalu via wizard berpandu (dialog manual hanya utk edit).
+    setWizardChannel(channelKey);
+    setWizardOpen(true);
+  }
+
+  async function handleDemoQuick(channelKey: string) {
+    setDemoBusy(channelKey);
+    try {
+      await channelsApi.demoConnect({ channel: channelKey, actorName: user?.name, actorRole: user?.role });
+      toast.success(`${CHANNEL_TYPES[channelKey]?.label ?? channelKey} terhubung (mode demo)`, {
+        description: "Kredensial demo aktif — ganti kredensial asli kapan pun lewat Edit.",
+      });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal membuat koneksi demo");
+    } finally {
+      setDemoBusy(null);
+    }
   }
 
   function openEdit(config: ChannelConfigDTO) {
@@ -476,6 +555,7 @@ export default function ChannelsModule() {
                   <ConfigCard
                     key={c.id}
                     config={c}
+                    stats={data?.stats?.[c.channel]}
                     busy={busy}
                     onTest={() => void handleTest(c)}
                     onEdit={() => openEdit(c)}
@@ -490,17 +570,26 @@ export default function ChannelsModule() {
               <Plug className="mx-auto size-8 text-zinc-300" aria-hidden="true" />
               <p className="mt-2 text-sm font-semibold text-zinc-700">Belum ada kanal terhubung</p>
               <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-zinc-500">
-                Hubungkan WhatsApp Business untuk menerima lead &amp; mengirim balasan dengan indikator status
-                terkirim/terbaca. Instagram dan Email menyusul pola yang sama.
+                Klik <span className="font-medium text-zinc-700">Setup berpandu</span> di bawah — wizard akan menuntun Anda
+                langkah demi langkah sesuai dokumentasi resmi (Meta/SMTP), lengkap dgn callback URL siap salin.
               </p>
             </div>
           )}
 
           <div>
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-zinc-400">Kanal tersedia</p>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-400">Kanal tersedia</p>
+              <p className="text-[10px] text-zinc-400">Tanpa waktu untuk setup? Coba “Demo cepat” dulu.</p>
+            </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {Object.keys(CHANNEL_TYPES).map((k) => (
-                <TypeCard key={k} channelKey={k} onConnect={() => openConnect(k)} />
+                <TypeCard
+                  key={k}
+                  channelKey={k}
+                  onConnect={() => openConnect(k)}
+                  onDemo={() => void handleDemoQuick(k)}
+                  demoBusy={demoBusy === k}
+                />
               ))}
             </div>
           </div>
@@ -631,6 +720,23 @@ export default function ChannelsModule() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Wizard setup berpandu (ronde 20) — connect selalu lewat sini */}
+      <ChannelSetupWizard
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        channelKey={wizardChannel}
+        callbackPath={waInfo?.path ?? "/api/webhooks/whatsapp"}
+        verifyToken={waInfo?.effectiveVerifyToken ?? "grupcrm-demo-token"}
+        brands={brands.map((b) => ({ id: b.id, name: b.name }))}
+        actorName={user?.name}
+        actorRole={user?.role}
+        onConnected={load}
+        onGoInbox={() => {
+          setWizardOpen(false);
+          setActiveModule("inbox");
+        }}
+      />
     </div>
   );
 }
