@@ -554,3 +554,51 @@ export interface ReportsData {
   invoiceAging: ReportInvoiceAgingRow[];
   pipelinePerOwner: ReportPipelineOwnerRow[];
 }
+
+// ============ FASE 2: BRIEF BUILDER ============
+
+/** Satu deliverable di dalam brief terstruktur. */
+export interface BriefDeliverable {
+  name: string;
+  qty: number;
+  notes?: string;
+}
+
+/** Satu referensi/link inspirasi di dalam brief. */
+export interface BriefReference {
+  label: string;
+  url: string;
+}
+
+/** Status alur brief: draft → in_review → approved / revision. */
+export type BriefStatus = "draft" | "in_review" | "approved" | "revision";
+
+/** Brief terstruktur (Fase 2) — DTO dari /api/briefs. */
+export interface ClientBriefDTO {
+  id: string;
+  code: string;
+  opportunityId: string;
+  brandId: string;
+  brand?: { id: string; name: string; slug: string; color: string; logoEmoji: string };
+  title: string;
+  serviceTypes: string[];
+  objectives?: string | null;
+  targetAudience?: string | null;
+  keyMessages?: string | null;
+  deliverables: BriefDeliverable[];
+  timelineStart?: string | null;
+  timelineEnd?: string | null;
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+  currency: string;
+  references: BriefReference[];
+  attachmentsNote?: string | null;
+  status: BriefStatus;
+  revisionNote?: string | null;
+  submittedAt?: string | null;
+  approvedAt?: string | null;
+  approvedBy?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

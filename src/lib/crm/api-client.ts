@@ -256,3 +256,50 @@ export function getReports(params?: { brandId?: string; days?: number }) {
   if (params?.days) sp.set("days", String(params.days));
   return request<import("@/lib/crm/types").ReportsData>(`/api/reports?${sp}`);
 }
+
+// ============ Brief Builder (ronde 18 — Fase 2) ============
+
+/** Payload create/update brief terstruktur (field opsional, sesuai kebutuhan). */
+export interface ClientBriefPayload {
+  opportunityId?: string;
+  title?: string;
+  serviceTypes?: string[];
+  objectives?: string | null;
+  targetAudience?: string | null;
+  keyMessages?: string | null;
+  deliverables?: import("@/lib/crm/types").BriefDeliverable[];
+  timelineStart?: string | null;
+  timelineEnd?: string | null;
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+  references?: import("@/lib/crm/types").BriefReference[];
+  attachmentsNote?: string | null;
+  status?: import("@/lib/crm/types").BriefStatus;
+  /** Aksi alur status: save | submit | approve | request_revision | reopen. */
+  action?: "save" | "submit" | "approve" | "request_revision" | "reopen";
+  revisionNote?: string | null;
+  actorName?: string;
+  actorRole?: string;
+}
+
+export const briefsApi = {
+  list: (params?: { opportunityId?: string; brandId?: string; status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+    if (params?.status && params.status !== "all") sp.set("status", params.status);
+    return request<{ briefs: import("@/lib/crm/types").ClientBriefDTO[] }>(`/api/briefs?${sp}`);
+  },
+  create: (payload: ClientBriefPayload) =>
+    request<{ brief: import("@/lib/crm/types").ClientBriefDTO }>("/api/briefs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: ClientBriefPayload) =>
+    request<{ brief: import("@/lib/crm/types").ClientBriefDTO }>(`/api/briefs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) =>
+    request<{ ok: boolean }>(`/api/briefs/${id}`, { method: "DELETE" }),
+};

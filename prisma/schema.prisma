@@ -31,6 +31,7 @@ model Brand {
   invoices      Invoice[]
   interactions  Interaction[]
   quotations    Quotation[]
+  briefs        ClientBrief[]
 }
 
 model User {
@@ -155,6 +156,7 @@ model Opportunity {
   estimation   Estimation?
   quotations   Quotation[]
   approvals    ApprovalRequest[]
+  clientBrief  ClientBrief?
 }
 
 model Interaction {
@@ -455,4 +457,39 @@ model UserPreference {
 
   @@unique([userKey, key])
   @@index([userKey])
+}
+
+// ============ FASE 2: BRIEF BUILDER ============
+// Brief terstruktur per opportunity — tahap pertama alur komersial
+// (Brief → Estimasi → Quotation). Menggantikan brief teks bebas dgn
+// struktur: layanan, tujuan, audiens, deliverables, timeline, budget,
+// referensi + alur status draft → in_review → approved / revision.
+model ClientBrief {
+  id              String      @id @default(cuid())
+  code            String      @unique // BRF-2026-0001
+  opportunityId   String      @unique
+  opportunity     Opportunity @relation(fields: [opportunityId], references: [id])
+  brandId         String
+  brand           Brand       @relation(fields: [brandId], references: [id])
+  title           String
+  serviceTypes    String      @default("[]") // JSON array string (katalog layanan brand)
+  objectives      String?
+  targetAudience  String?
+  keyMessages     String?
+  deliverables    String      @default("[]") // JSON array [{name, qty, notes}]
+  timelineStart   DateTime?
+  timelineEnd     DateTime?
+  budgetMin       Float?
+  budgetMax       Float?
+  currency        String      @default("IDR")
+  references      String      @default("[]") // JSON array [{label, url}]
+  attachmentsNote String?
+  status          String      @default("draft") // draft, in_review, approved, revision
+  revisionNote    String?
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  approvedBy      String?
+  createdBy       String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 }

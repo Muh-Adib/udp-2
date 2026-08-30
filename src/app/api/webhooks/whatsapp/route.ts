@@ -1,21 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHmac, timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, logAudit } from "@/lib/crm/server";
 
 /**
  * Task 17-c — WhatsApp Cloud API webhook (rekomendasi ronde 16, Fase 3).
+ * Task 18-a — validasi signature X-Hub-Signature-256 (HMAC-SHA256 dgn WHATSAPP_APP_SECRET).
  *
  * GET  : handshake verifikasi Meta (hub.mode/hub.verify_token/hub.challenge).
  *        Token dibandingkan dgn env WHATSAPP_VERIFY_TOKEN (fallback demo "grupcrm-demo-token").
  * POST : terima payload statuses { entry[].changes[].value.statuses[] } — update
  *        Interaction.deliveryStatus utk pesan outbound (delivered/read/sent/failed),
  *        tulis SATU audit log batch, dan selalu balas 200 (konvensi WhatsApp).
+ *        Bila env WHATSAPP_APP_SECRET diset, request WAJIB membawa header
+ *        X-Hub-Signature-256: sha256=<hmac> yang cocok dgn raw body (timing-safe).
+ *        Tanpa env secret (mode demo) validasi dilewati.
  */
 
 const DEMO_VERIFY_TOKEN = "grupcrm-demo-token";
 
 /** Status pengiriman yang dikenali sistem (timestamps diabaikan — kita hanya melacak status). */
 const KNOWN_STATUSES = new Set(["sent", "delivered", "read", "failed"]);
+
+/** Bandingkan dua string secara timing-safe (hindari timing attack pada signature). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+/** Verifikasi X-Hub-Signature-256 terhadap raw body. Return null = valid/skip, string = alasan gagal. */
+function verifySignature(rawBody: string, header: string | null): string | null {
+  const secret = process.env.WHATSAPP_APP_SECRET;
+  if (!secret) return null; // mode demo — validasi tidak diaktifkan
+  if (!header) return "header X-Hub-Signature-256 wajib ada";
+  const expected = "sha256=" + createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  if (!safeEqual(expected.toLowerCase(), header.toLowerCase())) {
+    return "signature tidak cocok";
+  }
+  return null;
+}
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -40,7 +65,19 @@ export async function GET(req: NextRequest) {
 type RawStatus = { id?: unknown; status?: unknown };
 
 export async function POST(req: NextRequest) {
-  const body = await readBody(req);
+  // Raw body dibutuhkan untuk verifikasi HMAC (bukan body yang sudah diparse).
+  const rawBody = await req.text();
+  const sigError = verifySignature(rawBody, req.headers.get("x-hub-signature-256"));
+  if (sigError) {
+    return fail(`Webhook ditolak: ${sigError}`, 401);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(rawBody) as Record<string, unknown>;
+  } catch {
+    return fail("Payload webhook WhatsApp tidak valid", 400);
+  }
   const entry = body.entry;
   if (!Array.isArray(entry)) {
     return fail("Payload webhook WhatsApp tidak valid", 400);

@@ -13,6 +13,7 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  ClipboardList,
   Clock,
   CircleAlert,
   FileText,
@@ -87,11 +88,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
+import { BRIEF_STATUS_META } from "@/lib/crm/brief";
 import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
-import type { Brand, EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
+import type { Brand, BriefStatus, EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
+import BriefPanel from "@/components/crm/brief-panel";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
@@ -1523,6 +1526,10 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   // Cetak quotation dari drawer (Task 12-b): target quotation + brand utk QuotationPrintArea.
   const [printTarget, setPrintTarget] = useState<QuotationDTO | null>(null);
 
+  // Brief Builder (ronde 18): status brief utk dot pada tab trigger.
+  const [briefStatus, setBriefStatus] = useState<BriefStatus | null>(null);
+  const handleBriefStatus = useCallback((s: BriefStatus | null) => setBriefStatus(s), []);
+
   // Sinkron saat parent mengganti opportunity
   useEffect(() => {
     setActiveId(opportunityId);
@@ -1925,7 +1932,7 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
 
                 {data.brief ? (
                   <div className="mt-3 rounded-xl bg-zinc-50 p-3 text-sm text-zinc-600">
-                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Brief</p>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Brief awal (teks intake)</p>
                     <p className="whitespace-pre-wrap">{data.brief}</p>
                   </div>
                 ) : null}
@@ -1970,6 +1977,16 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                 {/* Tabs */}
                 <Tabs defaultValue="timeline" className="mt-5">
                   <TabsList className="w-full justify-start overflow-x-auto">
+                    <TabsTrigger value="brief" className="gap-1.5">
+                      <ClipboardList className="size-3.5" aria-hidden="true" />
+                      Brief
+                      {briefStatus ? (
+                        <span
+                          className={cn("size-1.5 rounded-full", BRIEF_STATUS_META[briefStatus]?.dotCls ?? "bg-zinc-400")}
+                          aria-label={`Brief berstatus ${BRIEF_STATUS_META[briefStatus]?.label ?? briefStatus}`}
+                        />
+                      ) : null}
+                    </TabsTrigger>
                     <TabsTrigger value="timeline">Timeline</TabsTrigger>
                     <TabsTrigger value="tasks">Tugas</TabsTrigger>
                     <TabsTrigger value="estimation" className="gap-1.5">
@@ -1983,6 +2000,24 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                     <TabsTrigger value="notes">Catatan</TabsTrigger>
                     <TabsTrigger value="related">Terkait</TabsTrigger>
                   </TabsList>
+
+                  {/* Brief (Fase 2 — ronde 18) */}
+                  <TabsContent value="brief" className="mt-3">
+                    {data && activeId ? (
+                      <BriefPanel
+                        opportunityId={activeId}
+                        opportunityTitle={data.title}
+                        brandSlug={data.brand?.slug ?? ""}
+                        brandColor={data.brand?.color ?? "#f97316"}
+                        open={open}
+                        onBriefStatusChange={handleBriefStatus}
+                        onChanged={() => {
+                          void load();
+                          onChanged?.();
+                        }}
+                      />
+                    ) : null}
+                  </TabsContent>
 
                   {/* Timeline */}
                   <TabsContent value="timeline" className="mt-3">
