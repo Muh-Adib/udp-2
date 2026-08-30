@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, ClipboardList, Clock, Copy,
+  AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, ClipboardList, Clock, Copy,
   Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Link2, Link2Off, List, Loader2, Mail, MessageCircle,
   MessagesSquare, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
@@ -72,6 +72,56 @@ function channelMeta(channel: string) {
 }
 function channelLabel(channel: string): string {
   return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
+}
+
+// ============ Ronde 25 — kanal balasan (hanya kanal yang punya alamat tujuan) ============
+
+/** Kanal balasan yang dikenal backend (REPLY_CHANNELS di src/lib/crm/thread.ts). */
+const REPLY_CHANNEL_KEYS = ["whatsapp", "email", "instagram", "phone"] as const;
+type ReplyChannelKey = (typeof REPLY_CHANNEL_KEYS)[number];
+
+const PHONE_LIKE_RE = /^\+?[\d][\d\s\-()+]{5,}$/;
+
+function looksLikePhoneText(v?: string | null): boolean {
+  return PHONE_LIKE_RE.test((v ?? "").trim());
+}
+
+/**
+ * Ronde 25 — alamat tujuan satu kanal balasan dari data kontak/pengirim lead
+ * (sumber sama dgn backend reachableAddress: kontak dulu, lalu fallback dari senderName).
+ * socialProfile dibaca defensif — ada di model DB tapi belum ada di ContactRef DTO.
+ */
+function replyAddressFor(channel: string, lead: InboxLead): string | null {
+  const sender = (lead.senderName ?? "").trim();
+  const c = (lead.contact ?? null) as {
+    email?: string | null;
+    whatsapp?: string | null;
+    phone?: string | null;
+    instagram?: string | null;
+    socialProfile?: string | null;
+  } | null;
+  switch (channel) {
+    case "email":
+      return c?.email ?? extractEmailFromText(sender);
+    case "whatsapp":
+      return c?.whatsapp ?? (looksLikePhoneText(sender) ? sender : null);
+    case "instagram":
+      return c?.instagram
+        ?? (c?.socialProfile && isSocialHandle(c.socialProfile) ? c.socialProfile : null)
+        ?? (isSocialHandle(sender) || sender.startsWith("@") ? sender : null);
+    case "phone":
+      return c?.phone ?? c?.whatsapp ?? (looksLikePhoneText(sender) ? sender : null);
+    default:
+      return null;
+  }
+}
+
+/** Daftar kanal balasan valid milik lead (whatsapp/email/instagram/phone) — urutan dari backend dipertahankan. */
+function replyChannelsOf(lead: InboxLead): ReplyChannelKey[] {
+  const raw = Array.isArray(lead.replyChannels) ? lead.replyChannels : [];
+  return raw.filter((c): c is ReplyChannelKey =>
+    (REPLY_CHANNEL_KEYS as readonly string[]).includes(c)
+  );
 }
 
 /**
@@ -571,10 +621,13 @@ function IdentityReadinessCard({
   lead,
   contactForm,
   linkMode,
+  className,
 }: {
   lead: InboxLead;
   contactForm: ContactFormState;
   linkMode: boolean;
+  /** Ronde 25 — class wrapper dari pemanggil (border-t/gap panel detail). */
+  className?: string;
 }) {
   const rawSender = (lead.senderName ?? "").trim();
   // Lead IG dengan handle → pesan menyapa pakai handle (nama belum tentu diketahui).
@@ -631,7 +684,7 @@ function IdentityReadinessCard({
   }
 
   return (
-    <div className="border-t border-zinc-200 p-4">
+    <section aria-label="Kelengkapan identitas kontak" className={cn("min-w-0", className)}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
           <ClipboardList className="size-4 text-zinc-500" aria-hidden="true" />
@@ -708,7 +761,7 @@ function IdentityReadinessCard({
           </Dialog>
         </>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -764,7 +817,7 @@ function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { m
 }
 
 /** Riwayat percakapan per kontak (thread backend) — inbound kiri zinc-100, outbound kanan zinc-900. */
-function ThreadHistorySection({ lead }: { lead: InboxLead }) {
+function ThreadHistorySection({ lead, className }: { lead: InboxLead; className?: string }) {
   const messages = useMemo(() => {
     const msgs = [...lead.thread.messages];
     msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -772,7 +825,7 @@ function ThreadHistorySection({ lead }: { lead: InboxLead }) {
   }, [lead.thread]);
   if (messages.length === 0) return null;
   return (
-    <div className="border-t border-zinc-200 p-4" aria-label="Riwayat percakapan dengan kontak ini">
+    <section aria-label="Riwayat percakapan dengan kontak ini" className={cn("min-w-0", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
           <MessagesSquare className="size-4 text-zinc-500" aria-hidden="true" />
@@ -787,7 +840,7 @@ function ThreadHistorySection({ lead }: { lead: InboxLead }) {
           <ThreadMessageBubble key={m.id} message={m} highlight={m.id === lead.id} fallbackOutboundAuthor={lead.respondedBy} />
         ))}
       </ul>
-    </div>
+    </section>
   );
 }
 
@@ -812,11 +865,9 @@ function ListSkeleton() {
 
 // ============ Respons & Catat (Fase 3): balas lead dengan template ============
 
-const RESPOND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
-  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
-  { key: "email", label: "Email", icon: Mail },
-  { key: "phone", label: "Telepon", icon: Phone },
-];
+// Ronde 25 — konstanta RESPOND_CHANNELS dihapus: opsi kanal respons kini HANYA dari
+// lead.replyChannels (lihat replyChannelsOf) — backend POST /api/inbox/respond menolak (400)
+// kanal di luar daftar kanal yang punya alamat tujuan.
 
 /** Ganti placeholder template untuk konteks lead inbox. */
 function renderLeadTemplate(body: string, vars: Record<string, string>): string {
@@ -848,6 +899,19 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
     [lead?.candidates]
   );
 
+  // Ronde 25 — kanal balasan legal lead ini + alamat tujuan per kanal (dari kontak/sender)
+  const replyChannels = useMemo(() => (lead ? replyChannelsOf(lead) : []), [lead]);
+  const replyAddresses = useMemo(() => {
+    const map = new Map<string, string>();
+    if (lead) {
+      for (const ch of replyChannels) {
+        const addr = replyAddressFor(ch, lead);
+        if (addr) map.set(ch, addr);
+      }
+    }
+    return map;
+  }, [lead, replyChannels]);
+
   // Muat template + set kanal & kontak default saat dialog dibuka
   useEffect(() => {
     if (!lead) return;
@@ -856,7 +920,9 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
     setTemplates([]);
     setTemplateId("blank");
     setBody("");
-    setChannel(["whatsapp", "email", "phone"].includes(lead.channel) ? lead.channel : "whatsapp");
+    // Ronde 25 — default kanal = kanal asal lead bila termasuk kanal balasan legal, selain itu kanal legal pertama
+    const avail = replyChannelsOf(lead);
+    setChannel(avail.includes(lead.channel as ReplyChannelKey) ? lead.channel : (avail[0] ?? ""));
     const cands = lead.candidates.filter((c) => Boolean(c.contactId));
     // Default: pilihan di panel detail bila cocok, jika tidak → kandidat pertama
     setContactChoice(
@@ -900,7 +966,8 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
     if (id === "blank") { setBody(""); return; }
     const tpl = templates.find((t) => t.id === id);
     if (!tpl) return;
-    setChannel(tpl.channel);
+    // Ronde 25 — kanal template diabaikan bila bukan kanal balasan yang valid utk lead ini
+    if (replyChannels.includes(tpl.channel as ReplyChannelKey)) setChannel(tpl.channel);
     setBody(renderLeadTemplate(tpl.body, vars));
   }
 
@@ -911,6 +978,11 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
 
   async function handleSend() {
     if (!lead || !user) return;
+    // Ronde 25 — kanal wajib salah satu kanal balasan legal (backend menolak 400 di luar daftar)
+    if (replyChannels.length === 0 || !replyChannels.includes(channel as ReplyChannelKey)) {
+      toast.error("Kanal balasan tidak tersedia — lengkapi kontak terlebih dulu");
+      return;
+    }
     const content = body.trim();
     if (!content) { toast.error("Isi respons tidak boleh kosong"); return; }
     setSending(true);
@@ -936,7 +1008,7 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
           duration: 7000,
         });
       } else {
-        toast.success(`Respons ${channel === "email" ? "email" : channel} tercatat`, {
+        toast.success(`Respons ${channelLabel(channel)} tercatat`, {
           description: "Lead ditandai sudah direspons — countdown SLA berhenti.",
         });
       }
@@ -976,8 +1048,7 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
     }
   }
 
-  const chMeta = (key: string) => RESPOND_CHANNELS.find((c) => c.key === key) ?? RESPOND_CHANNELS[0];
-  const ChIcon = chMeta(channel).icon;
+  const ChIcon = channelMeta(channel).icon;
 
   return (
     <Dialog open={lead !== null} onOpenChange={(open) => { if (!open && !sending) onClose(); }}>
@@ -1103,7 +1174,7 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
                   <input type="radio" className="sr-only" checked={templateId === "blank"} onChange={() => pickTemplate("blank")} aria-label="Tulis respons sendiri" />
                 </label>
                 {templates.map((t) => {
-                  const TplIcon = chMeta(t.channel).icon;
+                  const TplIcon = channelMeta(t.channel).icon;
                   return (
                     <label key={t.id} className={cn(
                       "flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors",
@@ -1115,7 +1186,7 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
                           {!t.approved ? <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1 text-[9px] text-amber-700">review</Badge> : null}
                         </span>
                         <span className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
-                          <span className="inline-flex items-center gap-1"><TplIcon className="h-3 w-3" aria-hidden />{chMeta(t.channel).label}</span>
+                          <span className="inline-flex items-center gap-1"><TplIcon className="h-3 w-3" aria-hidden />{channelLabel(t.channel)}</span>
                           <span aria-hidden>·</span>
                           <span>H+{t.delayDays}</span>
                         </span>
@@ -1128,21 +1199,47 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
             )}
           </div>
 
-          {/* Kanal + isi */}
-          <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
-            <div className="space-y-2">
-              <Label htmlFor="respond-channel">Kanal respons</Label>
-              <Select value={channel} onValueChange={setChannel}>
-                <SelectTrigger id="respond-channel" className="bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {RESPOND_CHANNELS.map((c) => (
-                    <SelectItem key={c.key} value={c.key}>
-                      <span className="flex items-center gap-2"><c.icon className="h-3.5 w-3.5" aria-hidden /> {c.label}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {/* Ronde 25 — peringatan bila tidak ada kanal balasan yang punya alamat tujuan */}
+          {replyChannels.length === 0 ? (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5" role="alert">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
+              <p className="text-xs leading-relaxed text-amber-800">
+                Belum ada kanal untuk membalas — lengkapi email / nomor WhatsApp / handle Instagram pada kontak terlebih dulu.
+              </p>
             </div>
+          ) : null}
+
+          {/* Kanal + isi — Ronde 25: opsi kanal HANYA dari replyChannels, label dgn alamat tujuan */}
+          <div className={cn("grid gap-3", replyChannels.length > 0 && "sm:grid-cols-[170px_1fr]")}>
+            {replyChannels.length > 0 ? (
+              <div className="space-y-2">
+                <Label htmlFor="respond-channel">Kanal respons</Label>
+                <Select value={channel} onValueChange={setChannel}>
+                  <SelectTrigger id="respond-channel" className="bg-white" aria-label="Kanal respons">
+                    <SelectValue placeholder="Pilih kanal" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {replyChannels.map((c) => {
+                      const RIcon = channelMeta(c).icon;
+                      const addr = replyAddresses.get(c);
+                      return (
+                        <SelectItem key={c} value={c}>
+                          <span className="flex items-center gap-2">
+                            <RIcon className="h-3.5 w-3.5" aria-hidden />
+                            {addr ? `${channelLabel(c)} — ${addr}` : channelLabel(c)}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {replyAddresses.get(channel) ? (
+                  <p className="text-[11px] leading-snug text-zinc-500">
+                    Tujuan: <span className="break-all font-medium text-zinc-700">{replyAddresses.get(channel)}</span>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-2">
               <Label htmlFor="respond-body">Isi respons</Label>
               <Textarea
@@ -1166,11 +1263,17 @@ function RespondDialog({ lead, linkedContactId, linkedContactName, onClose, onRe
           <Button variant="outline" onClick={onClose} disabled={sending}>Batal</Button>
           <Button
             onClick={() => void handleSend()}
-            disabled={sending || !body.trim()}
-            aria-label="Kirim dan catat respons lead"
+            disabled={sending || !body.trim() || replyChannels.length === 0}
+            aria-label={replyChannels.length === 0 ? "Tidak ada kanal untuk membalas" : "Kirim dan catat respons lead"}
           >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ChIcon className="h-4 w-4" aria-hidden />}
-            {sending ? "Mencatat…" : `Kirim via ${chMeta(channel).label}`}
+            {sending ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : replyChannels.length === 0 ? (
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+            ) : (
+              <ChIcon className="h-4 w-4" aria-hidden />
+            )}
+            {sending ? "Mencatat…" : replyChannels.length === 0 ? "Tidak bisa membalas" : `Kirim via ${channelLabel(channel)}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1352,6 +1455,22 @@ export default function InboxModule() {
     [leads, selectedId]
   );
 
+  // Ronde 25 — kanal balasan lead terpilih: chips "Bisa dibalas via" di header panel detail
+  const selectedReplyChannels = useMemo(
+    () => (selectedLead ? replyChannelsOf(selectedLead) : []),
+    [selectedLead]
+  );
+  const selectedReplyAddresses = useMemo(() => {
+    const map = new Map<string, string>();
+    if (selectedLead) {
+      for (const ch of selectedReplyChannels) {
+        const addr = replyAddressFor(ch, selectedLead);
+        if (addr) map.set(ch, addr);
+      }
+    }
+    return map;
+  }, [selectedLead, selectedReplyChannels]);
+
   // Task 17-c — riwayat respons outbound utk lead terpilih (match externalId `inbox-reply:<leadId>`)
   const [replies, setReplies] = useState<InteractionDTO[]>([]);
   const repliesLeadId = selectedLead?.id ?? null;
@@ -1481,8 +1600,13 @@ export default function InboxModule() {
     setConverting(true);
     try {
       const res = await api.convertLead(payload);
+      // Ronde 25 — bila konversi menyatukan pesan lain dari identitas sama, sampaikan jumlahnya
+      const unifiedNote =
+        typeof res.unifiedCount === "number" && res.unifiedCount > 0
+          ? ` ${res.unifiedCount} pesan lain dari identitas sama ikut disatukan ke opportunity ini.`
+          : "";
       toast.success("Lead dikonversi", {
-        description: `Opportunity ${res.opportunity?.title ?? ""} berhasil dibuat beserta task follow-up otomatis.`,
+        description: `Opportunity ${res.opportunity?.title ?? ""} berhasil dibuat beserta task follow-up otomatis.${unifiedNote}`,
       });
       setSelectedId(null);
       setShowNewContact(false);
@@ -1707,8 +1831,8 @@ export default function InboxModule() {
 
       {/* ===== Layout 2 kolom ===== */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* KIRI: daftar lead */}
-        <section aria-label="Daftar lead masuk">
+        {/* KIRI: daftar lead — Ronde 25: di <lg disembunyikan saat panel detail terbuka (master–detail) */}
+        <section aria-label="Daftar lead masuk" className={cn(selectedLead && "hidden lg:block")}>
           {firstLoad ? (
             <ListSkeleton />
           ) : error && !leads ? (
@@ -1757,8 +1881,8 @@ export default function InboxModule() {
           ) : null}
         </section>
 
-        {/* KANAN: panel detail (sticky) */}
-        <section aria-label="Detail lead">
+        {/* KANAN: panel detail (sticky) — Ronde 25: di <lg hanya tampil saat ada lead terpilih */}
+        <section aria-label="Detail lead" className={cn(!selectedLead && "hidden lg:block")}>
           <div
             ref={detailRef}
             className="lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto crm-scroll"
@@ -1773,64 +1897,125 @@ export default function InboxModule() {
               </div>
             ) : (
               <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
-                {/* Header panel */}
-                <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <ChannelAvatar channel={selectedLead.channel} />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-zinc-900">
-                        {(selectedLead.senderName ?? "").trim() || "Tanpa nama"}
-                      </p>
-                      <p className="text-xs text-zinc-500">
-                        {formatDateTime(selectedLead.createdAt)} · {timeAgo(selectedLead.createdAt)}
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline" className={cn("border", channelMeta(selectedLead.channel).badge)}>
-                          {channelLabel(selectedLead.channel)}
-                        </Badge>
-                        {selectedLead.brand ? (
-                          <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
-                        ) : null}
-                        <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} respondedAt={selectedLead.respondedAt} />
-                      </div>
-                    </div>
-                  </div>
+                {/* Ronde 25 — kembali ke daftar (hanya mobile, master–detail) */}
+                <div className="border-b border-zinc-200 px-2 py-1.5 lg:hidden">
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
-                    className="size-8 shrink-0"
+                    size="sm"
+                    className="h-10 w-full justify-start gap-1.5 px-2 text-sm font-medium text-zinc-700"
                     onClick={() => setSelectedId(null)}
-                    aria-label="Tutup detail lead"
+                    aria-label="Kembali ke daftar lead"
                   >
-                    <X className="size-4" />
+                    <ArrowLeft className="size-4" aria-hidden="true" />
+                    Kembali ke daftar
                   </Button>
                 </div>
 
-                {/* Isi pesan + metadata */}
-                <div className="p-4">
-                  {selectedLead.subject ? (
-                    <p className="mb-2 text-sm font-medium text-zinc-800">{selectedLead.subject}</p>
-                  ) : null}
-                  <div className="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed text-zinc-700">
-                    {selectedLead.content}
+                {/* (1) Header panel: identitas ringkas + badge kanal/SLA + kanal balasan */}
+                <div className="border-b border-zinc-200 p-3 sm:p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <ChannelAvatar channel={selectedLead.channel} />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-zinc-900">
+                          {(selectedLead.senderName ?? "").trim() || "Tanpa nama"}
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          {formatDateTime(selectedLead.createdAt)} · {timeAgo(selectedLead.createdAt)}
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className={cn("border", channelMeta(selectedLead.channel).badge)}>
+                            {channelLabel(selectedLead.channel)}
+                          </Badge>
+                          {selectedLead.brand ? (
+                            <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
+                          ) : null}
+                          <SlaBadge brandSlaHours={selectedLead.brand?.slaHours ?? 24} waitHours={selectedLead.slaHours} respondedAt={selectedLead.respondedAt} />
+                        </div>
+                        {/* Ronde 25 — indikator kanal yang bisa dipakai membalas lead ini */}
+                        {selectedReplyChannels.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] font-medium text-zinc-500">Bisa dibalas via:</span>
+                            {selectedReplyChannels.map((ch) => {
+                              const RChipMeta = channelMeta(ch);
+                              const RChipIcon = RChipMeta.icon;
+                              const addr = selectedReplyAddresses.get(ch);
+                              const tip = addr ? `${channelLabel(ch)} — ${addr}` : channelLabel(ch);
+                              return (
+                                <span
+                                  key={ch}
+                                  role="img"
+                                  aria-label={`Bisa dibalas via ${tip}`}
+                                  title={tip}
+                                  className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-full", RChipMeta.circle)}
+                                >
+                                  <RChipIcon className="size-3" aria-hidden="true" />
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber-700" role="status">
+                            <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+                            Tidak bisa dibalas — kontak belum lengkap
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 shrink-0"
+                      onClick={() => setSelectedId(null)}
+                      aria-label="Tutup detail lead"
+                    >
+                      <X className="size-4" />
+                    </Button>
                   </div>
-                  <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-                    <div>
-                      <dt className="text-zinc-400">ID Eksternal</dt>
-                      <dd className="truncate font-mono text-zinc-700">{selectedLead.externalId ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-400">Waktu Masuk</dt>
-                      <dd className="text-zinc-700">{formatDateTime(selectedLead.createdAt)}</dd>
-                    </div>
-                  </dl>
+                </div>
 
-                  {/* Fase 3 — Respons & catat */}
-                  <div className={cn(
-                    "mt-3 rounded-lg border p-3",
-                    selectedLead.respondedAt ? "border-emerald-200 bg-emerald-50/60" : "border-dashed border-zinc-300"
-                  )}>
+                {/* Isi panel — Ronde 25: gap-3 mobile / gap-4 sm+; urutan mobile:
+                    pesan → riwayat percakapan → respons → kelengkapan → identifikasi.
+                    Urutan desktop dipertahankan via lg:order-*. */}
+                <div className="flex flex-col gap-3 px-3 py-3 sm:gap-4 sm:px-4 sm:py-4">
+                  {/* (2) Konten pesan + metadata ringkas */}
+                  <section aria-label="Isi pesan lead" className="min-w-0 lg:order-1">
+                    {selectedLead.subject ? (
+                      <p className="mb-2 text-sm font-medium text-zinc-800">{selectedLead.subject}</p>
+                    ) : null}
+                    <div className="whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed text-zinc-700">
+                      {selectedLead.content}
+                    </div>
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <span className="shrink-0">ID Eksternal:</span>
+                        <span className="truncate font-mono text-zinc-700">{selectedLead.externalId ?? "-"}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="shrink-0">Waktu Masuk:</span>
+                        <span className="text-zinc-700">{formatDateTime(selectedLead.createdAt)}</span>
+                      </span>
+                    </div>
+                  </section>
+
+                  {/* (3) Task 24-a — Riwayat Percakapan per kontak (thread) — di mobile sebelum Respons */}
+                  {selectedLead.thread.messageCount > 1 ? (
+                    <ThreadHistorySection
+                      lead={selectedLead}
+                      className="border-t border-zinc-200 pt-3 sm:pt-4 lg:order-4"
+                    />
+                  ) : null}
+
+                  {/* (4) Fase 3 — Respons & catat */}
+                  <section
+                    aria-label="Respons lead"
+                    className={cn(
+                      "min-w-0 rounded-lg border p-3 lg:order-2",
+                      selectedLead.respondedAt ? "border-emerald-200 bg-emerald-50/60" : "border-dashed border-zinc-300"
+                    )}
+                  >
                     {selectedLead.respondedAt ? (
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="flex items-center gap-2 text-xs font-medium text-emerald-700">
@@ -1840,14 +2025,14 @@ export default function InboxModule() {
                         <span className="text-[10px] text-emerald-600">SLA terpenuhi</span>
                       </div>
                     ) : (
-                      <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <span className="text-xs text-zinc-500">
                           Belum direspons — balas dengan template agar SLA tercatat terpenuhi.
                         </span>
                         <Button
                           type="button"
                           size="sm"
-                          className="h-7 gap-1.5 rounded-lg bg-zinc-900 text-xs text-white hover:bg-zinc-800"
+                          className="h-10 w-full gap-1.5 rounded-lg bg-zinc-900 text-xs text-white hover:bg-zinc-800 sm:h-7 sm:w-auto sm:shrink-0"
                           onClick={() => setRespondTarget(selectedLead)}
                           aria-label="Respons lead dengan template"
                         >
@@ -1856,11 +2041,11 @@ export default function InboxModule() {
                         </Button>
                       </div>
                     )}
-                  </div>
+                  </section>
 
                   {/* Task 17-c — Riwayat respons outbound + indikator tick status pengiriman */}
                   {replies.length > 0 ? (
-                    <div className="mt-3 rounded-lg border border-zinc-200 p-3" aria-label="Riwayat respons">
+                    <section aria-label="Riwayat respons" className="min-w-0 rounded-lg border border-zinc-200 p-3 lg:order-3">
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
                           <Reply className="size-4 text-zinc-500" aria-hidden="true" />
@@ -1889,22 +2074,19 @@ export default function InboxModule() {
                           );
                         })}
                       </ul>
-                    </div>
+                    </section>
                   ) : null}
-                </div>
 
-                {/* Task 24-a — Riwayat Percakapan per kontak (thread) */}
-                {selectedLead.thread.messageCount > 1 ? <ThreadHistorySection lead={selectedLead} /> : null}
+                  {/* (5) Ronde 23 — Kelengkapan Identitas + pesan identifikasi */}
+                  <IdentityReadinessCard
+                    lead={selectedLead}
+                    contactForm={contactForm}
+                    linkMode={convertMode === "link"}
+                    className="border-t border-zinc-200 pt-3 sm:pt-4 lg:order-5"
+                  />
 
-                {/* Ronde 23 — Kelengkapan Identitas + pesan identifikasi */}
-                <IdentityReadinessCard
-                  lead={selectedLead}
-                  contactForm={contactForm}
-                  linkMode={convertMode === "link"}
-                />
-
-                {/* Identifikasi Identitas */}
-                <div className="border-t border-zinc-200 p-4">
+                {/* (6) Identifikasi Identitas + konversi */}
+                <section aria-label="Identifikasi identitas" className="min-w-0 border-t border-zinc-200 pt-3 sm:pt-4 lg:order-6">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
                       <Fingerprint className="size-4 text-zinc-500" aria-hidden="true" />
@@ -1930,10 +2112,10 @@ export default function InboxModule() {
                       ))}
                     </div>
                   )}
-                </div>
+                </section>
 
                 {/* Form konversi */}
-                <div className="border-t border-zinc-200 p-4">
+                <section aria-label="Data konversi" className="min-w-0 border-t border-zinc-200 pt-3 sm:pt-4 lg:order-7">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
                       <UserPlus className="size-4 text-zinc-500" aria-hidden="true" />
@@ -2151,7 +2333,7 @@ export default function InboxModule() {
 
                   <Button
                     type="button"
-                    className="mt-4 w-full bg-zinc-900 text-white hover:bg-zinc-800"
+                    className="mt-4 w-full bg-zinc-900 text-white hover:bg-zinc-800 sm:w-auto"
                     disabled={!canConvert || converting}
                     onClick={() => void handleConvert()}
                   >
@@ -2166,6 +2348,7 @@ export default function InboxModule() {
                       Pilih kandidat identitas di atas atau buat contact baru untuk melanjutkan.
                     </p>
                   ) : null}
+                </section>
                 </div>
               </div>
             )}

@@ -1,0 +1,35 @@
+# dependencies & build
+node_modules
+.next
+out
+build
+
+# git & env
+.git
+.gitignore
+.env
+.env.*
+
+# log & artefak lokal
+*.log
+dev.log
+server.log
+tool-results
+agent-ctx
+test
+prompt
+local-*
+
+# folder non-runtime
+skills
+examples
+.claude
+.z-ai-config
+
+# qa artifacts
+qa*.png
+
+# docker
+Dockerfile
+docker-compose.yml
+.dockerignore

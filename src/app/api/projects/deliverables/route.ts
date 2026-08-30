@@ -43,6 +43,7 @@ export async function PATCH(req: NextRequest) {
       status: decision,
       reviewComment,
       reviewedBy,
+      reviewedRole: body.reviewedRole ? String(body.reviewedRole).slice(0, 40) : null,
       reviewedAt: new Date(),
     },
   });

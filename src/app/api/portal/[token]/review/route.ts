@@ -8,7 +8,7 @@ import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
  * body { deliverableId, decision: "approved"|"revision", comment?, reviewerName }.
  * Guard: token valid/aktif/tidak kedaluwarsa (404/403), deliverable ada (404),
  * deliverable harus milik company yang sama dgn tautan (403).
- * Catatan: schema ProjectDeliverable belum punya kolom reviewedRole —
+ * Ronde 25: schema kini punya kolom reviewedRole (diisi "client" untuk review dari secure link) —
  * peran "client" dicatat di AuditLog.actorRole.
  */
 
@@ -51,6 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       status: decision,
       reviewComment: comment || null,
       reviewedBy: reviewerName,
+      reviewedRole: "client",
       reviewedAt: new Date(),
     },
     include: { project: { select: { code: true, name: true } } },

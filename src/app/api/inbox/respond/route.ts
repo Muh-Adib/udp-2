@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
+import { computeReplyChannels, REPLY_CHANNELS, reachableAddress } from "@/lib/crm/thread";
 
 /**
  * Fase 3 — Respons & catat lead inbox:
@@ -26,19 +27,39 @@ export async function POST(req: NextRequest) {
 
   const actorName = String(body.actorName ?? "Marketing");
   const actorRole = String(body.actorRole ?? "marketing");
-  const channel = String(body.channel ?? lead.channel ?? "whatsapp");
   const contactId = body.contactId ? String(body.contactId) : lead.contactId;
   const companyId = body.companyId
     ? String(body.companyId)
     : lead.contact?.companyId ?? null;
   const subject = body.subject ? String(body.subject) : null;
 
+  // ===== Ronde 25 — balasan HANYA via kanal yang punya alamat tujuan =====
+  // email → butuh alamat email; WhatsApp/telepon → nomor; Instagram → handle.
+  const available = computeReplyChannels({ channel: lead.channel, senderName: lead.senderName, contact: lead.contact });
+  const requestedRaw = body.channel ? String(body.channel) : lead.channel ?? "";
+  if (!(REPLY_CHANNELS as readonly string[]).includes(requestedRaw)) {
+    return fail(
+      available.length > 0
+        ? `Balasan harus via kanal yang punya kontak: ${available.join(", ")}.`
+        : "Belum ada kanal untuk membalas — lengkapi dulu email/nomor WhatsApp/handle Instagram pada kontak.",
+      400,
+    );
+  }
+  if (!available.includes(requestedRaw as (typeof REPLY_CHANNELS)[number])) {
+    return fail(
+      `Tidak bisa membalas via ${requestedRaw} — alamat tujuan tidak tersedia. Gunakan: ${available.join(", ")}.`,
+      400,
+    );
+  }
+  const channel = requestedRaw;
+  const replyAddress = reachableAddress(channel, { senderName: lead.senderName, contact: lead.contact });
+
   // Ronde 21: email outbound → kirim NYATA via SMTP bila kanal terverifikasi (non-demo).
   let deliveryStatus: string | null = "delivered";
   let deliveryNote: string | null = null;
   if (channel === "email") {
     const delivery = await deliverEmailReply({
-      recipientRaw: lead.contact?.fullName ?? lead.senderName ?? null,
+      recipientRaw: replyAddress ?? lead.contact?.fullName ?? lead.senderName ?? null,
       subject,
       content,
     });
@@ -52,7 +73,7 @@ export async function POST(req: NextRequest) {
       direction: "outbound",
       brandId: lead.brandId,
       senderName: actorName,
-      recipientName: lead.contact?.fullName ?? lead.senderName,
+      recipientName: replyAddress ?? lead.contact?.fullName ?? lead.senderName,
       subject,
       content,
       deliveryStatus,

@@ -72,7 +72,30 @@ Sistem CRM (Customer Relationship Management) full-stack untuk grup agensi kreat
 | Toast | sonner |
 | AI | Ringkasan opportunity via z-ai-web-dev-sdk (backend) |
 
-## 🚀 Menjalankan Project
+## 🐳 Deployment dengan Docker
+
+Tersedia `Dockerfile` + `docker-compose.yml` (Next.js standalone + Bun, database SQLite persisten di volume `db-data`).
+
+```bash
+# Build & jalankan (pertama kali ±2–4 menit)
+docker compose up -d --build
+
+# Cek log & status
+docker compose logs -f app
+docker compose ps
+
+# Matikan / hapus
+docker compose down          # data tetap tersimpan di volume
+docker compose down -v       # hati-hati: menghapus volume database
+```
+
+- Aplikasi berjalan di **http://localhost:3000** (ubah port lewat bagian `ports` di `docker-compose.yml`).
+- Saat container pertama berjalan, database seed demo otomatis disalin ke volume — login demo langsung bisa dipakai.
+- Schema Prisma di-sinkronkan otomatis setiap start (`prisma db push`, idempoten).
+- Kunci layanan AI (opsional) dikirim via env: `ZAI_API_KEY=xxx docker compose up -d --build`.
+- File dokumen portal (≤1,2 MB) tersimpan di SQLite — untuk backup cukup backup volume `db-data`.
+
+## 🚀 Menjalankan Project (tanpa Docker)
 
 ```bash
 # 1. Install dependencies

@@ -306,6 +306,7 @@ model ProjectDeliverable {
   status        String   @default("pending") // pending, approved, revision
   reviewComment String?
   reviewedBy    String?
+  reviewedRole  String? // production, director, super_admin, client (siapa yang mereview)
   reviewedAt    DateTime?
   createdBy     String?
   createdAt     DateTime @default(now())

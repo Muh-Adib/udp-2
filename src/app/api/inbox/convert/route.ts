@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { extractEmailFromText } from "@/lib/crm/utils";
+import { contactIdentityTokens, threadKeyForWithContact } from "@/lib/crm/thread";
 
 /**
  * Konversi lead inbox menjadi contact (+company) dan opportunity.
@@ -125,6 +126,54 @@ export async function POST(req: NextRequest) {
     data: { opportunityId: opportunity.id, contactId, companyId },
   });
 
+  // ===== Ronde 25 — SATUKAN pesan lain dari identitas yang sama =====
+  // Semua pesan inbound lain yang belum dikonversi dan terbukti milik kontak yang sama
+  // (email/nomor WA/handle IG/nama cocok) ikut tertaut ke contact + opportunity ini,
+  // sehingga percakapan lintas kanal/website/negara jadi SATU lead berdasarkan kontak.
+  let unifiedCount = 0;
+  try {
+    const contactRow = await db.contact.findUnique({ where: { id: contactId } });
+    if (contactRow) {
+      const tokens = contactIdentityTokens(contactRow);
+      const siblings = await db.interaction.findMany({
+        where: {
+          direction: "inbound",
+          opportunityId: null,
+          id: { not: interactionId },
+          createdAt: { gte: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000) },
+        },
+        select: { id: true, contactId: true, senderName: true, recipientName: true, brandId: true },
+        take: 200,
+      });
+      for (const sib of siblings) {
+        const key = threadKeyForWithContact(sib, tokens, contactId);
+        if (key !== `c:${contactId}`) continue;
+        await db.interaction.update({
+          where: { id: sib.id },
+          data: {
+            contactId,
+            companyId,
+            opportunityId: opportunity.id,
+            // brand tetap dari sumber masing-masing; hanya diisi bila kosong
+            ...(sib.brandId ? {} : { brandId }),
+          },
+        });
+        await logAudit({
+          actorName, actorRole, action: "update", entity: "interaction",
+          entityId: sib.id,
+          entityLabel: `Pesan disatukan ke ${contactRow.fullName} · ${opportunity.title}`,
+          field: "thread_unify",
+          oldValue: null,
+          newValue: opportunity.id,
+          req,
+        });
+        unifiedCount += 1;
+      }
+    }
+  } catch {
+    // unify gagal tidak boleh menggagalkan konversi utama
+  }
+
   // Task SLA follow-up
   await db.task.create({
     data: {
@@ -144,5 +193,5 @@ export async function POST(req: NextRequest) {
     req,
   });
 
-  return ok({ opportunity, contactId }, 201);
+  return ok({ opportunity, contactId, unifiedCount }, 201);
 }

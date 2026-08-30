@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
   Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
-  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Trash2, User2, X, XCircle,
+  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, ShieldCheck, Trash2, User, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -35,7 +35,7 @@ import { useCrmStore } from "@/lib/crm/store";
 import type {
   Brand, ChangeRequestDTO, CompanyRef, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
 } from "@/lib/crm/types";
-import { formatCurrency, formatDate, timeAgo } from "@/lib/crm/utils";
+import { formatCurrency, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
 // ============ Meta ============
@@ -81,6 +81,17 @@ const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
 
 function dlvMeta(s: string) {
   return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+}
+
+/** Task 25-b — label peran reviewer deliverable (reviewedRole). Role tak dikenal ditampilkan apa adanya. */
+function reviewerRoleLabel(role?: string | null): string {
+  switch (role) {
+    case "production": return "Produksi";
+    case "director": return "Direktur";
+    case "super_admin": return "Super Admin";
+    case "client": return "Klien";
+    default: return role ?? "";
+  }
 }
 
 function formatSizeKb(bytes?: number | null): string {
@@ -892,8 +903,16 @@ function DeliverableRow({ d, user, onChanged }: {
               Dikirim {timeAgo(d.createdAt)}{d.createdBy ? ` oleh ${d.createdBy}` : ""}
             </p>
             {d.status !== "pending" && d.reviewedBy ? (
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Direview oleh {d.reviewedBy}{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
+              <p className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500">
+                {d.reviewedRole === "client" ? (
+                  <User className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+                ) : (
+                  <ShieldCheck className="h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+                )}
+                <span>
+                  Direview oleh {d.reviewedBy}{d.reviewedRole ? ` · ${reviewerRoleLabel(d.reviewedRole)}` : ""}
+                  {d.reviewedAt ? ` · ${formatDateTime(d.reviewedAt)}` : ""}
+                </span>
               </p>
             ) : null}
             {d.reviewComment ? (
@@ -1994,10 +2013,21 @@ export default function ProjectsModule() {
                 {/* Deliverable & Review (Task 22-4) — kirim file/tautan → review klien/manajemen */}
                 <div>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                      <FileCheck className="h-3.5 w-3.5" aria-hidden />
-                      Deliverable &amp; Review
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        <FileCheck className="h-3.5 w-3.5" aria-hidden />
+                        Deliverable &amp; Review
+                      </p>
+                      {/* Task 25-b — ringkasan produksi, dihitung dari list deliverable */}
+                      {deliverables !== null && deliverables.length > 0 ? (
+                        <span
+                          className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-600"
+                          aria-label="Ringkasan status deliverable"
+                        >
+                          {dlvCounts.pending} pending · {dlvCounts.approved} disetujui · {dlvCounts.revision} revisi
+                        </span>
+                      ) : null}
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -2009,17 +2039,12 @@ export default function ProjectsModule() {
                     </Button>
                   </div>
 
-                  {deliverables !== null && deliverables.length > 0 ? (
-                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">{dlvCounts.total} total</span>
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">{dlvCounts.pending} menunggu</span>
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">{dlvCounts.approved} disetujui</span>
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">{dlvCounts.revision} revisi</span>
-                    </div>
-                  ) : null}
-
                   {dfOpen ? (
                     <div className="mb-2 space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                      {/* Task 25-b — penjelasan alur review via secure link */}
+                      <p className="text-[11px] text-zinc-500">
+                        Deliverable akan muncul di secure link klien untuk disetujui / diminta revisi.
+                      </p>
                       <div className="grid gap-1.5">
                         <Label htmlFor="dlv-name">Nama deliverable *</Label>
                         <Input

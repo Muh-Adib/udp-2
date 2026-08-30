@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Ban, Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Copy, Eye, ExternalLink,
   FileSignature, FileStack, FileText, FolderKanban, GitPullRequestArrow, Info, KeyRound, Link2, Loader2, Lock, PackageCheck,
-  Paperclip, Pencil, Plus, RefreshCw, ReceiptText, RotateCcw, Trash2, X, type LucideIcon,
+  Paperclip, Pencil, Plus, RefreshCw, ReceiptText, RotateCcw, ShieldCheck, Trash2, User, X, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -81,6 +81,17 @@ const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
 };
 
 function dlvStatus(s: string) { return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+
+/** Task 25-b — label peran reviewer deliverable (reviewedRole). Role tak dikenal ditampilkan apa adanya. */
+function reviewerRoleLabel(role?: string | null): string {
+  switch (role) {
+    case "production": return "Produksi";
+    case "director": return "Direktur";
+    case "super_admin": return "Super Admin";
+    case "client": return "Klien";
+    default: return role ?? "";
+  }
+}
 
 function formatSizeKb(bytes?: number | null): string {
   if (!bytes || bytes <= 0) return "";
@@ -169,6 +180,9 @@ function PortalDeliverableRow({ d, user, canReview, onChanged }: {
   onChanged: () => Promise<void>;
 }) {
   const meta = dlvStatus(d.status);
+  // Task 25-b — klien melihat review-nya sendiri ("Anda sudah mereview"); staf (pratinjau secure link)
+  // melihat reviewer lengkap + perannya, plus badge "Direview oleh Klien" bila review dari portal publik.
+  const isClientViewer = user?.role === "client";
   const [review, setReview] = useState<null | "approved" | "revision">(null);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
@@ -219,16 +233,38 @@ function PortalDeliverableRow({ d, user, canReview, onChanged }: {
               Dikirim {timeAgo(d.createdAt)}{d.createdBy ? ` oleh ${d.createdBy}` : ""}
             </p>
             {d.status !== "pending" && d.reviewedBy ? (
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Anda sudah mereview{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
-              </p>
+              isClientViewer ? (
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  Anda sudah mereview{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
+                </p>
+              ) : (
+                <p className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500">
+                  {d.reviewedRole === "client" ? (
+                    <User className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+                  ) : (
+                    <ShieldCheck className="h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+                  )}
+                  <span>
+                    Direview oleh {d.reviewedBy}{d.reviewedRole ? ` · ${reviewerRoleLabel(d.reviewedRole)}` : ""}
+                    {d.reviewedAt ? ` · ${formatDateTime(d.reviewedAt)}` : ""}
+                  </span>
+                </p>
+              )
             ) : null}
             {d.reviewComment ? (
               <p className="mt-0.5 text-[11px] italic text-zinc-500">Catatan review: “{d.reviewComment}”</p>
             ) : null}
           </div>
         </div>
-        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>{meta.label}</Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>{meta.label}</Badge>
+          {/* Task 25-b — tanda review datang dari portal publik klien (utk staf saat pratinjau) */}
+          {!isClientViewer && d.reviewedRole === "client" ? (
+            <Badge variant="outline" className="shrink-0 gap-1 border-emerald-200 bg-emerald-50 px-1.5 text-emerald-700">
+              <User className="h-3 w-3" aria-hidden /> Direview oleh Klien
+            </Badge>
+          ) : null}
+        </div>
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">

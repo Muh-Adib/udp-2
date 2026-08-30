@@ -189,6 +189,8 @@ export type InboxLeadDTO = InteractionDTO & {
   candidates: MatchCandidateDTO[];
   threadKey: string;
   thread: ConversationThreadDTO;
+  /** Ronde 25 — kanal balasan legal (hanya kanal yang punya alamat tujuan di kontak/lead). */
+  replyChannels: string[];
 };
 
 export interface ProjectDTO {
@@ -236,6 +238,8 @@ export interface ProjectDeliverableDTO {
   status: "pending" | "approved" | "revision";
   reviewComment?: string | null;
   reviewedBy?: string | null;
+  /** Ronde 25 — production | director | super_admin | client. */
+  reviewedRole?: string | null;
   reviewedAt?: string | null;
   createdBy?: string | null;
   createdAt: string;
