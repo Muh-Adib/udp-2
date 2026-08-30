@@ -385,3 +385,63 @@ export const channelsApi = {
     ),
   remove: (id: string) => request<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }),
 };
+
+// ============ PORTAL KLIEN — SECURE LINK TOKEN & DOKUMEN ============
+export const portalApi = {
+  /** Daftar token secure link (staf). */
+  tokens: () =>
+    request<{ tokens: import("@/lib/crm/types").PortalTokenDTO[] }>("/api/portal/tokens"),
+  /** Buat token secure link utk perusahaan klien. */
+  createToken: (payload: { companyId: string; label?: string; actorName?: string; actorRole?: string }) =>
+    request<{ token: import("@/lib/crm/types").PortalTokenDTO }>("/api/portal/tokens", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  /** Aktifkan/cabut token. */
+  updateToken: (id: string, payload: { active?: boolean; actorName?: string }) =>
+    request<{ token: import("@/lib/crm/types").PortalTokenDTO }>(`/api/portal/tokens/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteToken: (id: string) =>
+    request<{ ok: boolean }>(`/api/portal/tokens/${id}`, { method: "DELETE" }),
+
+  /** Daftar dokumen/MoU/catatan rapat per perusahaan. */
+  documents: (companyId: string) =>
+    request<{ documents: import("@/lib/crm/types").ClientDocumentDTO[] }>(
+      `/api/portal/documents?companyId=${encodeURIComponent(companyId)}`
+    ),
+  createDocument: (payload: {
+    companyId: string;
+    kind: string;
+    title: string;
+    content?: string;
+    url?: string;
+    fileName?: string;
+    fileData?: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    meetingAt?: string;
+    attendees?: string;
+    actorName?: string;
+  }) =>
+    request<{ document: import("@/lib/crm/types").ClientDocumentDTO }>("/api/portal/documents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteDocument: (id: string) =>
+    request<{ ok: boolean }>(`/api/portal/documents/${id}`, { method: "DELETE" }),
+
+  /** (PUBLIK) Ambil isi secure link — tanpa login, kunci = token URL. */
+  byToken: (token: string) =>
+    request<import("@/lib/crm/types").PortalTokenPayload>(`/api/portal/${token}`),
+  /** (PUBLIK) Review deliverable dari secure link. */
+  review: (
+    token: string,
+    payload: { deliverableId: string; decision: "approved" | "revision"; comment?: string; reviewerName: string }
+  ) =>
+    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(`/api/portal/${token}/review`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+};

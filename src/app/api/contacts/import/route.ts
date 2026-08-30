@@ -13,6 +13,9 @@ interface ImportRow {
   phone?: string | null;
   company?: string | null;
   position?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
   country?: string | null;
   city?: string | null;
 }
@@ -51,6 +54,9 @@ function normalizeRows(raw: unknown): NormalizedRow[] {
       phone: normalizePhone(s(row.phone)),
       company: s(row.company),
       position: s(row.position),
+      instagram: s(row.instagram),
+      facebook: s(row.facebook),
+      tiktok: s(row.tiktok),
       country: s(row.country),
       city: s(row.city),
     };
@@ -193,6 +199,9 @@ export async function POST(req: NextRequest) {
           ...(!target.whatsapp && row.whatsapp ? { whatsapp: row.whatsapp } : {}),
           ...(!target.phone && row.phone ? { phone: row.phone } : {}),
           ...(!target.position && row.position ? { position: row.position } : {}),
+          ...(!target.instagram && row.instagram ? { instagram: row.instagram } : {}),
+          ...(!target.facebook && row.facebook ? { facebook: row.facebook } : {}),
+          ...(!target.tiktok && row.tiktok ? { tiktok: row.tiktok } : {}),
           ...(newCompanyId ? { companyId: newCompanyId } : {}),
           ...(!target.city && row.city ? { city: row.city } : {}),
           ...(!target.country && row.country ? { country: row.country } : {}),
@@ -236,6 +245,9 @@ export async function POST(req: NextRequest) {
         whatsapp: row.whatsapp,
         phone: row.phone,
         position: row.position,
+        instagram: row.instagram,
+        facebook: row.facebook,
+        tiktok: row.tiktok,
         country: row.country,
         city: row.city,
         companyId,

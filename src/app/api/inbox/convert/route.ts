@@ -76,7 +76,10 @@ export async function POST(req: NextRequest) {
           firstName, lastName: lastName || null, fullName,
           position: c.position ? String(c.position) : null,
           email: em, whatsapp: wa, phone: c.phone ? String(c.phone) : null,
+          // Ronde 23: kolom instagram terstruktur + socialProfile (handle) dipertahankan
+          // agar scanner duplikat lintas sumber tetap mengenali lead dari IG.
           socialProfile: socialHandle,
+          instagram: c.instagram ? String(c.instagram).trim() : null,
           country: c.country ? String(c.country) : "Indonesia",
           city: c.city ? String(c.city) : null,
           preferredChannel: interaction.channel,

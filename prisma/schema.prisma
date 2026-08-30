@@ -75,6 +75,8 @@ model Company {
   projects      Project[]
   invoices      Invoice[]
   quotations    Quotation[]
+  portalTokens  ClientPortalToken[]
+  documents     ClientDocument[]
 }
 
 model Contact {
@@ -92,7 +94,10 @@ model Contact {
   timezone         String?
   language         String    @default("id")
   preferredChannel String    @default("whatsapp") // whatsapp, email, phone, instagram
-  socialProfile    String?
+  socialProfile    String? // handle/URL sosial lain (bebas)
+  instagram        String? // handle IG (mis. @rani.creativehouse) — lead kerap datang dari IG
+  facebook         String?
+  tiktok           String?
   linkedin         String?
   consentStatus    String    @default("granted") // granted, declined, pending
   tags             String    @default("[]") // JSON array
@@ -520,6 +525,49 @@ model ClientBrief {
   createdBy       String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
+}
+
+// ============ FASE 3: PORTAL KLIEN — SECURE LINK TOKEN ============
+// Akses klien TANPA login: staf membuat token rahasia per perusahaan klien,
+// klien membuka URL /?portal=<token>. Token bisa dicabut kapan saja.
+model ClientPortalToken {
+  id             String    @id @default(cuid())
+  token          String    @unique // 48 hex acak — rahasia, hanya dibagikan ke klien
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  label          String?   // mis. "Hendra — PT Nusantara"
+  active         Boolean   @default(true) // false = dicabut
+  createdByName  String?
+  lastAccessedAt DateTime?
+  accessCount    Int       @default(0)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([companyId])
+}
+
+// Isi secure link klien: MoU (file/tautan), catatan rapat (teks), dokumen lain.
+// File kecil ≤1.2MB disimpan base64 (praktis utk demo; object storage menyusul).
+model ClientDocument {
+  id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind          String    @default("document") // mou | meeting_note | document
+  title         String
+  content       String?   // isi teks (catatan rapat / deskripsi dokumen)
+  url           String?   // tautan eksternal (mis. Google Drive)
+  fileName      String?
+  fileData      String?   // data URL base64 (upload kecil)
+  mimeType      String?
+  sizeBytes     Int?
+  meetingAt     DateTime? // utk kind=meeting_note
+  attendees     String?   // peserta rapat, dipisah koma
+  createdByName String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([companyId, kind])
 }
 
 // ============ FASE 3: SALURAN & INTEGRASI ============

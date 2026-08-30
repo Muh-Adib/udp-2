@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, Clock, Fingerprint, Globe, Inbox,
-  Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone, PlugZap, RefreshCw, Reply, Send,
-  ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
+  AlarmClock, AlertTriangle, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, ClipboardList, Clock, Copy,
+  Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Link2, Link2Off, Loader2, Mail, MessageCircle, Phone,
+  PlugZap, RefreshCw, Reply, Send, ShieldAlert, Timer, TimerOff, User, UserPlus, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, channelsApi } from "@/lib/crm/api-client";
@@ -37,6 +37,8 @@ function isResponded(lead: InboxLead): boolean {
 
 interface ContactFormState {
   firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
+  /** Ronde 23 — jabatan di perusahaan + handle Instagram (lead kerap datang dari IG). */
+  position: string; instagram: string;
 }
 interface OpportunityFormState {
   brandId: string; title: string; serviceCategory: string; serviceName: string;
@@ -44,7 +46,7 @@ interface OpportunityFormState {
 }
 
 const EMPTY_CONTACT_FORM: ContactFormState = {
-  firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "",
+  firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
 };
 const EMPTY_OPP_FORM: OpportunityFormState = {
   brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", ownerName: "", priority: "medium",
@@ -365,6 +367,184 @@ function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCand
           "Gabungkan ke Contact Ini"
         )}
       </Button>
+    </div>
+  );
+}
+
+/** Ronde 23 — chip status satu data identitas: Check emerald bila terisi, CircleDashed amber + "kurang" bila kosong. */
+function IdentityChip({ label, filled }: { label: string; filled: boolean }) {
+  if (filled) {
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 border-emerald-300 bg-emerald-50 text-emerald-700"
+        aria-label={`${label}: sudah ada`}
+      >
+        <Check className="size-3" aria-hidden="true" />
+        {label}
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-amber-300 bg-amber-50 text-amber-700"
+      aria-label={`${label}: kurang`}
+    >
+      <CircleDashed className="size-3" aria-hidden="true" />
+      {`${label} · kurang`}
+    </Badge>
+  );
+}
+
+/**
+ * Ronde 23 — seksi "Kelengkapan Identitas": chips status 5 data kontak (Nama, Perusahaan,
+ * Jabatan, Email, WhatsApp) yang reaktif terhadap ketikan form konversi, teks bantu
+ * follow-up awal, dan tombol salin "Pesan Identifikasi" yang hanya meminta field yang
+ * masih kurang (siap ditempel ke chat WhatsApp/Instagram).
+ * Mode link (contact kandidat terpilih) → data form tidak dinilai, tampil teks singkat.
+ */
+function IdentityReadinessCard({
+  lead,
+  contactForm,
+  linkMode,
+}: {
+  lead: InboxLead;
+  contactForm: ContactFormState;
+  linkMode: boolean;
+}) {
+  const rawSender = (lead.senderName ?? "").trim();
+  // Lead IG dengan handle → pesan menyapa pakai handle (nama belum tentu diketahui).
+  const igHandle = lead.channel === "instagram" && isSocialHandle(rawSender) ? rawSender : null;
+
+  const fields = [
+    { key: "nama", label: "Nama", messageLabel: "Nama lengkap", filled: contactForm.firstName.trim() !== "" },
+    { key: "perusahaan", label: "Perusahaan", messageLabel: "Nama perusahaan", filled: contactForm.companyName.trim() !== "" },
+    { key: "jabatan", label: "Jabatan", messageLabel: "Jabatan di perusahaan", filled: contactForm.position.trim() !== "" },
+    { key: "email", label: "Email", messageLabel: "Email aktif", filled: contactForm.email.trim() !== "" },
+    { key: "whatsapp", label: "WhatsApp", messageLabel: "Nomor WhatsApp aktif", filled: contactForm.whatsapp.trim() !== "" },
+  ];
+  const missing = fields.filter((f) => !f.filled);
+  const complete = missing.length === 0;
+
+  const greetingName = igHandle ?? contactForm.firstName.trim();
+  const brandName = lead.brand?.name ?? "tim kami";
+  const identityMessage = [
+    `Halo${greetingName ? ` ${greetingName}` : ""}! Terima kasih sudah menghubungi ${brandName}. Sebelum kami lanjut, boleh dibantu lengkapi info berikut:`,
+    ...missing.map((f) => `- ${f.messageLabel}`),
+  ].join("\n");
+
+  // Fallback: bila clipboard ditolak browser (izin/konteks non-secure), tampilkan pesan
+  // di dialog agar tetap bisa disalin manual — fitur tidak pernah buntu.
+  const [manualCopy, setManualCopy] = useState(false);
+
+  async function handleCopyMessage() {
+    const legacyCopy = () => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = identityMessage;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await navigator.clipboard.writeText(identityMessage);
+      toast.success("Pesan identifikasi disalin — tempel di chat klien");
+    } catch {
+      if (legacyCopy()) {
+        toast.success("Pesan identifikasi disalin — tempel di chat klien");
+      } else {
+        setManualCopy(true);
+      }
+    }
+  }
+
+  return (
+    <div className="border-t border-zinc-200 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+          <ClipboardList className="size-4 text-zinc-500" aria-hidden="true" />
+          Kelengkapan Identitas
+        </div>
+        {!linkMode ? (
+          <Badge
+            variant="outline"
+            className={cn(
+              "border",
+              complete
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : "border-amber-300 bg-amber-50 text-amber-700"
+            )}
+          >
+            {`${fields.length - missing.length}/${fields.length} lengkap`}
+          </Badge>
+        ) : null}
+      </div>
+
+      {linkMode ? (
+        <p className="mt-3 text-xs text-zinc-500">
+          Pakai contact terpilih — kelengkapan data mengikuti kontak yang digabungkan, bukan form ini.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5" aria-label="Status kelengkapan 5 data identitas">
+            {fields.map((f) => (
+              <IdentityChip key={f.key} label={f.label} filled={f.filled} />
+            ))}
+          </div>
+          <p className="mt-2.5 text-xs leading-relaxed text-zinc-500">
+            Follow-up awal = identifikasi: lengkapi data kontak supaya log percakapan dari semua kanal mudah tergabung dengan lead ini.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            disabled={complete}
+            onClick={() => void handleCopyMessage()}
+            aria-label={complete ? "Data kontak sudah lengkap" : "Salin pesan identifikasi untuk dikirim ke klien"}
+          >
+            {complete ? (
+              <><CheckCircle2 className="size-4" aria-hidden="true" /> Data lengkap</>
+            ) : (
+              <><Copy className="size-4" aria-hidden="true" /> Salin Pesan Identifikasi</>
+            )}
+          </Button>
+          <Dialog open={manualCopy} onOpenChange={setManualCopy}>
+            <DialogContent className="sm:max-w-md" aria-label="Salin pesan identifikasi secara manual">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <Copy className="size-4 text-zinc-500" aria-hidden="true" /> Salin Manual Pesan Identifikasi
+                </DialogTitle>
+                <DialogDescription>
+                  Browser menolak akses clipboard — salin teks di bawah secara manual (blok semua lalu Ctrl/Cmd+C).
+                </DialogDescription>
+              </DialogHeader>
+              <Textarea
+                readOnly
+                rows={7}
+                value={identityMessage}
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Teks pesan identifikasi"
+                className="text-sm"
+              />
+              <DialogFooter>
+                <Button type="button" variant="outline" size="sm" onClick={() => setManualCopy(false)}>
+                  Tutup
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
     </div>
   );
 }
@@ -896,6 +1076,8 @@ export default function InboxModule() {
       ...EMPTY_CONTACT_FORM,
       email: emailCandidate ?? "",
       whatsapp: looksLikePhone ? rawSender : "",
+      // Ronde 23: lead IG dgn handle → handle masuk kolom Instagram (perilaku email r22 tetap).
+      instagram: lead.channel === "instagram" && isSocialHandle(rawSender) ? rawSender : "",
     });
     setOppForm({
       ...EMPTY_OPP_FORM,
@@ -961,6 +1143,9 @@ export default function InboxModule() {
         ...(contactForm.email.trim() ? { email: contactForm.email.trim() } : {}),
         ...(contactForm.whatsapp.trim() ? { whatsapp: contactForm.whatsapp.trim() } : {}),
         ...(contactForm.companyName.trim() ? { companyName: contactForm.companyName.trim() } : {}),
+        // Ronde 23 — jabatan + Instagram (lead berasal dari IG) ikut dikirim saat konversi.
+        ...(contactForm.position.trim() ? { position: contactForm.position.trim() } : {}),
+        ...(contactForm.instagram.trim() ? { instagram: contactForm.instagram.trim() } : {}),
         ...(contactForm.city.trim() ? { city: contactForm.city.trim() } : {}),
       };
     }
@@ -1319,6 +1504,13 @@ export default function InboxModule() {
                   ) : null}
                 </div>
 
+                {/* Ronde 23 — Kelengkapan Identitas + pesan identifikasi */}
+                <IdentityReadinessCard
+                  lead={selectedLead}
+                  contactForm={contactForm}
+                  linkMode={convertMode === "link"}
+                />
+
                 {/* Identifikasi Identitas */}
                 <div className="border-t border-zinc-200 p-4">
                   <div className="flex items-center justify-between gap-2">
@@ -1424,12 +1616,30 @@ export default function InboxModule() {
                           />
                         </div>
                         <div className="space-y-1.5">
+                          <Label htmlFor="inbox-position" className="text-xs">Jabatan di Perusahaan</Label>
+                          <Input
+                            id="inbox-position"
+                            value={contactForm.position}
+                            onChange={(e) => setContactForm((f) => ({ ...f, position: e.target.value }))}
+                            placeholder="cth. Marketing Manager"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
                           <Label htmlFor="inbox-city" className="text-xs">Kota</Label>
                           <Input
                             id="inbox-city"
                             value={contactForm.city}
                             onChange={(e) => setContactForm((f) => ({ ...f, city: e.target.value }))}
                             placeholder="cth. Medan"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="inbox-instagram" className="text-xs">Instagram</Label>
+                          <Input
+                            id="inbox-instagram"
+                            value={contactForm.instagram}
+                            onChange={(e) => setContactForm((f) => ({ ...f, instagram: e.target.value }))}
+                            placeholder="cth. @rani.creativehouse"
                           />
                         </div>
                       </div>

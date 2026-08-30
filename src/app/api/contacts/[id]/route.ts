@@ -9,7 +9,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const current = await db.contact.findUnique({ where: { id } });
   if (!current) return fail("Contact tidak ditemukan", 404);
 
-  const fields = ["firstName", "lastName", "position", "emailAlt", "country", "city", "timezone", "language", "preferredChannel", "socialProfile", "linkedin", "notes", "consentStatus"];
+  const fields = ["firstName", "lastName", "position", "emailAlt", "country", "city", "timezone", "language", "preferredChannel", "socialProfile", "linkedin", "instagram", "facebook", "tiktok", "notes", "consentStatus"];
   const data: Record<string, unknown> = {};
   const changes: { field: string; oldValue: unknown; newValue: unknown }[] = [];
 

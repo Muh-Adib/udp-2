@@ -52,6 +52,10 @@ export interface ContactRef {
   language: string;
   consentStatus: string;
   tags?: string | null;
+  /** Media sosial terstruktur — lead kerap datang dari Instagram dkk. */
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
   companyId?: string | null;
   company?: CompanyRef | null;
 }
@@ -684,4 +688,57 @@ export interface ChannelsData {
   webhook: { whatsapp: ChannelWebhookInfo };
   stats: Record<string, ChannelActivityStats>;
   types: Record<string, import("@/lib/crm/channels").ChannelTypeMeta>;
+}
+
+// ============ FASE 3: PORTAL KLIEN — SECURE LINK TOKEN ============
+
+/** Token akses klien (secure URL, tanpa login). */
+export interface PortalTokenDTO {
+  id: string;
+  token: string;
+  companyId: string;
+  company?: { id: string; name: string } | null;
+  label?: string | null;
+  active: boolean;
+  createdByName?: string | null;
+  lastAccessedAt?: string | null;
+  accessCount: number;
+  expiresAt?: string | null;
+  createdAt: string;
+}
+
+/** Dokumen / MoU / catatan rapat yang tampil di secure link klien. */
+export interface ClientDocumentDTO {
+  id: string;
+  companyId: string;
+  kind: "mou" | "meeting_note" | "document" | string;
+  title: string;
+  content?: string | null;
+  url?: string | null;
+  fileName?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  meetingAt?: string | null;
+  attendees?: string | null;
+  createdByName?: string | null;
+  createdAt: string;
+  /** fileData (base64 data URL) hanya dikirim bila diminta (unduh). */
+  fileData?: string | null;
+}
+
+/** Payload GET /api/portal/[token] — isi secure link klien. */
+export interface PortalTokenPayload {
+  company: { id: string; name: string; industry?: string | null; city?: string | null };
+  token: { label?: string | null; createdAt: string };
+  documents: ClientDocumentDTO[];
+  projects: {
+    id: string;
+    code: string;
+    name: string;
+    status: string;
+    progress: number;
+    dueDate?: string | null;
+    brandName?: string | null;
+    deliverables: import("@/lib/crm/types").ProjectDeliverableDTO[];
+  }[];
 }

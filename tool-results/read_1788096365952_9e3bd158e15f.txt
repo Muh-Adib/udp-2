@@ -1,0 +1,1181 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Copy, Eye, ExternalLink,
+     6→  FileSignature, FolderKanban, GitPullRequestArrow, Info, KeyRound, Link2, Loader2, Lock, PackageCheck, Paperclip, Pencil,
+     7→  RefreshCw, ReceiptText, X, type LucideIcon,
+     8→} from "lucide-react";
+     9→import { toast } from "sonner";
+    10→
+    11→import {
+    12→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    13→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    14→} from "@/components/ui/alert-dialog";
+    15→import { Badge } from "@/components/ui/badge";
+    16→import { Button } from "@/components/ui/button";
+    17→import { Progress } from "@/components/ui/progress";
+    18→import {
+    19→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    20→} from "@/components/ui/select";
+    21→import {
+    22→  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+    23→} from "@/components/ui/sheet";
+    24→import { Skeleton } from "@/components/ui/skeleton";
+    25→import { Textarea } from "@/components/ui/textarea";
+    26→import { api } from "@/lib/crm/api-client";
+    27→import { useCrmStore } from "@/lib/crm/store";
+    28→import type {
+    29→  ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO, QuotationDTO, QuotationItemDTO,
+    30→  SessionUser,
+    31→} from "@/lib/crm/types";
+    32→import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
+    33→
+    34→// ============ Meta ============
+    35→
+    36→const INVOICE_STATUS: Record<string, { label: string; cls: string }> = {
+    37→  draft: { label: "Draft", cls: "bg-zinc-100 text-zinc-600" },
+    38→  sent: { label: "Terkirim", cls: "bg-violet-100 text-violet-700" },
+    39→  partial: { label: "Sebagian", cls: "bg-amber-100 text-amber-700" },
+    40→  paid: { label: "Lunas", cls: "bg-emerald-100 text-emerald-700" },
+    41→  overdue: { label: "Overdue", cls: "bg-rose-100 text-rose-700" },
+    42→};
+    43→
+    44→const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
+    45→  planning: { label: "Perencanaan", cls: "bg-zinc-100 text-zinc-600" },
+    46→  in_progress: { label: "Berjalan", cls: "bg-amber-100 text-amber-700" },
+    47→  review: { label: "Review", cls: "bg-violet-100 text-violet-700" },
+    48→  completed: { label: "Selesai", cls: "bg-emerald-100 text-emerald-700" },
+    49→};
+    50→
+    51→const CR_STATUS: Record<string, { label: string; cls: string }> = {
+    52→  pending: { label: "Menunggu Persetujuan Anda", cls: "bg-amber-100 text-amber-700" },
+    53→  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+    54→  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+    55→  cancelled: { label: "Dibatalkan", cls: "bg-zinc-100 text-zinc-600" },
+    56→};
+    57→
+    58→const QUOTATION_STATUS: Record<string, { label: string; cls: string }> = {
+    59→  draft: { label: "Draft", cls: "bg-zinc-100 text-zinc-600" },
+    60→  sent: { label: "Terkirim", cls: "bg-violet-100 text-violet-700" },
+    61→  accepted: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+    62→  rejected: { label: "Ditolak", cls: "bg-rose-100 text-rose-700" },
+    63→  expired: { label: "Kedaluwarsa", cls: "bg-zinc-100 text-zinc-600" },
+    64→};
+    65→
+    66→const MILESTONE_ICON: Record<string, LucideIcon> = {
+    67→  done: CheckCircle2,
+    68→  in_progress: CircleDotDashed,
+    69→  pending: CircleDashed,
+    70→};
+    71→
+    72→// Task 22-4 — status deliverable (badge: pending=zinc, approved=emerald, revision=amber)
+    73→const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
+    74→  pending: { label: "Menunggu Review", cls: "bg-zinc-100 text-zinc-600" },
+    75→  approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700" },
+    76→  revision: { label: "Revisi Diminta", cls: "bg-amber-100 text-amber-700" },
+    77→};
+    78→
+    79→function dlvStatus(s: string) { return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+    80→
+    81→function formatSizeKb(bytes?: number | null): string {
+    82→  if (!bytes || bytes <= 0) return "";
+    83→  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+    84→}
+    85→
+    86→/** fileData (base64 data URL) dikirim server tetapi tidak dideklarasikan di ProjectDeliverableDTO —
+    87→ *  types.ts tidak boleh diubah, jadi perluas secara lokal untuk keperluan unduh. */
+    88→type DeliverableRowData = ProjectDeliverableDTO & { fileData?: string | null };
+    89→
+    90→function invStatus(s: string) { return INVOICE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+    91→function projStatus(s: string) { return PROJECT_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+    92→function crStatus(s: string) { return CR_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+    93→function quoteStatus(s: string) { return QUOTATION_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" }; }
+    94→
+    95→/** Parse item quotation defensif — items bisa JSON string atau array. */
+    96→function parseQuoteItems(items: string | QuotationItemDTO[]): QuotationItemDTO[] {
+    97→  if (Array.isArray(items)) return items;
+    98→  try {
+    99→    const parsed: unknown = JSON.parse(items);
+   100→    return Array.isArray(parsed) ? (parsed as QuotationItemDTO[]) : [];
+   101→  } catch {
+   102→    return [];
+   103→  }
+   104→}
+   105→
+   106→/** Domain dari URL/email sederhana, untuk mencocokkan akun client dengan perusahaannya. */
+   107→function domainOf(raw?: string | null): string | null {
+   108→  if (!raw) return null;
+   109→  const s = raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].split("@").pop() ?? "";
+   110→  return s.includes(".") ? s : null;
+   111→}
+   112→
+   113→// ============ Sub-komponen kecil ============
+   114→
+   115→function PortalProjectCard({ project }: { project: ProjectDTO }) {
+   116→  const st = projStatus(project.status);
+   117→  const ms = project.milestones ?? [];
+   118→  const doneCount = ms.filter((m) => m.status === "done").length;
+   119→  return (
+   120→    <div className="rounded-xl border bg-white p-4 shadow-sm">
+   121→      <div className="flex items-start justify-between gap-2">
+   122→        <div className="min-w-0">
+   123→          <p className="truncate text-sm font-semibold text-zinc-900">{project.name}</p>
+   124→          <p className="font-mono text-[11px] text-zinc-500">{project.code}</p>
+   125→        </div>
+   126→        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+   127→      </div>
+   128→      <div className="mt-3 space-y-1.5">
+   129→        <div className="flex items-center justify-between text-xs text-zinc-500">
+   130→          <span>Progress pengerjaan</span>
+   131→          <span className="font-semibold tabular-nums text-zinc-700">{project.progress}%</span>
+   132→        </div>
+   133→        <Progress value={project.progress} aria-label={`Progress project ${project.progress}%`} />
+   134→      </div>
+   135→      {ms.length > 0 ? (
+   136→        <div className="mt-3 space-y-1.5">
+   137→          <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+   138→            Milestone ({doneCount}/{ms.length} selesai)
+   139→          </p>
+   140→          {ms.map((m) => {
+   141→            const Icon = MILESTONE_ICON[m.status] ?? CircleDashed;
+   142→            return (
+   143→              <div key={m.id} className="flex items-center gap-2 text-xs">
+   144→                <Icon className={`h-3.5 w-3.5 shrink-0 ${m.status === "done" ? "text-emerald-600" : m.status === "in_progress" ? "text-amber-600" : "text-zinc-300"}`} aria-hidden />
+   145→                <span className={m.status === "done" ? "text-emerald-700 line-through decoration-emerald-500" : "text-zinc-600"}>
+   146→                  {m.name}
+   147→                </span>
+   148→                {m.dueDate ? <span className="ml-auto shrink-0 text-zinc-400">{formatDate(m.dueDate)}</span> : null}
+   149→              </div>
+   150→            );
+   151→          })}
+   152→        </div>
+   153→      ) : null}
+   154→    </div>
+   155→  );
+   156→}
+   157→
+   158→// ============ Deliverable & Review klien (Task 22-4) ============
+   159→
+   160→/** Satu baris deliverable di portal klien: ikon jenis, meta, status, dan aksi review (Setujui / Minta Revisi). */
+   161→function PortalDeliverableRow({ d, user, canReview, onChanged }: {
+   162→  d: DeliverableRowData;
+   163→  user: SessionUser | null;
+   164→  canReview: boolean;
+   165→  onChanged: () => Promise<void>;
+   166→}) {
+   167→  const meta = dlvStatus(d.status);
+   168→  const [review, setReview] = useState<null | "approved" | "revision">(null);
+   169→  const [comment, setComment] = useState("");
+   170→  const [busy, setBusy] = useState(false);
+   171→  const KindIcon = d.kind === "file" ? Paperclip : Link2;
+   172→
+   173→  async function submitDecision() {
+   174→    if (!user || !review) return;
+   175→    setBusy(true);
+   176→    try {
+   177→      await api.decideDeliverable({
+   178→        id: d.id,
+   179→        decision: review,
+   180→        reviewComment: comment.trim() || undefined,
+   181→        reviewedBy: user.name,
+   182→        reviewedRole: user.role, // "client" saat klien login; role staf saat mode pratinjau
+   183→      });
+   184→      toast.success(
+   185→        review === "approved"
+   186→          ? `“${d.name}” disetujui — terima kasih`
+   187→          : `Revisi diminta untuk “${d.name}” — tim kami akan menindaklanjuti`
+   188→      );
+   189→      setReview(null);
+   190→      setComment("");
+   191→      await onChanged();
+   192→    } catch (err) {
+   193→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan keputusan review");
+   194→    } finally {
+   195→      setBusy(false);
+   196→    }
+   197→  }
+   198→
+   199→  return (
+   200→    <div className="rounded-lg border bg-white p-3">
+   201→      <div className="flex items-start justify-between gap-2">
+   202→        <div className="flex min-w-0 items-start gap-2.5">
+   203→          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100" aria-hidden>
+   204→            <KindIcon className="h-3.5 w-3.5 text-zinc-500" />
+   205→          </span>
+   206→          <div className="min-w-0">
+   207→            <p className="truncate text-sm font-semibold text-zinc-900">{d.name}</p>
+   208→            <p className="truncate text-[11px] text-zinc-500">
+   209→              {d.kind === "file"
+   210→                ? [d.fileName, d.sizeBytes ? formatSizeKb(d.sizeBytes) : null].filter(Boolean).join(" · ")
+   211→                : d.url}
+   212→            </p>
+   213→            {d.note ? <p className="mt-1 text-xs text-zinc-500">{d.note}</p> : null}
+   214→            <p className="mt-1 text-[11px] text-zinc-400">
+   215→              Dikirim {timeAgo(d.createdAt)}{d.createdBy ? ` oleh ${d.createdBy}` : ""}
+   216→            </p>
+   217→            {d.status !== "pending" && d.reviewedBy ? (
+   218→              <p className="mt-1 text-[11px] text-zinc-500">
+   219→                Anda sudah mereview{d.reviewedAt ? ` · ${timeAgo(d.reviewedAt)}` : ""}
+   220→              </p>
+   221→            ) : null}
+   222→            {d.reviewComment ? (
+   223→              <p className="mt-0.5 text-[11px] italic text-zinc-500">Catatan review: “{d.reviewComment}”</p>
+   224→            ) : null}
+   225→          </div>
+   226→        </div>
+   227→        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${meta.cls}`}>{meta.label}</Badge>
+   228→      </div>
+   229→
+   230→      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+   231→        {d.kind === "link" && d.url ? (
+   232→          <a
+   233→            href={d.url}
+   234→            target="_blank"
+   235→            rel="noreferrer"
+   236→            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+   237→          >
+   238→            <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Buka tautan
+   239→          </a>
+   240→        ) : null}
+   241→        {d.kind === "file" && d.fileData ? (
+   242→          <a
+   243→            href={d.fileData}
+   244→            download={d.fileName ?? undefined}
+   245→            className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 hover:underline"
+   246→          >
+   247→            <ReceiptText className="h-3.5 w-3.5" aria-hidden /> Unduh
+   248→          </a>
+   249→        ) : null}
+   250→        {canReview ? (
+   251→          <>
+   252→            <Button
+   253→              type="button"
+   254→              variant="outline"
+   255→              size="sm"
+   256→              className="h-7 border-emerald-200 px-2 text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+   257→              disabled={busy}
+   258→              onClick={() => { setReview("approved"); setComment(d.reviewComment ?? ""); }}
+   259→              aria-label={`Setujui deliverable ${d.name}`}
+   260→            >
+   261→              <Check className="h-3.5 w-3.5" aria-hidden /> Setujui
+   262→            </Button>
+   263→            <Button
+   264→              type="button"
+   265→              variant="outline"
+   266→              size="sm"
+   267→              className="h-7 border-amber-200 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+   268→              disabled={busy}
+   269→              onClick={() => { setReview("revision"); setComment(d.reviewComment ?? ""); }}
+   270→              aria-label={`Minta revisi deliverable ${d.name}`}
+   271→            >
+   272→              <Pencil className="h-3.5 w-3.5" aria-hidden /> Minta Revisi
+   273→            </Button>
+   274→          </>
+   275→        ) : null}
+   276→      </div>
+   277→
+   278→      {review !== null ? (
+   279→        <div className="mt-2.5 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2.5">
+   280→          <Textarea
+   281→            rows={2}
+   282→            value={comment}
+   283→            onChange={(e) => setComment(e.target.value)}
+   284→            placeholder={review === "approved" ? "Catatan persetujuan (opsional)…" : "Jelaskan bagian yang perlu direvisi…"}
+   285→            aria-label="Catatan review deliverable"
+   286→          />
+   287→          <div className="flex items-center justify-end gap-2">
+   288→            <Button
+   289→              type="button"
+   290→              variant="outline"
+   291→              size="sm"
+   292→              disabled={busy}
+   293→              onClick={() => { setReview(null); setComment(""); }}
+   294→              aria-label="Batal review deliverable"
+   295→            >
+   296→              Batal
+   297→            </Button>
+   298→            <Button
+   299→              type="button"
+   300→              size="sm"
+   301→              disabled={busy}
+   302→              onClick={() => void submitDecision()}
+   303→              className={review === "approved" ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"}
+   304→              aria-label="Konfirmasi keputusan review"
+   305→            >
+   306→              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+   307→              {review === "approved" ? "Konfirmasi Setujui" : "Kirim Permintaan Revisi"}
+   308→            </Button>
+   309→          </div>
+   310→        </div>
+   311→      ) : null}
+   312→    </div>
+   313→  );
+   314→}
+   315→
+   316→/** Blok deliverable per project — lazy fetch saat dirender, refresh mandiri setelah review. */
+   317→function PortalProjectDeliverables({ project, user, canReview }: {
+   318→  project: ProjectDTO;
+   319→  user: SessionUser | null;
+   320→  canReview: boolean;
+   321→}) {
+   322→  const [deliverables, setDeliverables] = useState<ProjectDeliverableDTO[] | null>(null);
+   323→  const [loadError, setLoadError] = useState(false);
+   324→
+   325→  /** Fetch daftar deliverable project ini (dipakai effect awal & refresh setelah review). */
+   326→  const reload = useCallback(async () => {
+   327→    try {
+   328→      const res = await api.projectDeliverables(project.id);
+   329→      setDeliverables(res.deliverables);
+   330→      setLoadError(false);
+   331→    } catch {
+   332→      setDeliverables([]);
+   333→      setLoadError(true);
+   334→    }
+   335→  }, [project.id]);
+   336→
+   337→  // Initial fetch — pola .then() agar setState tidak berjalan sinkron di body effect.
+   338→  useEffect(() => {
+   339→    let cancelled = false;
+   340→    api.projectDeliverables(project.id)
+   341→      .then((res) => { if (!cancelled) { setDeliverables(res.deliverables); setLoadError(false); } })
+   342→      .catch(() => { if (!cancelled) { setDeliverables([]); setLoadError(true); } });
+   343→    return () => { cancelled = true; };
+   344→  }, [project.id]);
+   345→
+   346→  const pendingCount = (deliverables ?? []).filter((d) => d.status === "pending").length;
+   347→
+   348→  return (
+   349→    <div className="rounded-xl border bg-white p-4 shadow-sm">
+   350→      <div className="flex flex-wrap items-center justify-between gap-2">
+   351→        <div className="flex min-w-0 items-center gap-2">
+   352→          <p className="truncate text-sm font-semibold text-zinc-900">{project.name}</p>
+   353→          <span className="shrink-0 rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] text-zinc-500">{project.code}</span>
+   354→        </div>
+   355→        {deliverables !== null && deliverables.length > 0 ? (
+   356→          pendingCount > 0 ? (
+   357→            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+   358→              {pendingCount} menunggu review Anda
+   359→            </span>
+   360→          ) : (
+   361→            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+   362→              semua sudah direview
+   363→            </span>
+   364→          )
+   365→        ) : null}
+   366→      </div>
+   367→      <div className="mt-3">
+   368→        {deliverables === null ? (
+   369→          <div className="space-y-2" aria-hidden>
+   370→            <Skeleton className="h-16 rounded-lg" />
+   371→            <Skeleton className="h-16 rounded-lg" />
+   372→          </div>
+   373→        ) : loadError ? (
+   374→          <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+   375→            Gagal memuat deliverable.{" "}
+   376→            <button type="button" className="font-medium underline" onClick={() => void reload()}>
+   377→              Coba lagi
+   378→            </button>
+   379→          </div>
+   380→        ) : deliverables.length === 0 ? (
+   381→          <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-center text-xs text-zinc-400">
+   382→            Belum ada deliverable untuk project ini.
+   383→          </p>
+   384→        ) : (
+   385→          <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+   386→            {deliverables.map((d) => (
+   387→              <PortalDeliverableRow key={d.id} d={d} user={user} canReview={canReview} onChanged={reload} />
+   388→            ))}
+   389→          </div>
+   390→        )}
+   391→      </div>
+   392→    </div>
+   393→  );
+   394→}
+   395→
+   396→function PortalSkeleton() {
+   397→  return (
+   398→    <div className="space-y-6" aria-hidden>
+   399→      <div className="space-y-2">
+   400→        <Skeleton className="h-7 w-44" />
+   401→        <Skeleton className="h-4 w-80" />
+   402→      </div>
+   403→      <Skeleton className="h-14 rounded-xl" />
+   404→      <Skeleton className="h-16 rounded-xl" />
+   405→      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   406→        {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-52 rounded-xl" />)}
+   407→      </div>
+   408→      <Skeleton className="h-48 rounded-xl" />
+   409→      <Skeleton className="h-40 rounded-xl" />
+   410→      <Skeleton className="h-40 rounded-xl" />
+   411→    </div>
+   412→  );
+   413→}
+   414→
+   415→/** Isi sheet detail quotation — hanya lihat (meta, item, total, catatan). */
+   416→function QuotationDetailBody({ quote }: { quote: QuotationDTO }) {
+   417→  const items = parseQuoteItems(quote.items);
+   418→  const hasDiscount = quote.discountPct > 0 || quote.discountAmount > 0;
+   419→  return (
+   420→    <div className="mt-4 space-y-5 px-4 pb-8">
+   421→      <div className="flex items-center justify-between gap-2">
+   422→        <Badge variant="outline" className={`border-transparent px-1.5 ${quoteStatus(quote.status).cls}`}>
+   423→          {quoteStatus(quote.status).label}
+   424→        </Badge>
+   425→        <span className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(quote.total, quote.currency)}</span>
+   426→      </div>
+   427→      <div className="grid grid-cols-2 gap-3 text-sm">
+   428→        <div>
+   429→          <p className="text-xs text-zinc-500">Dibuat</p>
+   430→          <p className="mt-0.5 text-zinc-800">{formatDateTime(quote.createdAt)}</p>
+   431→        </div>
+   432→        <div>
+   433→          <p className="text-xs text-zinc-500">Dikirim</p>
+   434→          <p className="mt-0.5 text-zinc-800">{quote.sentAt ? formatDateTime(quote.sentAt) : "-"}</p>
+   435→        </div>
+   436→        <div>
+   437→          <p className="text-xs text-zinc-500">Berlaku s.d.</p>
+   438→          <p className="mt-0.5 text-zinc-800">{formatDate(quote.validUntil)}</p>
+   439→        </div>
+   440→        <div>
+   441→          <p className="text-xs text-zinc-500">Peluang</p>
+   442→          <p className="mt-0.5 truncate text-zinc-800">{quote.opportunity?.title ?? "-"}</p>
+   443→        </div>
+   444→      </div>
+   445→      <div>
+   446→        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+   447→          Rincian Item ({items.length})
+   448→        </p>
+   449→        {items.length === 0 ? (
+   450→          <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-400">
+   451→            Tidak ada item pada quotation ini.
+   452→          </p>
+   453→        ) : (
+   454→          <div className="overflow-x-auto">
+   455→            <table className="w-full text-xs">
+   456→              <thead>
+   457→                <tr className="border-b text-left text-zinc-400">
+   458→                  <th scope="col" className="py-1.5 pr-2 font-medium">Item</th>
+   459→                  <th scope="col" className="py-1.5 pr-2 text-right font-medium">Qty</th>
+   460→                  <th scope="col" className="py-1.5 pr-2 text-right font-medium">Harga</th>
+   461→                  <th scope="col" className="py-1.5 text-right font-medium">Subtotal</th>
+   462→                </tr>
+   463→              </thead>
+   464→              <tbody className="divide-y divide-zinc-100">
+   465→                {items.map((it, idx) => (
+   466→                  <tr key={idx} className="align-top">
+   467→                    <td className="py-2 pr-2 text-zinc-800">{it.description ?? "-"}</td>
+   468→                    <td className="py-2 pr-2 text-right tabular-nums text-zinc-600">{it.qty ?? 0}</td>
+   469→                    <td className="py-2 pr-2 text-right tabular-nums text-zinc-600">{formatCurrencyFull(it.unitPrice, quote.currency)}</td>
+   470→                    <td className="py-2 text-right tabular-nums font-medium text-zinc-900">{formatCurrencyFull(it.subtotal, quote.currency)}</td>
+   471→                  </tr>
+   472→                ))}
+   473→              </tbody>
+   474→            </table>
+   475→          </div>
+   476→        )}
+   477→      </div>
+   478→      <div className="space-y-1.5 border-t border-zinc-100 pt-3 text-sm">
+   479→        <div className="flex items-center justify-between gap-2 text-zinc-600">
+   480→          <span>Subtotal</span>
+   481→          <span className="tabular-nums">{formatCurrencyFull(quote.subtotal, quote.currency)}</span>
+   482→        </div>
+   483→        {hasDiscount ? (
+   484→          <div className="flex items-center justify-between gap-2 text-zinc-600">
+   485→            <span>Diskon{quote.discountPct > 0 ? ` ${quote.discountPct}%` : ""}</span>
+   486→            <span className="tabular-nums text-emerald-600">-{formatCurrencyFull(quote.discountAmount, quote.currency)}</span>
+   487→          </div>
+   488→        ) : null}
+   489→        <div className="flex items-center justify-between gap-2 text-zinc-600">
+   490→          <span>PPN {quote.taxPct}%</span>
+   491→          <span className="tabular-nums">{formatCurrencyFull(quote.taxAmount, quote.currency)}</span>
+   492→        </div>
+   493→        <div className="flex items-center justify-between gap-2 border-t border-zinc-100 pt-2 text-base font-bold text-zinc-900">
+   494→          <span>Total</span>
+   495→          <span className="tabular-nums">{formatCurrencyFull(quote.total, quote.currency)}</span>
+   496→        </div>
+   497→      </div>
+   498→      {quote.notes ? (
+   499→        <blockquote className="border-l-2 border-zinc-200 pl-3 text-xs italic text-zinc-500">{quote.notes}</blockquote>
+   500→      ) : null}
+   501→    </div>
+   502→  );
+   503→}
+   504→
+   505→// ============ Module utama ============
+   506→
+   507→export default function PortalModule() {
+   508→  const user = useCrmStore((s) => s.user);
+   509→  const isClient = user?.role === "client";
+   510→  const canPreview = user?.role === "super_admin" || user?.role === "director";
+   511→
+   512→  const [companies, setCompanies] = useState<CompanyRef[] | null>(null);
+   513→  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+   514→  const [linkInfo, setLinkInfo] = useState<{ company: CompanyRef | null; resolved: boolean } | null>(null);
+   515→
+   516→  const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
+   517→  const [invoices, setInvoices] = useState<InvoiceDTO[] | null>(null);
+   518→  const [changeRequests, setChangeRequests] = useState<ChangeRequestDTO[] | null>(null);
+   519→  const [quotations, setQuotations] = useState<QuotationDTO[] | null>(null);
+   520→  const [loading, setLoading] = useState(true);
+   521→  const [error, setError] = useState<string | null>(null);
+   522→
+   523→  const [detail, setDetail] = useState<InvoiceDTO | null>(null);
+   524→  const [quoteDetail, setQuoteDetail] = useState<QuotationDTO | null>(null);
+   525→  const [crDecision, setCrDecision] = useState<{ cr: ChangeRequestDTO; decision: "approve" | "reject" } | null>(null);
+   526→  const [decisionNote, setDecisionNote] = useState("");
+   527→  const [savingDecide, setSavingDecide] = useState<string | null>(null);
+   528→
+   529→  /** Untuk role client: cari perusahaan miliknya ( companyName → fallback domain email vs website perusahaan). */
+   530→  const resolveClientCompany = useCallback(async (): Promise<CompanyRef | null> => {
+   531→    const { companies: list } = await api.companies();
+   532→    setCompanies(list);
+   533→    const byName = user?.companyName
+   534→      ? list.find((c) => c.name.toLowerCase() === user.companyName?.toLowerCase())
+   535→      : undefined;
+   536→    if (byName) return byName;
+   537→    // Fallback demo: cocokkan domain email user dengan domain website perusahaan
+   538→    const emailDomain = domainOf(user?.email);
+   539→    if (emailDomain) {
+   540→      const byDomain = list.find((c) => domainOf(c.website) === emailDomain);
+   541→      if (byDomain) return byDomain;
+   542→    }
+   543→    return null;
+   544→  }, [user?.companyName, user?.email]);
+   545→
+   546→  const loadCompanyData = useCallback(async (companyId: string, silent = false) => {
+   547→    if (!silent) setLoading(true);
+   548→    setError(null);
+   549→    try {
+   550→      const [projRes, invRes, crRes, quoteRes] = await Promise.all([
+   551→        api.projects({ companyId }),
+   552→        api.invoices({ companyId }),
+   553→        api.changeRequests({ companyId }),
+   554→        api.quotations({ companyId }),
+   555→      ]);
+   556→      setProjects(projRes.projects);
+   557→      setInvoices(invRes.invoices);
+   558→      setChangeRequests(crRes.changeRequests);
+   559→      setQuotations(quoteRes.quotations);
+   560→    } catch (err) {
+   561→      setError(err instanceof Error ? err.message : "Gagal memuat data portal");
+   562→      if (!silent) toast.error("Gagal memuat data portal klien");
+   563→    } finally {
+   564→      setLoading(false);
+   565→    }
+   566→  }, []);
+   567→
+   568→  useEffect(() => {
+   569→    (async () => {
+   570→      setLoading(true);
+   571→      setError(null);
+   572→      try {
+   573→        if (isClient) {
+   574→          const company = await resolveClientCompany();
+   575→          setLinkInfo({ company, resolved: company !== null });
+   576→          if (company) await loadCompanyData(company.id, true);
+   577→          else setLoading(false);
+   578→        } else if (canPreview) {
+   579→          const { companies: list } = await api.companies();
+   580→          setCompanies(list);
+   581→          // Jangan pilih otomatis — tunggu admin memilih perusahaan
+   582→          setLoading(false);
+   583→        } else {
+   584→          setLoading(false);
+   585→        }
+   586→      } catch (err) {
+   587→        setError(err instanceof Error ? err.message : "Gagal memuat portal");
+   588→        setLoading(false);
+   589→      }
+   590→    })();
+   591→  }, [isClient, canPreview, resolveClientCompany, loadCompanyData]);
+   592→
+   593→  const activeCompany = useMemo(() => {
+   594→    if (isClient) return linkInfo?.company ?? null;
+   595→    return companies?.find((c) => c.id === selectedCompanyId) ?? null;
+   596→  }, [isClient, linkInfo, companies, selectedCompanyId]);
+   597→
+   598→  const invoiceSummary = useMemo(() => {
+   599→    const list = invoices ?? [];
+   600→    const outstanding = list
+   601→      .filter((i) => ["sent", "partial", "overdue"].includes(i.status))
+   602→      .reduce((s, i) => s + Math.max(0, i.total - (i.payments ?? []).reduce((ps, p) => ps + p.amount, 0)), 0);
+   603→    return { count: list.length, outstanding };
+   604→  }, [invoices]);
+   605→
+   606→  function pickCompany(id: string) {
+   607→    setSelectedCompanyId(id);
+   608→    setProjects(null);
+   609→    setInvoices(null);
+   610→    setChangeRequests(null);
+   611→    setQuotations(null);
+   612→    setDetail(null);
+   613→    setQuoteDetail(null);
+   614→    void loadCompanyData(id);
+   615→  }
+   616→
+   617→  const canDecide = isClient || canPreview; // client / director / super_admin
+   618→
+   619→  const crSummary = useMemo(() => {
+   620→    const list = changeRequests ?? [];
+   621→    const approved = list.filter((c) => c.status === "approved");
+   622→    return {
+   623→      pendingCount: list.filter((c) => c.status === "pending").length,
+   624→      approvedCount: approved.length,
+   625→      approvedValue: approved.reduce((s, c) => s + (c.additionalCost ?? 0), 0),
+   626→    };
+   627→  }, [changeRequests]);
+   628→
+   629→  /** Brand unik dari project yang dimuat — strip identitas agency di header konten. */
+   630→  const brandStrip = useMemo(() => {
+   631→    const map = new Map<string, { id: string; name: string; color: string; count: number }>();
+   632→    for (const p of projects ?? []) {
+   633→      if (!p.brand) continue;
+   634→      const cur = map.get(p.brand.id) ?? { id: p.brand.id, name: p.brand.name, color: p.brand.color, count: 0 };
+   635→      cur.count += 1;
+   636→      map.set(p.brand.id, cur);
+   637→    }
+   638→    return [...map.values()];
+   639→  }, [projects]);
+   640→
+   641→  async function confirmDecision() {
+   642→    const target = crDecision;
+   643→    if (!target || !user) return;
+   644→    const { cr, decision } = target;
+   645→    setSavingDecide(cr.id);
+   646→    try {
+   647→      const res = await api.decideChangeRequest({
+   648→        id: cr.id,
+   649→        decision,
+   650→        decisionNote: decisionNote.trim() || undefined,
+   651→        actorName: user.name,
+   652→        actorRole: user.role,
+   653→      });
+   654→      if (decision === "approve") {
+   655→        toast.success(res.invoice?.number ? `Perubahan disetujui — invoice ${res.invoice.number} diterbitkan` : "Perubahan disetujui");
+   656→      } else {
+   657→        toast.info("Perubahan ditolak — tim kami akan mengikuti scope awal");
+   658→      }
+   659→      setCrDecision(null);
+   660→      setDecisionNote("");
+   661→      if (activeCompany) void loadCompanyData(activeCompany.id, true);
+   662→    } catch (err) {
+   663→      toast.error(err instanceof Error ? err.message : "Gagal memutuskan permintaan perubahan");
+   664→    } finally {
+   665→      setSavingDecide(null);
+   666→    }
+   667→  }
+   668→
+   669→  async function copyDemoEmail() {
+   670→    try {
+   671→      await navigator.clipboard.writeText("hendra@nusantaranet.com");
+   672→      toast.success("Email akun demo client disalin");
+   673→    } catch {
+   674→      toast.info("Salin manual: hendra@nusantaranet.com");
+   675→    }
+   676→  }
+   677→
+   678→  if (loading && projects === null && !isClient) return <PortalSkeleton />;
+   679→  if (loading && isClient && linkInfo === null) return <PortalSkeleton />;
+   680→
+   681→  return (
+   682→    <div className="space-y-6">
+   683→      {/* Header */}
+   684→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   685→        <div>
+   686→          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-zinc-900">
+   687→            Client Portal
+   688→            {!isClient && activeCompany ? (
+   689→              <Badge className="border-transparent bg-amber-100 text-amber-700">Mode Pratinjau Klien</Badge>
+   690→            ) : null}
+   691→          </h1>
+   692→          <p className="text-sm text-zinc-500">Tampilan terbatas untuk klien — tanpa data internal</p>
+   693→        </div>
+   694→        {activeCompany ? (
+   695→          <Button variant="outline" size="sm" onClick={() => void loadCompanyData(activeCompany.id)} disabled={loading} aria-label="Muat ulang data portal">
+   696→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   697→          </Button>
+   698→        ) : null}
+   699→      </div>
+   700→
+   701→      {error ? (
+   702→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+   703→      ) : null}
+   704→
+   705→      {/* Task 22-4 — petunjuk cara client masuk ke portal (khusus staf: super_admin/director) */}
+   706→      {canPreview ? (
+   707→        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+   708→          <div className="flex items-start gap-3">
+   709→            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+   710→            <div className="min-w-0 flex-1">
+   711→              <p className="text-sm font-semibold text-amber-900">Cara Client Masuk ke Portal</p>
+   712→              <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-amber-800">
+   713→                <li>Client login di halaman login yang sama dengan email kontak perusahaannya.</li>
+   714→                <li>PIN demo default: <span className="font-mono font-semibold">1234</span>.</li>
+   715→                <li>
+   716→                  Akun demo:{" "}
+   717→                  <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
+   718→                    <span className="rounded border border-amber-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-amber-900">
+   719→                      hendra@nusantaranet.com
+   720→                    </span>
+   721→                    <button
+   722→                      type="button"
+   723→                      onClick={() => void copyDemoEmail()}
+   724→                      className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
+   725→                      aria-label="Salin email akun demo client"
+   726→                    >
+   727→                      <Copy className="h-3 w-3" aria-hidden /> Salin
+   728→                    </button>
+   729→                    <span>— Hendra Wijaya (PT Nusantara Digital Raya)</span>
+   730→                  </span>
+   731→                </li>
+   732→                <li>Client hanya melihat proyek, invoice, dan quotation perusahaannya sendiri.</li>
+   733→              </ol>
+   734→            </div>
+   735→          </div>
+   736→        </div>
+   737→      ) : null}
+   738→
+   739→      {/* Role client: penanganan akun belum terkait */}
+   740→      {isClient && linkInfo && !linkInfo.company ? (
+   741→        <div className="rounded-xl border bg-white p-8 text-center shadow-sm">
+   742→          <Lock className="mx-auto h-8 w-8 text-zinc-300" aria-hidden />
+   743→          <p className="mt-3 text-sm font-semibold text-zinc-900">Akun belum terkait dengan perusahaan</p>
+   744→          <p className="mt-1 text-sm text-zinc-500">Hubungi admin untuk mengaitkan akun Anda ke data perusahaan.</p>
+   745→        </div>
+   746→      ) : null}
+   747→
+   748→      {/* Role lain (bukan client/director/super_admin): tidak punya akses */}
+   749→      {!isClient && !canPreview ? (
+   750→        <div className="rounded-xl border bg-white p-8 text-center shadow-sm">
+   751→          <Lock className="mx-auto h-8 w-8 text-zinc-300" aria-hidden />
+   752→          <p className="mt-3 text-sm text-zinc-500">Modul ini hanya tersedia untuk klien dan manajemen.</p>
+   753→        </div>
+   754→      ) : null}
+   755→
+   756→      {/* Pemilih perusahaan untuk super_admin/director */}
+   757→      {canPreview ? (
+   758→        <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+   759→          <div className="flex items-center gap-2">
+   760→            <Building2 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+   761→            <Select value={selectedCompanyId} onValueChange={pickCompany}>
+   762→              <SelectTrigger className="w-full sm:w-[300px]" aria-label="Pilih perusahaan untuk pratinjau portal klien">
+   763→                <SelectValue placeholder="Pilih perusahaan klien…" />
+   764→              </SelectTrigger>
+   765→              <SelectContent>
+   766→                {(companies ?? []).map((c) => (
+   767→                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+   768→                ))}
+   769→              </SelectContent>
+   770→            </Select>
+   771→          </div>
+   772→          <p className="text-xs text-zinc-500 sm:ml-auto">
+   773→            {activeCompany ? `Menampilkan portal untuk ${activeCompany.name}` : "Pilih perusahaan untuk melihat tampilan klien"}
+   774→          </p>
+   775→        </div>
+   776→      ) : null}
+   777→
+   778→      {/* Konten portal */}
+   779→      {activeCompany ? (
+   780→        <>
+   781→          {/* Banner info */}
+   782→          <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+   783→            <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+   784→            <p>
+   785→              Anda melihat data perusahaan Anda sendiri. File internal, margin, dan catatan tim tidak ditampilkan.
+   786→              {activeCompany.city || activeCompany.country ? (
+   787→                <span className="block text-xs text-emerald-700">
+   788→                  {activeCompany.industry ?? "-"} · {[activeCompany.city, activeCompany.country].filter(Boolean).join(", ")}
+   789→                </span>
+   790→              ) : null}
+   791→            </p>
+   792→          </div>
+   793→
+   794→          {/* Strip brand yang mengerjakan project klien */}
+   795→          {brandStrip.length > 0 ? (
+   796→            <div className="flex flex-wrap items-center gap-2" role="list" aria-label="Brand yang mengerjakan project Anda">
+   797→              {brandStrip.map((b) => (
+   798→                <span key={b.id} role="listitem" className="flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-1 text-xs text-zinc-700">
+   799→                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+   800→                  <span className="font-medium">{b.name}</span>
+   801→                  <span className="text-zinc-400">· {b.count} project</span>
+   802→                </span>
+   803→              ))}
+   804→            </div>
+   805→          ) : null}
+   806→
+   807→          {/* Ringkasan invoice */}
+   808→          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+   809→            <div className="rounded-xl border bg-white p-4 shadow-sm">
+   810→              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Project Aktif</p>
+   811→              <p className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">
+   812→                {(projects ?? []).filter((p) => p.status !== "completed").length}
+   813→              </p>
+   814→            </div>
+   815→            <div className="rounded-xl border bg-white p-4 shadow-sm">
+   816→              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Invoice</p>
+   817→              <p className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{invoiceSummary.count}</p>
+   818→            </div>
+   819→            <div className="col-span-2 rounded-xl border bg-white p-4 shadow-sm lg:col-span-1">
+   820→              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Sisa Tagihan</p>
+   821→              <p className="mt-1 text-2xl font-bold tabular-nums text-rose-600">{formatCurrency(invoiceSummary.outstanding)}</p>
+   822→            </div>
+   823→          </div>
+   824→
+   825→          {/* Project perusahaan */}
+   826→          <section aria-label="Project perusahaan" className="space-y-3">
+   827→            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+   828→              <FolderKanban className="h-4 w-4 text-zinc-400" aria-hidden /> Project Perusahaan
+   829→            </h2>
+   830→            {projects === null ? (
+   831→              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-hidden>
+   832→                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-48 rounded-xl" />)}
+   833→              </div>
+   834→            ) : projects.length === 0 ? (
+   835→              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+   836→                Belum ada project untuk perusahaan ini.
+   837→              </div>
+   838→            ) : (
+   839→              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   840→                {projects.map((p) => <PortalProjectCard key={p.id} project={p} />)}
+   841→              </div>
+   842→            )}
+   843→          </section>
+   844→
+   845→          {/* Deliverable & Review (Task 22-4) — file/tautan dari tim untuk ditinjau klien */}
+   846→          <section aria-label="Deliverable dan review" className="space-y-3">
+   847→            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+   848→              <PackageCheck className="h-4 w-4 text-zinc-400" aria-hidden /> Deliverable &amp; Review
+   849→            </h2>
+   850→            <p className="text-xs text-zinc-500">
+   851→              File dan tautan yang dikirim tim untuk Anda tinjau — buka tautannya, lalu Setujui atau minta revisi dengan catatan.
+   852→            </p>
+   853→            {projects === null ? (
+   854→              <Skeleton className="h-40 rounded-xl" aria-hidden />
+   855→            ) : projects.length === 0 ? (
+   856→              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+   857→                Belum ada deliverable — belum ada project berjalan untuk perusahaan ini.
+   858→              </div>
+   859→            ) : (
+   860→              <div className="space-y-4">
+   861→                {projects.map((p) => (
+   862→                  <PortalProjectDeliverables key={p.id} project={p} user={user} canReview={canDecide} />
+   863→                ))}
+   864→              </div>
+   865→            )}
+   866→          </section>
+   867→
+   868→          {/* Permintaan Perubahan (Change Request) — persetujuan klien */}
+   869→          <section aria-label="Permintaan perubahan scope" className="space-y-3">
+   870→            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+   871→              <GitPullRequestArrow className="h-4 w-4 text-zinc-400" aria-hidden /> Permintaan Perubahan (Change Request)
+   872→            </h2>
+   873→            {(crSummary.pendingCount > 0 || crSummary.approvedCount > 0 || crSummary.approvedValue > 0) ? (
+   874→              <div className="flex flex-wrap items-center gap-2">
+   875→                {crSummary.pendingCount > 0 ? (
+   876→                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+   877→                    {crSummary.pendingCount} menunggu persetujuan
+   878→                  </span>
+   879→                ) : null}
+   880→                {crSummary.approvedCount > 0 ? (
+   881→                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+   882→                    {crSummary.approvedCount} disetujui
+   883→                  </span>
+   884→                ) : null}
+   885→                {crSummary.approvedValue > 0 ? (
+   886→                  <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium tabular-nums text-zinc-600">
+   887→                    Total nilai tambah {formatCurrency(crSummary.approvedValue)}
+   888→                  </span>
+   889→                ) : null}
+   890→              </div>
+   891→            ) : null}
+   892→            {changeRequests === null ? (
+   893→              <Skeleton className="h-40 rounded-xl" aria-hidden />
+   894→            ) : changeRequests.length === 0 ? (
+   895→              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+   896→                Tidak ada permintaan perubahan scope.
+   897→              </div>
+   898→            ) : (
+   899→              <div className="max-h-96 space-y-3 overflow-y-auto crm-scroll pr-1">
+   900→                {changeRequests.map((cr) => {
+   901→                  const st = crStatus(cr.status);
+   902→                  return (
+   903→                    <div key={cr.id} className="rounded-xl border bg-white p-4 shadow-sm">
+   904→                      <div className="flex flex-wrap items-center gap-2">
+   905→                        <p className="font-mono text-sm font-semibold text-zinc-900">{cr.number}</p>
+   906→                        <Badge variant="outline" className={`border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+   907→                        {cr.project?.code ? (
+   908→                          <span className="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] text-zinc-500">{cr.project.code}</span>
+   909→                        ) : null}
+   910→                      </div>
+   911→                      <p className="mt-2 text-sm font-semibold text-zinc-900">{cr.title}</p>
+   912→                      <p className="mt-1 text-xs text-zinc-500">{cr.description}</p>
+   913→                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+   914→                        <span className="font-bold tabular-nums text-emerald-600">+{formatCurrency(cr.additionalCost)}</span>
+   915→                        {cr.additionalDays > 0 ? (
+   916→                          <span className="flex items-center gap-1 text-zinc-600">
+   917→                            <CalendarClock className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> +{cr.additionalDays} hari deadline
+   918→                          </span>
+   919→                        ) : null}
+   920→                        <span className="text-zinc-400">
+   921→                          Diajukan {timeAgo(cr.createdAt)}{cr.requestedBy ? ` oleh ${cr.requestedBy}` : ""}
+   922→                        </span>
+   923→                      </div>
+   924→                      {cr.status !== "pending" && cr.decidedBy ? (
+   925→                        <div className="mt-2 border-t border-zinc-100 pt-2 text-xs text-zinc-500">
+   926→                          <p>Diputuskan oleh {cr.decidedBy}</p>
+   927→                          {cr.decisionNote ? <p className="mt-0.5 italic">“{cr.decisionNote}”</p> : null}
+   928→                        </div>
+   929→                      ) : null}
+   930→                      {cr.status === "pending" && canDecide ? (
+   931→                        <div className="mt-3 flex flex-wrap items-center gap-2">
+   932→                          <Button
+   933→                            size="sm"
+   934→                            className="bg-zinc-900 text-white hover:bg-zinc-800"
+   935→                            disabled={savingDecide === cr.id}
+   936→                            onClick={() => { setDecisionNote(""); setCrDecision({ cr, decision: "approve" }); }}
+   937→                            aria-label={`Setujui permintaan perubahan ${cr.number}`}
+   938→                          >
+   939→                            <Check className="h-3.5 w-3.5" aria-hidden /> Setujui Perubahan
+   940→                          </Button>
+   941→                          <Button
+   942→                            size="sm"
+   943→                            variant="outline"
+   944→                            className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   945→                            disabled={savingDecide === cr.id}
+   946→                            onClick={() => { setDecisionNote(""); setCrDecision({ cr, decision: "reject" }); }}
+   947→                            aria-label={`Tolak permintaan perubahan ${cr.number}`}
+   948→                          >
+   949→                            <X className="h-3.5 w-3.5" aria-hidden /> Tolak
+   950→                          </Button>
+   951→                        </div>
+   952→                      ) : null}
+   953→                    </div>
+   954→                  );
+   955→                })}
+   956→              </div>
+   957→            )}
+   958→          </section>
+   959→
+   960→          {/* Quotation perusahaan */}
+   961→          <section aria-label="Quotation perusahaan" className="space-y-3">
+   962→            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+   963→              <FileSignature className="h-4 w-4 text-zinc-400" aria-hidden /> Quotation
+   964→            </h2>
+   965→            {quotations === null ? (
+   966→              <Skeleton className="h-40 rounded-xl" aria-hidden />
+   967→            ) : quotations.length === 0 ? (
+   968→              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+   969→                Belum ada quotation untuk perusahaan ini.
+   970→              </div>
+   971→            ) : (
+   972→              <div className="max-h-96 space-y-3 overflow-y-auto crm-scroll pr-1">
+   973→                {quotations.map((q) => {
+   974→                  const st = quoteStatus(q.status);
+   975→                  return (
+   976→                    <div key={q.id} className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+   977→                      <div className="min-w-0">
+   978→                        <div className="flex flex-wrap items-center gap-2">
+   979→                          <p className="font-mono text-sm font-semibold text-zinc-900">{q.number}</p>
+   980→                          <Badge variant="outline" className={`border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+   981→                          {q.brand ? (
+   982→                            <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+   983→                              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: q.brand.color }} aria-hidden />
+   984→                              {q.brand.name}
+   985→                            </span>
+   986→                          ) : null}
+   987→                        </div>
+   988→                        {q.validUntil ? <p className="mt-1 text-xs text-zinc-500">Berlaku s.d. {formatDate(q.validUntil)}</p> : null}
+   989→                      </div>
+   990→                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+   991→                        <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(q.total, q.currency)}</p>
+   992→                        <Button variant="outline" size="sm" onClick={() => setQuoteDetail(q)} aria-label={`Lihat detail quotation ${q.number}`}>
+   993→                          <Eye className="h-3.5 w-3.5" aria-hidden /> Lihat
+   994→                        </Button>
+   995→                      </div>
+   996→                    </div>
+   997→                  );
+   998→                })}
+   999→              </div>
+  1000→            )}
+  1001→          </section>
+  1002→
+  1003→          {/* Invoice perusahaan */}
+  1004→          <section aria-label="Invoice perusahaan" className="space-y-3">
+  1005→            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+  1006→              <ReceiptText className="h-4 w-4 text-zinc-400" aria-hidden /> Invoice
+  1007→            </h2>
+  1008→            {invoices === null ? (
+  1009→              <Skeleton className="h-40 rounded-xl" aria-hidden />
+  1010→            ) : invoices.length === 0 ? (
+  1011→              <div className="rounded-xl border border-dashed bg-white p-8 text-center text-sm text-zinc-400 shadow-sm">
+  1012→                Belum ada invoice untuk perusahaan ini.
+  1013→              </div>
+  1014→            ) : (
+  1015→              <div className="max-h-96 space-y-3 overflow-y-auto crm-scroll pr-1">
+  1016→                {invoices.map((inv) => {
+  1017→                  const st = invStatus(inv.status);
+  1018→                  const paid = (inv.payments ?? []).reduce((s, p) => s + p.amount, 0);
+  1019→                  return (
+  1020→                    <div key={inv.id} className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+  1021→                      <div className="min-w-0">
+  1022→                        <div className="flex flex-wrap items-center gap-2">
+  1023→                          <p className="font-mono text-sm font-semibold text-zinc-900">{inv.number}</p>
+  1024→                          <Badge variant="outline" className={`border-transparent px-1.5 ${st.cls}`}>{st.label}</Badge>
+  1025→                        </div>
+  1026→                        <p className="mt-0.5 truncate text-xs text-zinc-500">{inv.description ?? "-"}</p>
+  1027→                        <p className="mt-1 flex items-center gap-1 text-xs text-zinc-500">
+  1028→                          <CalendarDays className="h-3 w-3" aria-hidden /> Jatuh tempo {formatDate(inv.dueDate)}
+  1029→                          {inv.status !== "paid" ? ` · terbayar ${formatCurrency(paid, inv.currency)}` : ""}
+  1030→                        </p>
+  1031→                      </div>
+  1032→                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+  1033→                        <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(inv.total, inv.currency)}</p>
+  1034→                        <Button variant="outline" size="sm" onClick={() => setDetail(inv)} aria-label={`Lihat detail invoice ${inv.number}`}>
+  1035→                          <Eye className="h-3.5 w-3.5" aria-hidden /> Lihat
+  1036→                        </Button>
+  1037→                      </div>
+  1038→                    </div>
+  1039→                  );
+  1040→                })}
+  1041→              </div>
+  1042→            )}
+  1043→          </section>
+  1044→        </>
+  1045→      ) : null}
+  1046→
+  1047→      {/* Sheet detail invoice — khusus lihat saja, tanpa aksi pembayaran */}
+  1048→      <Sheet open={detail !== null} onOpenChange={(open) => { if (!open) setDetail(null); }}>
+  1049→        <SheetContent className="w-full overflow-y-auto crm-scroll sm:max-w-md">
+  1050→          {detail ? (
+  1051→            <>
+  1052→              <SheetHeader>
+  1053→                <SheetTitle className="font-mono">{detail.number}</SheetTitle>
+  1054→                <SheetDescription>{detail.company?.name ?? "-"} · {detail.brand?.name ?? "-"}</SheetDescription>
+  1055→              </SheetHeader>
+  1056→              <div className="mt-4 space-y-5 px-4 pb-8">
+  1057→                <div className="flex items-center justify-between gap-2">
+  1058→                  <Badge variant="outline" className={`border-transparent px-1.5 ${invStatus(detail.status).cls}`}>
+  1059→                    {invStatus(detail.status).label}
+  1060→                  </Badge>
+  1061→                  <span className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(detail.total, detail.currency)}</span>
+  1062→                </div>
+  1063→                <div className="grid grid-cols-2 gap-3 text-sm">
+  1064→                  <div>
+  1065→                    <p className="text-xs text-zinc-500">Deskripsi</p>
+  1066→                    <p className="mt-0.5 text-zinc-800">{detail.description ?? "-"}</p>
+  1067→                  </div>
+  1068→                  <div>
+  1069→                    <p className="text-xs text-zinc-500">Proyek</p>
+  1070→                    <p className="mt-0.5 text-zinc-800">
+  1071→                      {(projects ?? []).find((p) => p.id === detail.projectId)?.name ?? "-"}
+  1072→                    </p>
+  1073→                  </div>
+  1074→                  <div>
+  1075→                    <p className="text-xs text-zinc-500">Tanggal Terbit</p>
+  1076→                    <p className="mt-0.5 text-zinc-800">{formatDate(detail.issueDate)}</p>
+  1077→                  </div>
+  1078→                  <div>
+  1079→                    <p className="text-xs text-zinc-500">Jatuh Tempo</p>
+  1080→                    <p className="mt-0.5 text-zinc-800">{formatDate(detail.dueDate)}</p>
+  1081→                  </div>
+  1082→                </div>
+  1083→                <div>
+  1084→                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+  1085→                    Riwayat Pembayaran ({(detail.payments ?? []).length})
+  1086→                  </p>
+  1087→                  {(detail.payments ?? []).length === 0 ? (
+  1088→                    <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-400">
+  1089→                      Belum ada pembayaran tercatat.
+  1090→                    </p>
+  1091→                  ) : (
+  1092→                    <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
+  1093→                      {(detail.payments ?? []).map((p) => (
+  1094→                        <div key={p.id} className="flex items-start justify-between gap-3 rounded-lg border bg-white p-3">
+  1095→                          <div className="min-w-0">
+  1096→                            <p className="text-sm font-semibold tabular-nums text-zinc-900">{formatCurrencyFull(p.amount, detail.currency)}</p>
+  1097→                            <p className="text-xs text-zinc-500">{p.method}{p.reference ? ` · ${p.reference}` : ""}</p>
+  1098→                          </div>
+  1099→                          <span className="whitespace-nowrap text-xs text-zinc-400">{formatDateTime(p.paidAt)}</span>
+  1100→                        </div>
+  1101→                      ))}
+  1102→                    </div>
+  1103→                  )}
+  1104→                </div>
+  1105→                <p className="rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500">
+  1106→                  Pertanyaan tentang invoice ini? Hubungi tim account manager Anda — pembayaran diproses melalui tim keuangan.
+  1107→                </p>
+  1108→              </div>
+  1109→            </>
+  1110→          ) : null}
+  1111→        </SheetContent>
+  1112→      </Sheet>
+  1113→
+  1114→      {/* AlertDialog keputusan change request (approve / reject) */}
+  1115→      <AlertDialog
+  1116→        open={crDecision !== null}
+  1117→        onOpenChange={(open) => { if (!open) { setCrDecision(null); setDecisionNote(""); } }}
+  1118→      >
+  1119→        <AlertDialogContent>
+  1120→          <AlertDialogHeader>
+  1121→            <AlertDialogTitle>
+  1122→              {crDecision?.decision === "approve"
+  1123→                ? `Setujui ${crDecision.cr.number}?`
+  1124→                : `Tolak ${crDecision?.cr.number ?? ""}?`}
+  1125→            </AlertDialogTitle>
+  1126→            <AlertDialogDescription asChild>
+  1127→              <div>
+  1128→                <p>
+  1129→                  {crDecision?.decision === "approve" ? (
+  1130→                    <>
+  1131→                      Menyetujui berarti menambah nilai kontrak sebesar{" "}
+  1132→                      <span className="font-semibold text-emerald-700">{formatCurrency(crDecision.cr.additionalCost)}</span>{" "}
+  1133→                      dan memperpanjang deadline {crDecision.cr.additionalDays} hari. Invoice tambahan akan diterbitkan.
+  1134→                    </>
+  1135→                  ) : (
+  1136→                    "Menolak berarti permintaan perubahan ini tidak diterapkan — scope, nilai kontrak, dan deadline tetap mengikuti kesepakatan awal."
+  1137→                  )}
+  1138→                </p>
+  1139→              </div>
+  1140→            </AlertDialogDescription>
+  1141→          </AlertDialogHeader>
+  1142→          <Textarea
+  1143→            value={decisionNote}
+  1144→            onChange={(e) => setDecisionNote(e.target.value)}
+  1145→            placeholder="Catatan untuk tim (opsional)…"
+  1146→            rows={3}
+  1147→            aria-label="Catatan keputusan (opsional)"
+  1148→          />
+  1149→          <AlertDialogFooter>
+  1150→            <AlertDialogCancel disabled={savingDecide !== null}>Batal</AlertDialogCancel>
+  1151→            <AlertDialogAction
+  1152→              className={crDecision?.decision === "approve" ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-rose-600 text-white hover:bg-rose-700"}
+  1153→              disabled={savingDecide !== null}
+  1154→              onClick={(e) => { e.preventDefault(); void confirmDecision(); }}
+  1155→            >
+  1156→              {savingDecide !== null ? "Memproses…" : crDecision?.decision === "approve" ? "Ya, Setujui" : "Ya, Tolak"}
+  1157→            </AlertDialogAction>
+  1158→          </AlertDialogFooter>
+  1159→        </AlertDialogContent>
+  1160→      </AlertDialog>
+  1161→
+  1162→      {/* Sheet detail quotation — khusus lihat saja */}
+  1163→      <Sheet open={quoteDetail !== null} onOpenChange={(open) => { if (!open) setQuoteDetail(null); }}>
+  1164→        <SheetContent className="w-full overflow-y-auto crm-scroll sm:max-w-md">
+  1165→          {quoteDetail ? (
+  1166→            <>
+  1167→              <SheetHeader>
+  1168→                <SheetTitle className="font-mono">{quoteDetail.number}</SheetTitle>
+  1169→                <SheetDescription>
+  1170→                  {quoteDetail.company?.name ?? "-"} · {quoteDetail.brand?.name ?? "-"}
+  1171→                </SheetDescription>
+  1172→              </SheetHeader>
+  1173→              <QuotationDetailBody quote={quoteDetail} />
+  1174→            </>
+  1175→          ) : null}
+  1176→        </SheetContent>
+  1177→      </Sheet>
+  1178→    </div>
+  1179→  );
+  1180→}
+  1181→

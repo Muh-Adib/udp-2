@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Copy, Eye, ExternalLink,
-  FileSignature, FolderKanban, GitPullRequestArrow, Info, KeyRound, Link2, Loader2, Lock, PackageCheck, Paperclip, Pencil,
-  RefreshCw, ReceiptText, X, type LucideIcon,
+  Ban, Building2, CalendarClock, CalendarDays, Check, CheckCircle2, CircleDotDashed, CircleDashed, Copy, Eye, ExternalLink,
+  FileSignature, FileStack, FileText, FolderKanban, GitPullRequestArrow, Info, KeyRound, Link2, Loader2, Lock, PackageCheck,
+  Paperclip, Pencil, Plus, RefreshCw, ReceiptText, RotateCcw, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,6 +14,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -23,11 +27,11 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/crm/api-client";
+import { api, portalApi } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
-  ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO, QuotationDTO, QuotationItemDTO,
-  SessionUser,
+  ChangeRequestDTO, ClientDocumentDTO, CompanyRef, InvoiceDTO, MilestoneDTO, PortalTokenDTO, ProjectDeliverableDTO,
+  ProjectDTO, QuotationDTO, QuotationItemDTO, SessionUser,
 } from "@/lib/crm/types";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 
@@ -502,6 +506,787 @@ function QuotationDetailBody({ quote }: { quote: QuotationDTO }) {
   );
 }
 
+// ============ Staf: Akses Klien — Secure Link (Task 23-c) ============
+
+/** Batas ukuran file dokumen klien — sama dengan validasi API (1.2 MB). */
+const MAX_PORTAL_FILE_BYTES = 1.2 * 1024 * 1024;
+
+const DOC_KIND_META: Record<string, { label: string; icon: LucideIcon; iconCls: string }> = {
+  mou: { label: "MoU", icon: FileSignature, iconCls: "bg-emerald-100 text-emerald-700" },
+  meeting_note: { label: "Catatan Rapat", icon: CalendarDays, iconCls: "bg-amber-100 text-amber-700" },
+  document: { label: "Dokumen", icon: FileText, iconCls: "bg-zinc-100 text-zinc-600" },
+};
+
+function docKind(kind: string) {
+  return DOC_KIND_META[kind] ?? DOC_KIND_META.document;
+}
+
+/** Host dari URL — meta ringkas utk dokumen bertipe tautan. */
+function urlHost(raw?: string | null): string {
+  if (!raw) return "";
+  try {
+    return new URL(raw).host;
+  } catch {
+    return raw;
+  }
+}
+
+/** Salin teks ke clipboard + toast. Return false bila clipboard gagal (non-secure context). */
+async function copyWithToast(value: string, successMsg: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast.success(successMsg);
+    return true;
+  } catch {
+    toast.info("Gagal menyalin otomatis — salin manual dari layar");
+    return false;
+  }
+}
+
+/** Kotak berisi secure link (mono, truncate) + tombol salin ke clipboard. */
+function CopyBox({ value, ariaLabel }: { value: string; ariaLabel: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-orange-300 bg-orange-50 p-2">
+      <p className="min-w-0 flex-1 truncate font-mono text-xs text-orange-900" title={value}>{value}</p>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-11 shrink-0 border-orange-300 bg-white px-3 text-xs font-medium text-orange-800 hover:bg-orange-100 hover:text-orange-900"
+        onClick={async () => {
+          const done = await copyWithToast(value, "Secure link disalin — kirim ke klien via WhatsApp/email");
+          if (done) {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2500);
+          }
+        }}
+        aria-label={ariaLabel}
+      >
+        {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+        {copied ? "Tersalin" : "Salin"}
+      </Button>
+    </div>
+  );
+}
+
+/** KARTU 1 — Secure Link Klien: buat token 48-hex, salin URL, cabut/aktifkan/hapus. */
+function StaffPortalTokens({ companies, actorName, actorRole }: {
+  companies: CompanyRef[];
+  actorName: string;
+  actorRole: string;
+}) {
+  const [companyId, setCompanyId] = useState("");
+  const [label, setLabel] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [tokens, setTokens] = useState<PortalTokenDTO[] | null>(null);
+  const [newUrl, setNewUrl] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await portalApi.tokens();
+      setTokens(res.tokens);
+    } catch {
+      setTokens([]);
+      toast.error("Gagal memuat daftar secure link");
+    }
+  }, []);
+
+  // Lazy fetch daftar token saat staf membuka seksi ini.
+  useEffect(() => {
+    let cancelled = false;
+    portalApi.tokens()
+      .then((res) => { if (!cancelled) setTokens(res.tokens); })
+      .catch(() => { if (!cancelled) setTokens([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createToken() {
+    if (!companyId) {
+      toast.error("Pilih perusahaan klien terlebih dahulu");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await portalApi.createToken({
+        companyId,
+        label: label.trim() || undefined,
+        actorName,
+        actorRole,
+      });
+      setNewUrl(`${window.location.origin}/?portal=${res.token.token}`);
+      setLabel("");
+      toast.success("Secure link dibuat — salin URL di bawah lalu bagikan ke klien");
+      void reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat secure link");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function toggleActive(t: PortalTokenDTO) {
+    setBusyId(t.id);
+    try {
+      await portalApi.updateToken(t.id, { active: !t.active, actorName });
+      toast.success(t.active ? "Secure link dicabut — URL tidak bisa diakses lagi" : "Secure link diaktifkan kembali");
+      void reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengubah status secure link");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function removeToken(t: PortalTokenDTO) {
+    const name = t.label ?? t.company?.name ?? "secure link ini";
+    if (!window.confirm(`Hapus secure link "${name}"? URL yang sudah dibagikan akan langsung mati.`)) return;
+    setBusyId(t.id);
+    try {
+      await portalApi.deleteToken(t.id);
+      toast.success("Secure link dihapus");
+      void reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus secure link");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const activeCount = (tokens ?? []).filter((t) => t.active).length;
+
+  return (
+    <div className="flex flex-col rounded-xl border bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <KeyRound className="h-4 w-4 text-orange-600" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-900">Secure Link Klien</p>
+        </div>
+        {tokens !== null ? (
+          <Badge variant="outline" className="border-transparent bg-emerald-100 text-emerald-700">
+            {activeCount} aktif
+          </Badge>
+        ) : null}
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+        URL rahasia tanpa login per perusahaan — klien membuka{" "}
+        <span className="font-mono text-[11px]">/?portal=&lt;token&gt;</span> dan langsung melihat data perusahaannya.
+      </p>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Select value={companyId} onValueChange={setCompanyId}>
+          <SelectTrigger className="h-11 w-full" aria-label="Pilih perusahaan untuk secure link">
+            <SelectValue placeholder="Pilih perusahaan…" />
+          </SelectTrigger>
+          <SelectContent>
+            {companies.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="cth. Hendra — PT Nusantara"
+          aria-label="Label secure link (opsional)"
+          className="h-11"
+        />
+      </div>
+      <Button
+        type="button"
+        disabled={creating}
+        onClick={() => void createToken()}
+        className="mt-3 h-11 bg-orange-600 text-white hover:bg-orange-700"
+        aria-label="Buat secure link baru"
+      >
+        {creating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+        Buat Secure Link
+      </Button>
+
+      {newUrl ? (
+        <div className="mt-3">
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+            Secure link baru — salin &amp; bagikan
+          </p>
+          <CopyBox value={newUrl} ariaLabel="Salin secure link yang baru dibuat" />
+        </div>
+      ) : null}
+
+      <p className="mb-1.5 mt-4 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+        Daftar Secure Link ({(tokens ?? []).length})
+      </p>
+      {tokens === null ? (
+        <div className="space-y-2" aria-hidden>
+          <Skeleton className="h-24 rounded-lg" />
+          <Skeleton className="h-24 rounded-lg" />
+        </div>
+      ) : tokens.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-400">
+          Belum ada secure link — buat di atas lalu bagikan ke klien.
+        </p>
+      ) : (
+        <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+          {tokens.map((t) => {
+            const tag = t.label ?? t.company?.name ?? "secure link";
+            return (
+              <div key={t.id} className="rounded-lg border bg-zinc-50/60 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-zinc-900">{t.label ?? "Tanpa label"}</p>
+                    <p className="mt-0.5 truncate text-xs text-zinc-500">{t.company?.name ?? "-"}</p>
+                    <p className="mt-1 text-[11px] text-zinc-400">
+                      Diakses {t.accessCount}×{t.lastAccessedAt ? ` · terakhir ${timeAgo(t.lastAccessedAt)}` : " · belum pernah"} · dibuat {timeAgo(t.createdAt)}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${t.active ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-600"}`}>
+                    {t.active ? "Aktif" : "Dicabut"}
+                  </Badge>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <div className="flex h-11 min-w-0 flex-1 items-center rounded-md border bg-white px-2.5">
+                    <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500" title={`/?portal=${t.token}`}>
+                      /?portal={t.token}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-11 w-11 shrink-0"
+                    onClick={() => void copyWithToast(`${window.location.origin}/?portal=${t.token}`, "Secure link disalin")}
+                    aria-label={`Salin secure link ${tag}`}
+                  >
+                    <Copy className="h-4 w-4" aria-hidden />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busyId === t.id}
+                    onClick={() => void toggleActive(t)}
+                    className={`h-11 shrink-0 px-3 text-xs ${t.active ? "border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"}`}
+                    aria-label={t.active ? `Cabut secure link ${tag}` : `Aktifkan kembali secure link ${tag}`}
+                  >
+                    {t.active ? <Ban className="h-3.5 w-3.5" aria-hidden /> : <RotateCcw className="h-3.5 w-3.5" aria-hidden />}
+                    {t.active ? "Cabut" : "Aktifkan"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    disabled={busyId === t.id}
+                    onClick={() => void removeToken(t)}
+                    className="h-11 w-11 shrink-0 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hapus secure link ${tag}`}
+                  >
+                    {busyId === t.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Trash2 className="h-4 w-4" aria-hidden />}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type DocKind = "mou" | "meeting_note" | "document";
+type DocSource = "link" | "file";
+type PickedFile = { fileName: string; fileData: string; mimeType: string; sizeBytes: number };
+
+/** KARTU 2 — Dokumen, MoU & Catatan Rapat: kelola isi secure link per perusahaan. */
+function StaffPortalDocuments({ companies, actorName }: {
+  companies: CompanyRef[];
+  actorName: string;
+}) {
+  const [companyId, setCompanyId] = useState("");
+  const [documents, setDocuments] = useState<ClientDocumentDTO[] | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Form tambah dokumen
+  const [kind, setKind] = useState<DocKind>("mou");
+  const [source, setSource] = useState<DocSource>("link");
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [content, setContent] = useState("");
+  const [meetingAt, setMeetingAt] = useState("");
+  const [attendees, setAttendees] = useState("");
+  const [file, setFile] = useState<PickedFile | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const reload = useCallback(async (cid: string) => {
+    try {
+      const res = await portalApi.documents(cid);
+      setDocuments(res.documents);
+    } catch {
+      setDocuments([]);
+      toast.error("Gagal memuat daftar dokumen");
+    }
+  }, []);
+
+  // Fetch dokumen setiap kali perusahaan dipilih.
+  useEffect(() => {
+    if (!companyId) {
+      setDocuments(null);
+      return;
+    }
+    let cancelled = false;
+    portalApi.documents(companyId)
+      .then((res) => { if (!cancelled) setDocuments(res.documents); })
+      .catch(() => { if (!cancelled) setDocuments([]); });
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  function resetForm() {
+    setKind("mou");
+    setSource("link");
+    setTitle("");
+    setUrl("");
+    setContent("");
+    setMeetingAt("");
+    setAttendees("");
+    setFile(null);
+  }
+
+  function openDialog() {
+    if (!companyId) {
+      toast.error("Pilih perusahaan klien terlebih dahulu");
+      return;
+    }
+    resetForm();
+    setDialogOpen(true);
+  }
+
+  function handleFilePicked(f: File) {
+    if (f.size > MAX_PORTAL_FILE_BYTES) {
+      toast.error(`Ukuran file ${(f.size / 1024 / 1024).toFixed(2)} MB melebihi batas 1.2 MB — gunakan tautan (mis. Google Drive) untuk file besar`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : null;
+      if (!dataUrl) {
+        toast.error("Gagal membaca file — coba file lain");
+        return;
+      }
+      setFile({
+        fileName: f.name,
+        fileData: dataUrl,
+        mimeType: f.type || "application/octet-stream",
+        sizeBytes: f.size,
+      });
+    };
+    reader.onerror = () => toast.error("Gagal membaca file — coba file lain");
+    reader.readAsDataURL(f);
+  }
+
+  async function submitDocument() {
+    if (!companyId) {
+      toast.error("Pilih perusahaan klien terlebih dahulu");
+      return;
+    }
+    const t = title.trim();
+    if (!t) {
+      toast.error("Judul wajib diisi");
+      return;
+    }
+
+    const payload: Parameters<typeof portalApi.createDocument>[0] = { companyId, kind, title: t, actorName };
+
+    if (kind === "meeting_note") {
+      const body = content.trim();
+      if (!body) {
+        toast.error("Isi catatan rapat wajib diisi");
+        return;
+      }
+      payload.content = body;
+      if (meetingAt) payload.meetingAt = meetingAt; // "YYYY-MM-DD"
+      if (attendees.trim()) payload.attendees = attendees.trim();
+    } else if (source === "link") {
+      const u = url.trim();
+      if (!u) {
+        toast.error("URL tautan wajib diisi");
+        return;
+      }
+      if (!/^https?:\/\//i.test(u)) {
+        toast.error("URL harus diawali http:// atau https://");
+        return;
+      }
+      payload.url = u;
+      if (content.trim()) payload.content = content.trim();
+    } else {
+      if (!file) {
+        toast.error("Pilih file terlebih dahulu");
+        return;
+      }
+      payload.fileData = file.fileData;
+      payload.fileName = file.fileName;
+      payload.mimeType = file.mimeType;
+      payload.sizeBytes = file.sizeBytes;
+      if (content.trim()) payload.content = content.trim();
+    }
+
+    setSaving(true);
+    try {
+      await portalApi.createDocument(payload);
+      toast.success("Dokumen ditambahkan — langsung tampil di secure link klien");
+      setDialogOpen(false);
+      resetForm();
+      void reload(companyId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menambahkan dokumen");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeDocument(d: ClientDocumentDTO) {
+    if (!window.confirm(`Hapus "${d.title}"? Dokumen akan hilang dari secure link klien.`)) return;
+    setBusyId(d.id);
+    try {
+      await portalApi.deleteDocument(d.id);
+      toast.success("Dokumen dihapus");
+      if (companyId) void reload(companyId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus dokumen");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const grouped = useMemo(() => {
+    const list = documents ?? [];
+    const order: DocKind[] = ["mou", "meeting_note", "document"];
+    return order
+      .map((k) => ({ kind: k, items: list.filter((d) => d.kind === k) }))
+      .filter((g) => g.items.length > 0);
+  }, [documents]);
+
+  const selectedCompany = companies.find((c) => c.id === companyId);
+
+  return (
+    <div className="flex flex-col rounded-xl border bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <FileStack className="h-4 w-4 text-orange-600" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-900">Dokumen, MoU &amp; Catatan Rapat</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11 px-3 text-xs font-medium text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+          onClick={openDialog}
+          aria-label="Tambah dokumen, MoU, atau catatan rapat"
+        >
+          <Plus className="h-4 w-4" aria-hidden /> Tambah
+        </Button>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+        Isi secure link klien — MoU bertautan/file kecil, notulen rapat, dan dokumen pendukung lainnya.
+      </p>
+
+      <Select value={companyId} onValueChange={setCompanyId}>
+        <SelectTrigger className="mt-3 h-11 w-full" aria-label="Pilih perusahaan untuk mengelola dokumen klien">
+          <SelectValue placeholder="Pilih perusahaan…" />
+        </SelectTrigger>
+        <SelectContent>
+          {companies.map((c) => (
+            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <div className="mt-3 min-h-0 flex-1">
+        {!companyId ? (
+          <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-400">
+            Pilih perusahaan untuk melihat dokumennya.
+          </p>
+        ) : documents === null ? (
+          <div className="space-y-2" aria-hidden>
+            <Skeleton className="h-16 rounded-lg" />
+            <Skeleton className="h-16 rounded-lg" />
+          </div>
+        ) : documents.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-400">
+            Belum ada dokumen untuk {selectedCompany?.name ?? "perusahaan ini"} — klik Tambah untuk mengunggah.
+          </p>
+        ) : (
+          <div className="max-h-96 space-y-4 overflow-y-auto crm-scroll pr-1">
+            {grouped.map((g) => {
+              const meta = docKind(g.kind);
+              const KindIcon = meta.icon;
+              return (
+                <div key={g.kind}>
+                  <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    <KindIcon className="h-3.5 w-3.5" aria-hidden /> {meta.label} ({g.items.length})
+                  </p>
+                  <div className="space-y-2">
+                    {g.items.map((d) => {
+                      const dmeta = docKind(d.kind);
+                      const DIcon = dmeta.icon;
+                      const metaText =
+                        d.kind === "meeting_note"
+                          ? [d.meetingAt ? formatDate(d.meetingAt) : null, d.attendees ? `Peserta: ${d.attendees}` : null]
+                              .filter(Boolean)
+                              .join(" · ") || "Catatan rapat"
+                          : d.fileName
+                            ? [d.fileName, formatSizeKb(d.sizeBytes)].filter(Boolean).join(" · ")
+                            : d.url
+                              ? urlHost(d.url)
+                              : "Teks";
+                      return (
+                        <div key={d.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border bg-zinc-50/60 p-3">
+                          <div className="flex min-w-0 items-start gap-2.5">
+                            <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${dmeta.iconCls}`} aria-hidden>
+                              <DIcon className="h-3.5 w-3.5" />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-zinc-900">{d.title}</p>
+                              <p className="truncate text-[11px] text-zinc-500">{metaText}</p>
+                              {d.kind === "meeting_note" && d.content ? (
+                                <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{d.content}</p>
+                              ) : null}
+                              <p className="mt-1 text-[11px] text-zinc-400">
+                                {timeAgo(d.createdAt)}{d.createdByName ? ` · oleh ${d.createdByName}` : ""}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {d.url ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-11 w-11"
+                                onClick={() => window.open(d.url ?? "", "_blank", "noopener,noreferrer")}
+                                aria-label={`Buka tautan dokumen ${d.title}`}
+                              >
+                                <ExternalLink className="h-4 w-4" aria-hidden />
+                              </Button>
+                            ) : null}
+                            {d.fileData ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-11 w-11"
+                                onClick={() => window.open(d.fileData ?? "", "_blank", "noopener,noreferrer")}
+                                aria-label={`Unduh file dokumen ${d.title}`}
+                              >
+                                <ReceiptText className="h-4 w-4" aria-hidden />
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              disabled={busyId === d.id}
+                              onClick={() => void removeDocument(d)}
+                              className="h-11 w-11 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                              aria-label={`Hapus dokumen ${d.title}`}
+                            >
+                              {busyId === d.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Trash2 className="h-4 w-4" aria-hidden />}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Dialog tambah dokumen — segmented kind + sumber tautan/file */}
+      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Tambah Dokumen Klien</DialogTitle>
+            <DialogDescription>
+              {selectedCompany ? selectedCompany.name : "Pilih perusahaan"} — dokumen langsung tampil di secure link klien.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Segmented jenis dokumen */}
+            <div className="grid grid-cols-3 gap-2">
+              {(["mou", "meeting_note", "document"] as DocKind[]).map((k) => {
+                const meta = docKind(k);
+                const Icon = meta.icon;
+                const on = kind === k;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setKind(k)}
+                    aria-pressed={on}
+                    aria-label={`Jenis ${meta.label}`}
+                    className={`flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${on ? "border-orange-400 bg-orange-50 text-orange-800" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"}`}
+                  >
+                    <Icon className="h-4 w-4" aria-hidden /> {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Judul (wajib) */}
+            <div className="space-y-1.5">
+              <label htmlFor="portal-doc-title" className="text-xs font-medium text-zinc-600">
+                Judul <span className="text-rose-500">*</span>
+              </label>
+              <Input
+                id="portal-doc-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={kind === "mou" ? "cth. MoU Kerja Sama Konten 2025" : kind === "meeting_note" ? "cth. Rapat Kickoff Kampani Q3" : "cth. Brosur Produk Terbaru"}
+                className="h-11"
+              />
+            </div>
+
+            {kind !== "meeting_note" ? (
+              <>
+                {/* Segmented sumber: tautan atau file */}
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { key: "link" as DocSource, label: "Tautan", icon: Link2 },
+                    { key: "file" as DocSource, label: "File", icon: Paperclip },
+                  ]).map((s) => {
+                    const on = source === s.key;
+                    return (
+                      <button
+                        key={s.key}
+                        type="button"
+                        onClick={() => setSource(s.key)}
+                        aria-pressed={on}
+                        aria-label={`Sumber ${s.label}`}
+                        className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${on ? "border-orange-400 bg-orange-50 text-orange-800" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"}`}
+                      >
+                        <s.icon className="h-4 w-4" aria-hidden /> {s.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {source === "link" ? (
+                  <div className="space-y-1.5">
+                    <label htmlFor="portal-doc-url" className="text-xs font-medium text-zinc-600">
+                      URL Tautan <span className="text-rose-500">*</span>
+                    </label>
+                    <Input
+                      id="portal-doc-url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder="https://drive.google.com/…"
+                      inputMode="url"
+                      className="h-11"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-zinc-600">File (maks 1.2 MB) <span className="text-rose-500">*</span></p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleFilePicked(f);
+                        e.target.value = "";
+                      }}
+                      aria-label="Pilih file untuk diunggah"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11 w-full"
+                      onClick={() => fileInputRef.current?.click()}
+                      aria-label="Pilih file dari perangkat"
+                    >
+                      <Paperclip className="h-4 w-4" aria-hidden /> {file ? "Ganti File" : "Pilih File"}
+                    </Button>
+                    {file ? (
+                      <p className="truncate rounded-md bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-700">
+                        {file.fileName} · {formatSizeKb(file.sizeBytes)} · siap diunggah
+                      </p>
+                    ) : null}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label htmlFor="portal-doc-date" className="text-xs font-medium text-zinc-600">Tanggal Rapat</label>
+                  <Input
+                    id="portal-doc-date"
+                    type="date"
+                    value={meetingAt}
+                    onChange={(e) => setMeetingAt(e.target.value)}
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="portal-doc-attendees" className="text-xs font-medium text-zinc-600">Peserta (dipisah koma)</label>
+                  <Input
+                    id="portal-doc-attendees"
+                    value={attendees}
+                    onChange={(e) => setAttendees(e.target.value)}
+                    placeholder="cth. Hendra, Rani, Tim Agency"
+                    className="h-11"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Konten: wajib utk catatan rapat, opsional utk lainnya */}
+            <div className="space-y-1.5">
+              <label htmlFor="portal-doc-content" className="text-xs font-medium text-zinc-600">
+                {kind === "meeting_note" ? (
+                  <>Isi Catatan <span className="text-rose-500">*</span></>
+                ) : (
+                  "Konten / Deskripsi (opsional)"
+                )}
+              </label>
+              <Textarea
+                id="portal-doc-content"
+                rows={4}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder={kind === "meeting_note" ? "Poin pembahasan, keputusan, dan tindak lanjut…" : "Catatan singkat untuk klien…"}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => { setDialogOpen(false); resetForm(); }}
+              aria-label="Batal tambah dokumen"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              disabled={saving}
+              onClick={() => void submitDocument()}
+              className="h-11 bg-orange-600 text-white hover:bg-orange-700"
+              aria-label="Simpan dokumen"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+              Simpan Dokumen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 // ============ Module utama ============
 
 export default function PortalModule() {
@@ -666,15 +1451,6 @@ export default function PortalModule() {
     }
   }
 
-  async function copyDemoEmail() {
-    try {
-      await navigator.clipboard.writeText("hendra@nusantaranet.com");
-      toast.success("Email akun demo client disalin");
-    } catch {
-      toast.info("Salin manual: hendra@nusantaranet.com");
-    }
-  }
-
   if (loading && projects === null && !isClient) return <PortalSkeleton />;
   if (loading && isClient && linkInfo === null) return <PortalSkeleton />;
 
@@ -702,38 +1478,29 @@ export default function PortalModule() {
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
       ) : null}
 
-      {/* Task 22-4 — petunjuk cara client masuk ke portal (khusus staf: super_admin/director) */}
+      {/* Task 23-c — Akses Klien via secure link TANPA login: token + dokumen (khusus staf) */}
       {canPreview ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-          <div className="flex items-start gap-3">
-            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-amber-900">Cara Client Masuk ke Portal</p>
-              <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-amber-800">
-                <li>Client login di halaman login yang sama dengan email kontak perusahaannya.</li>
-                <li>PIN demo default: <span className="font-mono font-semibold">1234</span>.</li>
-                <li>
-                  Akun demo:{" "}
-                  <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
-                    <span className="rounded border border-amber-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-amber-900">
-                      hendra@nusantaranet.com
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void copyDemoEmail()}
-                      className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
-                      aria-label="Salin email akun demo client"
-                    >
-                      <Copy className="h-3 w-3" aria-hidden /> Salin
-                    </button>
-                    <span>— Hendra Wijaya (PT Nusantara Digital Raya)</span>
-                  </span>
-                </li>
-                <li>Client hanya melihat proyek, invoice, dan quotation perusahaannya sendiri.</li>
-              </ol>
-            </div>
+        <section aria-label="Akses Klien — Secure Link" className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              <KeyRound className="h-4 w-4 text-orange-600" aria-hidden /> Akses Klien — Secure Link
+            </h2>
+            <p className="text-xs text-zinc-500">
+              Klien tidak perlu login — bagikan URL rahasia berisi MoU, catatan rapat, project, invoice &amp; deliverable.
+            </p>
           </div>
-        </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <StaffPortalTokens
+              companies={companies ?? []}
+              actorName={user?.name ?? "System"}
+              actorRole={user?.role ?? "system"}
+            />
+            <StaffPortalDocuments
+              companies={companies ?? []}
+              actorName={user?.name ?? "System"}
+            />
+          </div>
+        </section>
       ) : null}
 
       {/* Role client: penanganan akun belum terkait */}

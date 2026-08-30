@@ -19,6 +19,7 @@ import {
   CopyX,
   Download,
   ExternalLink,
+  Facebook,
   FileUp,
   GitMerge,
   Globe,
@@ -32,6 +33,7 @@ import {
   MailPlus,
   MapPin,
   MessageCircle,
+  Music2,
   Pencil,
   Phone,
   Plus,
@@ -116,6 +118,9 @@ interface ContactRecord extends ContactRef {
   linkedin?: string | null;
   timezone?: string | null;
   socialProfile?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
   notes?: string | null;
   _count?: { opportunities: number; interactions: number };
 }
@@ -138,6 +143,9 @@ interface ContactFormValues {
   city: string;
   country: string;
   preferredChannel: string;
+  instagram: string;
+  facebook: string;
+  tiktok: string;
   tagsText: string;
 }
 
@@ -161,6 +169,9 @@ type ImportRowValues = {
   position: string;
   country: string;
   city: string;
+  instagram: string;
+  facebook: string;
+  tiktok: string;
 };
 
 // ---------- Konstanta & helper ----------
@@ -219,6 +230,9 @@ const EMPTY_CONTACT_FORM: ContactFormValues = {
   city: "",
   country: "",
   preferredChannel: "whatsapp",
+  instagram: "",
+  facebook: "",
+  tiktok: "",
   tagsText: "",
 };
 
@@ -578,76 +592,96 @@ function ContactFormFields({
     onChange({ [key]: value } as Partial<ContactFormValues>);
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <FormField label="Nama depan" required>
-        <Input value={values.firstName} onChange={(e) => setField("firstName")(e.target.value)} placeholder="cth. Ratna" disabled={disabled} />
-      </FormField>
-      <FormField label="Nama belakang">
-        <Input value={values.lastName} onChange={(e) => setField("lastName")(e.target.value)} placeholder="cth. Wijaya" disabled={disabled} />
-      </FormField>
-      <FormField label="Jabatan">
-        <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
-      </FormField>
-      <FormField label="Email">
-        <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
-      </FormField>
-      <FormField label="WhatsApp">
-        <Input value={values.whatsapp} onChange={(e) => setField("whatsapp")(e.target.value)} placeholder="+62…" disabled={disabled} />
-      </FormField>
-      <FormField label="Telepon">
-        <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
-      </FormField>
-
-      {mode === "create" ? (
-        <FormField label="Perusahaan">
-          <Input
-            value={values.companyName}
-            onChange={(e) => setField("companyName")(e.target.value)}
-            placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
-            disabled={disabled}
-          />
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <FormField label="Nama depan" required>
+          <Input value={values.firstName} onChange={(e) => setField("firstName")(e.target.value)} placeholder="cth. Ratna" disabled={disabled} />
         </FormField>
-      ) : (
-        <FormField label="Perusahaan">
-          <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
-            <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
-              <SelectValue placeholder="Pilih perusahaan" />
+        <FormField label="Nama belakang">
+          <Input value={values.lastName} onChange={(e) => setField("lastName")(e.target.value)} placeholder="cth. Wijaya" disabled={disabled} />
+        </FormField>
+        <FormField label="Jabatan di Perusahaan">
+          <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
+        </FormField>
+        <FormField label="Email">
+          <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
+        </FormField>
+        <FormField label="WhatsApp">
+          <Input value={values.whatsapp} onChange={(e) => setField("whatsapp")(e.target.value)} placeholder="+62…" disabled={disabled} />
+        </FormField>
+        <FormField label="Telepon">
+          <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
+        </FormField>
+
+        {mode === "create" ? (
+          <FormField label="Perusahaan">
+            <Input
+              value={values.companyName}
+              onChange={(e) => setField("companyName")(e.target.value)}
+              placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
+              disabled={disabled}
+            />
+          </FormField>
+        ) : (
+          <FormField label="Perusahaan">
+            <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
+              <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
+                <SelectValue placeholder="Pilih perusahaan" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
+                {companies.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
+
+        <FormField label="Kota">
+          <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
+        </FormField>
+        <FormField label="Negara">
+          <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={disabled} />
+        </FormField>
+        <FormField label="Kanal preferensi">
+          <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
+            <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
+              <SelectValue placeholder="Pilih kanal" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
-              {companies.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
+              {CHANNELS.map((c) => (
+                <SelectItem key={c.key} value={c.key}>
+                  {c.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </FormField>
-      )}
+      </div>
 
-      <FormField label="Kota">
-        <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
-      </FormField>
-      <FormField label="Negara">
-        <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={disabled} />
-      </FormField>
-      <FormField label="Kanal preferensi">
-        <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
-          <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
-            <SelectValue placeholder="Pilih kanal" />
-          </SelectTrigger>
-          <SelectContent>
-            {CHANNELS.map((c) => (
-              <SelectItem key={c.key} value={c.key}>
-                {c.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </FormField>
-      <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
-        <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
-      </FormField>
+      <section aria-label="Media sosial" className="space-y-2">
+        <SectionTitle>Media Sosial</SectionTitle>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField label="Instagram">
+            <Input value={values.instagram} onChange={(e) => setField("instagram")(e.target.value)} placeholder="cth. @rani.creativehouse" disabled={disabled} />
+          </FormField>
+          <FormField label="Facebook">
+            <Input value={values.facebook} onChange={(e) => setField("facebook")(e.target.value)} placeholder="cth. facebook.com/nama" disabled={disabled} />
+          </FormField>
+          <FormField label="TikTok">
+            <Input value={values.tiktok} onChange={(e) => setField("tiktok")(e.target.value)} placeholder="cth. @namabrand" disabled={disabled} />
+          </FormField>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
+          <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
+        </FormField>
+      </div>
     </div>
   );
 }
@@ -682,6 +716,9 @@ function ContactDetailBody({
     city: contact.city ?? "",
     country: contact.country ?? "",
     preferredChannel: contact.preferredChannel || "whatsapp",
+    instagram: contact.instagram ?? "",
+    facebook: contact.facebook ?? "",
+    tiktok: contact.tiktok ?? "",
     tagsText: "",
   });
   const [tags, setTags] = useState<string[]>(() => parseJsonArray(contact.tags));
@@ -715,6 +752,9 @@ function ContactDetailBody({
         city: form.city.trim() || null,
         country: form.country.trim() || null,
         preferredChannel: form.preferredChannel,
+        instagram: form.instagram.trim() || null,
+        facebook: form.facebook.trim() || null,
+        tiktok: form.tiktok.trim() || null,
         companyId: form.companyId === NO_VALUE ? null : form.companyId,
         actorName: user?.name ?? "System",
         actorRole: user?.role ?? "system",
@@ -835,6 +875,9 @@ function ContactDetailBody({
               <InfoRow icon={Languages} label="Bahasa" value={LANGUAGE_LABELS[contact.language] ?? contact.language} />
               <InfoRow icon={PreferredIcon} label="Kanal preferensi" value={channelLabel(contact.preferredChannel)} />
               {contact.linkedin ? <InfoRow icon={Linkedin} label="LinkedIn" value={contact.linkedin} /> : null}
+              {contact.instagram ? <InfoRow icon={Instagram} label="Instagram" value={contact.instagram} /> : null}
+              {contact.facebook ? <InfoRow icon={Facebook} label="Facebook" value={contact.facebook} /> : null}
+              {contact.tiktok ? <InfoRow icon={Music2} label="TikTok" value={contact.tiktok} /> : null}
               <div className="flex items-start gap-3">
                 <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
                   <ShieldCheck className="size-4" />
@@ -1095,7 +1138,15 @@ function CompanyDetailBody({
                     <AvatarBubble name={c.fullName} size="sm" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-zinc-900">{c.fullName}</span>
-                      <span className="block truncate text-xs text-zinc-500">{c.position || c.email || "-"}</span>
+                      <span className="block truncate text-xs text-zinc-500">
+                        {c.position || c.email || "-"}
+                        {c.instagram ? (
+                          <span className="ml-1.5 inline-flex max-w-[45%] items-center gap-1 align-middle text-zinc-400">
+                            <Instagram className="size-3 shrink-0" aria-hidden="true" />
+                            <span className="truncate">{c.instagram}</span>
+                          </span>
+                        ) : null}
+                      </span>
                     </span>
                     <ChannelBadge channel={c.preferredChannel} />
                   </button>
@@ -1194,6 +1245,9 @@ function CreateContactDialog({
         city: values.city.trim() || undefined,
         country: values.country.trim() || undefined,
         preferredChannel: values.preferredChannel,
+        instagram: values.instagram.trim() || undefined,
+        facebook: values.facebook.trim() || undefined,
+        tiktok: values.tiktok.trim() || undefined,
         tags: parseTagsText(values.tagsText),
         actorName: user?.name ?? "System",
         actorRole: user?.role ?? "system",
@@ -1445,10 +1499,10 @@ function CreateCompanyDialog({
 const IMPORT_MAX_ROWS = 200;
 
 const IMPORT_TEMPLATE = [
-  "nama,email,whatsapp,perusahaan,jabatan,kota",
-  "Hendra Wijaya,hendra@nusantaranet.com,,PT Nusantara Digital Raya,Direktur Digital,Jakarta",
-  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Owner,Surabaya",
-  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Creative Director,Surabaya",
+  "nama,email,whatsapp,perusahaan,jabatan,kota,instagram",
+  "Hendra Wijaya,hendra@nusantaranet.com,,PT Nusantara Digital Raya,Direktur Digital,Jakarta,@hendra.wjy",
+  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Owner,Surabaya,",
+  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Creative Director,Surabaya,",
   "Tanpa Kontak,,,PT Contoh Saja,,",
 ].join("\n");
 
@@ -1461,6 +1515,9 @@ const IMPORT_FIELD_ORDER: readonly (keyof ImportRowValues)[] = [
   "position",
   "country",
   "city",
+  "instagram",
+  "facebook",
+  "tiktok",
 ];
 
 const IMPORT_HEADER_SYNONYMS: Record<string, keyof ImportRowValues> = {
@@ -1481,10 +1538,31 @@ const IMPORT_HEADER_SYNONYMS: Record<string, keyof ImportRowValues> = {
   country: "country",
   kota: "city",
   city: "city",
+  instagram: "instagram",
+  ig: "instagram",
+  instagram_handle: "instagram",
+  handle_ig: "instagram",
+  facebook: "facebook",
+  fb: "facebook",
+  facebook_url: "facebook",
+  tiktok: "tiktok",
+  tt: "tiktok",
 };
 
 function emptyImportRow(): ImportRowValues {
-  return { fullName: "", email: "", whatsapp: "", phone: "", company: "", position: "", country: "", city: "" };
+  return {
+    fullName: "",
+    email: "",
+    whatsapp: "",
+    phone: "",
+    company: "",
+    position: "",
+    country: "",
+    city: "",
+    instagram: "",
+    facebook: "",
+    tiktok: "",
+  };
 }
 
 function isHeaderRow(cells: string[]): boolean {
@@ -1791,8 +1869,8 @@ function ImportCsvDialog({
                   {IMPORT_TEMPLATE}
                 </pre>
                 <p className="mt-1.5 text-[11px] text-zinc-400">
-                  Kolom didukung: nama, email, whatsapp, telepon, perusahaan, jabatan, negara, kota. Tanpa header,
-                  urutan kolom mengikuti contoh di atas.
+                  Kolom didukung: nama, email, whatsapp, telepon, perusahaan, jabatan, negara, kota, instagram (juga
+                  "ig"), facebook ("fb"), tiktok ("tt"). Tanpa header, urutan kolom mengikuti contoh di atas.
                 </p>
               </div>
 

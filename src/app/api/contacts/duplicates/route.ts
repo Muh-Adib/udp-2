@@ -47,10 +47,16 @@ export async function GET() {
         reasons.push("Telepon sama");
       }
 
-      // Sosial profile sama (handle IG dkk.)
-      const sa = a.socialProfile?.trim().toLowerCase() ?? null;
-      const sb = b.socialProfile?.trim().toLowerCase() ?? null;
-      if (sa && sb && sa === sb) {
+      // Sosial profile sama (handle IG dkk.) — termasuk field terstruktur r23
+      // (instagram/facebook/tiktok) karena handle lead kini disimpan di kolom tersebut.
+      const socialsA = [a.socialProfile, a.instagram, a.facebook, a.tiktok]
+        .map((v) => v?.trim().toLowerCase() ?? null)
+        .filter((v): v is string => !!v);
+      const socialsB = [b.socialProfile, b.instagram, b.facebook, b.tiktok]
+        .map((v) => v?.trim().toLowerCase() ?? null)
+        .filter((v): v is string => !!v);
+      const socialMatch = socialsA.some((sa) => sa && socialsB.includes(sa));
+      if (socialMatch) {
         score += 80;
         reasons.push("Sosial media sama");
       }
