@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { extractEmailFromText } from "@/lib/crm/utils";
 import { contactIdentityTokens, threadKeyForWithContact } from "@/lib/crm/thread";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Konversi lead inbox menjadi contact (+company) dan opportunity.
@@ -16,10 +17,13 @@ import { contactIdentityTokens, threadKeyForWithContact } from "@/lib/crm/thread
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const interactionId = String(body.interactionId ?? "");
   const action = String(body.action ?? "new");
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "marketing");
+  const actorName = actor.name;
+  const actorRole = actor.role;
 
   const interaction = await db.interaction.findUnique({ where: { id: interactionId } });
   if (!interaction) return fail("Lead tidak ditemukan", 404);

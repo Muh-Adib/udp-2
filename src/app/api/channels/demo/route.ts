@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { CHANNEL_TYPES, DEMO_CONNECTIONS } from "@/lib/crm/channels";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Ronde 20 — Mode Demo: hubungkan kanal dengan 1 klik (kredensial buatan).
@@ -12,6 +13,11 @@ import { CHANNEL_TYPES, DEMO_CONNECTIONS } from "@/lib/crm/channels";
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
   const channel = typeof body.channel === "string" ? body.channel : "";
   if (!CHANNEL_TYPES[channel]) return fail("Tipe kanal tidak dikenal", 400);
 
@@ -49,8 +55,8 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: typeof body.actorName === "string" ? body.actorName : "System",
-    actorRole: typeof body.actorRole === "string" ? body.actorRole : "super_admin",
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "connect",
     entity: "channel",
     entityId: row.id,

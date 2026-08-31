@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, fail, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -31,6 +32,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const projectId = String(body.projectId ?? "");
   const title = String(body.title ?? "").trim();
   const description = String(body.description ?? "").trim();
@@ -75,7 +79,7 @@ export async function POST(req: NextRequest) {
 
   await logAudit({
     actorName: requestedBy,
-    actorRole: String(body.actorRole ?? "production"),
+    actorRole: actor.role,
     action: "create",
     entity: "change_request",
     entityId: cr.id,
@@ -89,10 +93,13 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const id = String(body.id ?? "");
   const decision = String(body.decision ?? ""); // approve | reject | cancel
-  const actorName = String(body.actorName ?? "Unknown");
-  const actorRole = String(body.actorRole ?? "director");
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const decisionNote = body.decisionNote ? String(body.decisionNote) : null;
 
   if (!id) return fail("id wajib diisi", 400);
@@ -105,7 +112,7 @@ export async function PATCH(req: NextRequest) {
   if (!cr) return fail("Change request tidak ditemukan", 404);
 
   // Cancel boleh oleh pengaju mana pun; approve/reject hanya role berwenang
-  if (decision !== "cancel" && !canDecide(actorRole)) {
+  if (decision !== "cancel" && (!actorRole || !canDecide(actorRole))) {
     return fail("Hanya Direktur, Super Admin, atau klien yang bisa memutuskan change request", 403);
   }
   if (cr.status !== "pending") {

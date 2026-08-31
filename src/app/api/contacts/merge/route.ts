@@ -1,15 +1,19 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 /** Gabungkan duplicate contact ke contact utama (dapat dilacak: dup jadi soft-delete + log).
  * Ronde 26 engineering: pemindahan relasi + soft-delete + pengayaan data kini dalam
  * SATU transaksi — crash di tengah tidak menyisakan dup setengah-merge. */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const primaryId = String(body.primaryId ?? "");
   const duplicateId = String(body.duplicateId ?? "");
-  const actorName = String(body.actorName ?? "System");
+  const actorName = actor.name;
 
   if (!primaryId || !duplicateId) return fail("primaryId dan duplicateId wajib");
   if (primaryId === duplicateId) return fail("Tidak bisa menggabungkan contact yang sama");

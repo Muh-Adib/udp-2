@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Fase 3 — Update milestone (digunakan drag-reschedule deadline di kalender
@@ -8,6 +9,9 @@ import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
  */
 export async function PATCH(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const milestoneId = body.milestoneId ? String(body.milestoneId) : "";
   if (!milestoneId) return fail("Milestone tidak ditemukan", 404);
 
@@ -51,10 +55,10 @@ export async function PATCH(req: NextRequest) {
     include: { project: { include: { brand: true } } },
   });
 
-  const actorName = String(body.actorName ?? "Produksi");
+  const actorName = actor.name;
   await logAudit({
     actorName,
-    actorRole: String(body.actorRole ?? "production"),
+    actorRole: actor.role,
     action: "update",
     entity: "milestone",
     entityId: milestone.id,

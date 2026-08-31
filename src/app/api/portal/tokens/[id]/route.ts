@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Task 23-c — Aktifkan/cabut & hapus token secure link klien.
@@ -16,6 +17,11 @@ function tokenLabel(name: string, label?: string | null) {
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
 
   if (body.active === undefined || typeof body.active !== "boolean") {
     return fail("Field 'active' wajib diisi (true/false)", 400);
@@ -34,8 +40,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: body.actorRole !== undefined && body.actorRole !== null ? String(body.actorRole) : null,
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "update",
     entity: "portal_token",
     entityId: id,
@@ -51,6 +57,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
 
   const existing = await db.clientPortalToken.findUnique({
     where: { id },
@@ -61,8 +72,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   await db.clientPortalToken.delete({ where: { id } });
 
   await logAudit({
-    actorName: body.actorName !== undefined && body.actorName !== null ? String(body.actorName).trim() || "System" : "System",
-    actorRole: body.actorRole !== undefined && body.actorRole !== null ? String(body.actorRole) : null,
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "delete",
     entity: "portal_token",
     entityId: id,

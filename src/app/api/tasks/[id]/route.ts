@@ -1,10 +1,14 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const current = await db.task.findUnique({ where: { id } });
   if (!current) return fail("Task tidak ditemukan", 404);
 
@@ -22,7 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const task = await db.task.update({ where: { id }, data, include: { opportunity: { include: { brand: true } } } });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name, actorRole: actor.role,
     action: "update", entity: "task", entityId: id, entityLabel: task.title,
     field: body.status ? "status" : "task", oldValue: current.status, newValue: String(data.status ?? current.status), req,
   });

@@ -2,10 +2,14 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { normalizeEmail, normalizePhone } from "@/lib/crm/utils";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const current = await db.contact.findUnique({ where: { id } });
   if (!current) return fail("Contact tidak ditemukan", 404);
 
@@ -45,7 +49,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   for (const ch of changes) {
     await logAudit({
-      actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "system"),
+      actorName: actor.name, actorRole: actor.role,
       action: "update", entity: "contact", entityId: id, entityLabel: contact.fullName,
       field: ch.field, oldValue: ch.oldValue, newValue: ch.newValue, req,
     });
@@ -55,12 +59,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Ronde 27: identitas aktor diambil dari sesi (cookie).
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
   const { id } = await params;
   const current = await db.contact.findUnique({ where: { id } });
   if (!current) return fail("Contact tidak ditemukan", 404);
   await db.contact.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({
-    actorName: "System", action: "delete", entity: "contact", entityId: id,
+    actorName: actor.name, action: "delete", entity: "contact", entityId: id,
     entityLabel: current.fullName, metadata: "Soft delete contact", req,
   });
   return ok({ deleted: true });

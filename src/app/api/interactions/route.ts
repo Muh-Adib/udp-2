@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, logAudit } from "@/lib/crm/server";
+import { ok, readBody, logAudit, fail } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -35,6 +36,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const content = String(body.content ?? "").trim();
   if (!content) return ok({ error: "Konten pesan wajib diisi" }, 400);
 
@@ -85,7 +89,7 @@ export async function POST(req: NextRequest) {
   }
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name, actorRole: actor.role,
     action: "create", entity: "interaction", entityId: interaction.id,
     entityLabel: `Pesan ${interaction.channel} ${interaction.direction}`,
     metadata: content.slice(0, 120), req,

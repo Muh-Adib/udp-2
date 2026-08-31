@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Task 22-4 — Deliverable project: daftar + kirim tautan/file untuk ditinjau.
@@ -26,6 +27,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
 
   const project = await db.project.findUnique({ where: { id }, select: { id: true, code: true, name: true } });
   if (!project) return fail("Project tidak ditemukan", 404);
@@ -62,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const note = body.note ? String(body.note).trim() : null;
-  const createdBy = body.createdBy ? String(body.createdBy).trim() : null;
+  const createdBy = actor.name;
 
   const deliverable = await db.projectDeliverable.create({
     data: {
@@ -81,8 +85,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
 
   await logAudit({
-    actorName: createdBy ?? "System",
-    actorRole: "production",
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "create",
     entity: "deliverable",
     entityId: deliverable.id,

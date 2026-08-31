@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Task 22-3 — CRUD template follow-up (per item).
@@ -18,6 +19,9 @@ function shortVal(v: unknown): string {
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
 
   const tpl = await db.followUpTemplate.findUnique({ where: { id } });
   if (!tpl) return fail("Template tidak ditemukan", 404);
@@ -78,8 +82,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .map((k) => `${k} ${shortVal(tpl[k as keyof typeof tpl])}→${shortVal(updated[k as keyof typeof updated])}`);
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "update",
     entity: "template",
     entityId: id,
@@ -95,7 +99,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const body = await readBody(req); // boleh kosong (fetch DELETE tanpa body)
+  const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401); // boleh kosong (fetch DELETE tanpa body)
 
   const tpl = await db.followUpTemplate.findUnique({ where: { id } });
   if (!tpl) return fail("Template tidak ditemukan", 404);
@@ -103,8 +110,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   await db.followUpTemplate.delete({ where: { id } });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "delete",
     entity: "template",
     entityId: id,

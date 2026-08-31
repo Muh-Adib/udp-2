@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -17,17 +18,20 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const id = String(body.id ?? "");
   const decision = String(body.decision ?? "");
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "director");
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const decisionNote = body.decisionNote ? String(body.decisionNote) : null;
 
   if (!id || !["approve", "reject"].includes(decision)) {
     return fail("id dan decision (approve/reject) wajib");
   }
   // Hanya direktur & super admin yang boleh memutuskan (sesuai matriks role)
-  if (!["director", "super_admin"].includes(actorRole)) {
+  if (!actorRole || !["director", "super_admin"].includes(actorRole)) {
     return fail("Hanya Direktur atau Super Admin yang dapat memutuskan approval", 403);
   }
 

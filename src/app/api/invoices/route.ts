@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, logAudit, numOrNull, pageLimit } from "@/lib/crm/server";
+import { ok, readBody, logAudit, numOrNull, pageLimit, fail } from "@/lib/crm/server";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -38,6 +39,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director", "finance"]);
+  if (!gate.ok) return fail(gate.reason, 403);
   // Tambah pembayaran
   if (body.action === "add_payment") {
     const invoiceId = String(body.invoiceId ?? "");
@@ -69,7 +75,7 @@ export async function POST(req: NextRequest) {
       return tx.invoice.update({ where: { id: invoiceId }, data: { status }, include: { payments: true } });
     });
     await logAudit({
-      actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "finance"),
+      actorName: actor.name, actorRole: actor.role,
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "payment", newValue: `Pembayaran ${amount} via ${body.method ?? "transfer"}`, req,
     });
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
       include: { payments: true },
     });
     await logAudit({
-      actorName: String(body.actorName ?? "finance"), actorRole: body.actorRole ? String(body.actorRole) : null,
+      actorName: actor.name, actorRole: actor.role,
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "status", oldValue: "draft", newValue: "sent", req,
     });
@@ -115,7 +121,7 @@ export async function POST(req: NextRequest) {
       include: { payments: true },
     });
     await logAudit({
-      actorName: String(body.actorName ?? "finance"), actorRole: body.actorRole ? String(body.actorRole) : null,
+      actorName: actor.name, actorRole: actor.role,
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "status", oldValue: invoice.status, newValue: "cancelled", req,
     });

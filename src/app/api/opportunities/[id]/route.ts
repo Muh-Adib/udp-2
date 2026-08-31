@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, handleWonTransition, numOrNull, clampNum, dateOrNull } from "@/lib/crm/server";
 import { computeLeadScore } from "@/lib/crm/scoring";
+import { resolveActor } from "@/lib/crm/auth";
 
 /** Hitung skor lead + sisipkan score/scoreReasons/_count ke row opportunity Prisma. */
 function enrichScore<
@@ -73,8 +74,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "system");
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const actorName = actor.name;
+  const actorRole = actor.role;
 
   const current = await db.opportunity.findUnique({ where: { id }, include: { brand: true } });
   if (!current) return fail("Opportunity tidak ditemukan", 404);
@@ -165,12 +169,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Ronde 27: identitas aktor diambil dari sesi (cookie).
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
   const { id } = await params;
   const current = await db.opportunity.findUnique({ where: { id } });
   if (!current) return fail("Opportunity tidak ditemukan", 404);
   await db.opportunity.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({
-    actorName: "System", action: "delete", entity: "opportunity", entityId: id,
+    actorName: actor.name, action: "delete", entity: "opportunity", entityId: id,
     entityLabel: current.title, metadata: "Soft delete opportunity", req,
   });
   return ok({ deleted: true });

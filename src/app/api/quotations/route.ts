@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 interface QuotationItem {
   description: string;
@@ -59,9 +60,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const opportunityId = String(body.opportunityId ?? "");
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "system");
+  const actorName = actor.name;
+  const actorRole = actor.role;
 
   const opp = await db.opportunity.findUnique({
     where: { id: opportunityId },

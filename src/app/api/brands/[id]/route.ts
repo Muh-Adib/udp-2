@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Task 22-3 — Edit brand: PATCH /api/brands/:id
@@ -20,6 +21,11 @@ function shortVal(v: unknown): string {
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
 
   const brand = await db.brand.findUnique({ where: { id } });
   if (!brand) return fail("Brand tidak ditemukan", 404);
@@ -92,8 +98,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     : `Ubah brand ${brand.name} (tanpa perubahan nilai)`;
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "update",
     entity: "brand",
     entityId: id,

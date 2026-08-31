@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
 import { computeReplyChannels, REPLY_CHANNELS, reachableAddress } from "@/lib/crm/thread";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Fase 3 — Respons & catat lead inbox:
@@ -11,6 +12,9 @@ import { computeReplyChannels, REPLY_CHANNELS, reachableAddress } from "@/lib/cr
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const interactionId = body.interactionId ? String(body.interactionId) : "";
   const content = String(body.content ?? "").trim();
   if (!interactionId) return fail("Lead tidak ditemukan", 404);
@@ -25,8 +29,8 @@ export async function POST(req: NextRequest) {
     return fail("Lead sudah diproses atau dikonversi", 400);
   }
 
-  const actorName = String(body.actorName ?? "Marketing");
-  const actorRole = String(body.actorRole ?? "marketing");
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const contactId = body.contactId ? String(body.contactId) : lead.contactId;
   const companyId = body.companyId
     ? String(body.companyId)

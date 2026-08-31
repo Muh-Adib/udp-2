@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, logAudit } from "@/lib/crm/server";
 import { ImapFlow, type FetchMessageObject, type MessageStructureObject, type MailboxLockObject } from "imapflow";
 import { friendlyVerifyError } from "@/lib/crm/channel-verify";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Ronde 21 — Tarik email MASUK via IMAP → interaction inbound (lead inbox).
@@ -64,6 +65,11 @@ function htmlToText(html: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  // Ronde 27: identitas aktor diambil dari sesi (cookie).
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
   const config = await db.channelConfig.findFirst({
     where: { channel: "email", status: "connected" },
     orderBy: { updatedAt: "desc" },
@@ -174,7 +180,7 @@ export async function POST(req: NextRequest) {
     }
     const note = friendlyVerifyError(err, "imap");
     await logAudit({
-      actorName: "System", actorRole: "super_admin",
+      actorName: actor.name, actorRole: actor.role,
       action: "email_sync",
       entity: "channel", entityId: config.id,
       entityLabel: `sinkron IMAP ${config.displayName} gagal — ${note}`,
@@ -186,7 +192,7 @@ export async function POST(req: NextRequest) {
 
   await db.channelConfig.update({ where: { id: config.id }, data: { lastEmailSyncAt: new Date() } });
   await logAudit({
-    actorName: "System", actorRole: "super_admin",
+    actorName: actor.name, actorRole: actor.role,
     action: "email_sync",
     entity: "channel", entityId: config.id,
     entityLabel: `sinkron IMAP ${config.displayName} — ${created} email baru, ${skipped} duplikat`,

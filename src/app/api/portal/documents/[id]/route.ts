@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Task 23-c — Hapus dokumen/MoU/catatan rapat dari secure link klien.
@@ -16,6 +17,9 @@ const KIND_LABEL: Record<string, string> = {
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
 
   const existing = await db.clientDocument.findUnique({
     where: { id },
@@ -26,8 +30,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   await db.clientDocument.delete({ where: { id } });
 
   await logAudit({
-    actorName: body.actorName !== undefined && body.actorName !== null ? String(body.actorName).trim() || "System" : "System",
-    actorRole: body.actorRole !== undefined && body.actorRole !== null ? String(body.actorRole) : null,
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "delete",
     entity: "client_document",
     entityId: id,

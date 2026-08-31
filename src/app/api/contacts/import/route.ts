@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, fail, logAudit, findMatchCandidates, loadMatchContacts } from "@/lib/crm/server";
 import { normalizeEmail, normalizePhone, isValidEmail } from "@/lib/crm/utils";
+import { resolveActor } from "@/lib/crm/auth";
 
 /** Batas baris per impor — cukup untuk use case agency, mencegah abuse. */
 const MAX_ROWS = 200;
@@ -79,9 +80,12 @@ function validateRow(row: NormalizedRow): string[] {
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const commit = Boolean(body.commit);
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "marketing");
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const rows = normalizeRows(body.rows);
   const decisions = (body.decisions ?? {}) as Record<string, string>;
 

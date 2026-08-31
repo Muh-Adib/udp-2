@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 function slugify(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -13,6 +14,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
   const name = String(body.name ?? "").trim();
   if (!name) return fail("Nama brand wajib diisi");
 
@@ -37,7 +43,7 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "super_admin"),
+    actorName: actor.name, actorRole: actor.role,
     action: "create", entity: "brand", entityId: brand.id, entityLabel: brand.name,
     metadata: `Brand baru dikonfigurasi: ${brand.name} (${slug}) tanpa mengubah source code`, req,
   });

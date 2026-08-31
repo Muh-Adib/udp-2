@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody, clampNum } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -32,6 +33,9 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const name = String(body.name ?? "").trim();
   const brandId = String(body.brandId ?? "").trim();
   const companyId = String(body.companyId ?? "").trim();
@@ -78,8 +82,8 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: body.actorRole ? String(body.actorRole) : "system",
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "create",
     entity: "project",
     entityId: project.id,
@@ -93,6 +97,9 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const id = String(body.id ?? "");
   if (!id) return ok({ error: "id wajib" }, 400);
   // Snapshot data lama untuk audit log perubahan deadline (pola sama dengan milestone reschedule)
@@ -113,8 +120,8 @@ export async function PATCH(req: NextRequest) {
   const project = await db.project.update({ where: { id }, data, include: { milestones: { orderBy: { order: "asc" } } } });
   if ("dueDate" in data) {
     await logAudit({
-      actorName: String(body.actorName ?? "Produksi"),
-      actorRole: String(body.actorRole ?? "production"),
+      actorName: actor.name,
+      actorRole: actor.role,
       action: "update",
       entity: "project",
       entityId: project.id,

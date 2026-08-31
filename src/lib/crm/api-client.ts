@@ -19,6 +19,7 @@ export type SearchItemDTO = {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
+    credentials: "same-origin", // Ronde 27: cookie sesi selalu ikut utk request same-origin
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   const data = await res.json().catch(() => ({}));
@@ -26,13 +27,22 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+/** Entri user sesi (Ronde 27) — sama dgn bentuk login. */
+export type SessionUserResponse = {
+  id: string; name: string; email: string; role: string;
+  avatarColor: string; brandAccess: string; companyName?: string | null;
+};
+
 export const api = {
   // Bootstrap
   bootstrap: () => request<{ ready: boolean }>("/api/bootstrap"),
   login: (email: string, pin: string) =>
-    request<{ user: { id: string; name: string; email: string; role: string; avatarColor: string; brandAccess: string; companyName?: string | null } }>(
+    request<{ user: SessionUserResponse }>(
       "/api/auth/login", { method: "POST", body: JSON.stringify({ email, pin }) }
     ),
+  // Ronde 27 — sesi nyata: introspeksi cookie + logout server-side
+  session: () => request<{ user: SessionUserResponse | null }>("/api/auth/session"),
+  logout: () => request<{ loggedOut: boolean }>("/api/auth/session", { method: "POST" }),
   users: () => request<{ users: { id: string; name: string; email: string; role: string; avatarColor: string; active: boolean }[] }>("/api/users"),
 
   // Brands

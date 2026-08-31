@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, findMatchCandidates } from "@/lib/crm/server";
 import { normalizeEmail, normalizePhone, extractDomain } from "@/lib/crm/utils";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -41,6 +42,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const firstName = String(body.firstName ?? "").trim();
   const lastName = String(body.lastName ?? "").trim();
   const fullName = `${firstName} ${lastName}`.trim();
@@ -68,7 +72,7 @@ export async function POST(req: NextRequest) {
         },
       });
       await logAudit({
-        actorName: String(body.actorName ?? "System"), action: "create",
+        actorName: actor.name, action: "create",
         entity: "company", entityId: company.id, entityLabel: company.name, req,
       });
     }
@@ -100,7 +104,7 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "system"),
+    actorName: actor.name, actorRole: actor.role,
     action: "create", entity: "contact", entityId: contact.id, entityLabel: contact.fullName, req,
   });
 

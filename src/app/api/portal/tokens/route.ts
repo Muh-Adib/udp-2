@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Task 23-c — Secure link token portal klien (akses TANPA login).
@@ -22,6 +23,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
 
   const companyId = String(body.companyId ?? "").trim();
   if (!companyId) return fail("companyId wajib diisi", 400);
@@ -39,13 +45,13 @@ export async function POST(req: NextRequest) {
       token: randomBytes(24).toString("hex"), // 48 hex — rahasia, kunci satu-satunya akses klien
       companyId,
       label: label || null,
-      createdByName: body.actorName !== undefined && body.actorName !== null ? String(body.actorName).trim() || null : null,
+      createdByName: actor.name,
     },
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "System"),
-    actorRole: body.actorRole !== undefined && body.actorRole !== null ? String(body.actorRole) : null,
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "create",
     entity: "portal_token",
     entityId: created.id,

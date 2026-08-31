@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import type { Prisma } from "@prisma/client";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Ronde 18 — Brief Builder (Fase 2): brief terstruktur per opportunity.
@@ -63,11 +64,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const brief = await loadBrief(id);
   if (!brief) return fail("Brief tidak ditemukan", 404);
 
-  const actorName = typeof body.actorName === "string" ? body.actorName : "System";
-  const actorRole = typeof body.actorRole === "string" ? body.actorRole : "marketing";
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const action = typeof body.action === "string" ? body.action : "save";
 
   // ---------- Transisi status ----------
@@ -166,6 +170,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Ronde 27: identitas aktor diambil dari sesi (cookie).
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
   const { id } = await params;
   const brief = await db.clientBrief.findUnique({ where: { id } });
   if (!brief) return fail("Brief tidak ditemukan", 404);
@@ -175,7 +182,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   await db.clientBrief.delete({ where: { id } });
   await logAudit({
-    actorName: "System",
+    actorName: actor.name,
     actorRole: "marketing",
     action: "delete",
     entity: "brief",

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useCrmStore, MODULE_META, canAccess, type ModuleKey } from "@/lib/crm/store";
+import { api } from "@/lib/crm/api-client";
 import { ROLES } from "@/lib/crm/constants";
 import { initials } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
@@ -297,7 +298,11 @@ export default function AppShell() {
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => { setUser(null); }}
+                  onClick={async () => {
+                    // Ronde 27: logout server-side (cookie sesi dihapus) lalu bersihkan store.
+                    try { await api.logout(); } catch { /* tetap keluar lokal */ }
+                    setUser(null);
+                  }}
                   className="text-rose-600 focus:text-rose-600"
                   aria-label="Keluar dari aplikasi"
                 >

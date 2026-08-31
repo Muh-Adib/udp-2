@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { extractDomain } from "@/lib/crm/utils";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -20,6 +21,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const name = String(body.name ?? "").trim();
   if (!name) return fail("Nama perusahaan wajib diisi");
   const website = body.website ? String(body.website) : null;
@@ -39,7 +43,7 @@ export async function POST(req: NextRequest) {
     },
   });
   await logAudit({
-    actorName: String(body.actorName ?? "System"), action: "create",
+    actorName: actor.name, action: "create",
     entity: "company", entityId: company.id, entityLabel: company.name, req,
   });
   return ok({ company }, 201);

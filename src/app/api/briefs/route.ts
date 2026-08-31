@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import type { Prisma } from "@prisma/client";
+import { resolveActor } from "@/lib/crm/auth";
 
 /**
  * Ronde 18 — Brief Builder (Fase 2): brief terstruktur per opportunity.
@@ -55,6 +56,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const opportunityId = typeof body.opportunityId === "string" ? body.opportunityId : "";
   if (!opportunityId) return fail("opportunityId wajib diisi");
 
@@ -98,7 +102,7 @@ export async function POST(req: NextRequest) {
       references: JSON.stringify(references),
       attachmentsNote: typeof body.attachmentsNote === "string" ? body.attachmentsNote : null,
       status: "draft",
-      createdBy: typeof body.actorName === "string" ? body.actorName : null,
+      createdBy: actor.name,
     },
     include: {
       brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } },
@@ -106,8 +110,8 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: typeof body.actorName === "string" ? body.actorName : "System",
-    actorRole: typeof body.actorRole === "string" ? body.actorRole : "marketing",
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "create",
     entity: "brief",
     entityId: brief.id,

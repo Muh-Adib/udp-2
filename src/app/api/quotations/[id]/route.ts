@@ -1,12 +1,16 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, clampNum } from "@/lib/crm/server";
+import { resolveActor } from "@/lib/crm/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await readBody(req);
-  const actorName = String(body.actorName ?? "System");
-  const actorRole = String(body.actorRole ?? "system");
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
+  const actorName = actor.name;
+  const actorRole = actor.role;
   const action = String(body.action ?? "update");
 
   const quotation = await db.quotation.findUnique({

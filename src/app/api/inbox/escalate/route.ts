@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { CHANNELS } from "@/lib/crm/constants";
+import { resolveActor } from "@/lib/crm/auth";
 
 function channelLabel(channel: string): string {
   return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
@@ -10,6 +11,9 @@ function channelLabel(channel: string): string {
 /** Fase 3 — SLA escalation: buat task urgent untuk Direktur dari sebuah lead inbox. */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
+  // Ronde 27: identitas aktor diambil dari sesi (cookie) — body tidak dipercaya lagi.
+  const actor = await resolveActor(req, body);
+  if (actor.denied) return fail(actor.reason, 401);
   const interactionId = body.interactionId ? String(body.interactionId) : "";
   if (!interactionId) return fail("Lead tidak ditemukan", 404);
 
@@ -47,8 +51,8 @@ export async function POST(req: NextRequest) {
   });
 
   await logAudit({
-    actorName: String(body.actorName ?? "Marketing"),
-    actorRole: String(body.actorRole ?? "marketing"),
+    actorName: actor.name,
+    actorRole: actor.role,
     action: "create",
     entity: "task",
     entityId: task.id,
