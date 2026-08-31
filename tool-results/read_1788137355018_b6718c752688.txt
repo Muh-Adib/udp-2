@@ -1,0 +1,439 @@
+     1→import { db } from "@/lib/db";
+     2→
+     3→const DAY = 24 * 60 * 60 * 1000;
+     4→const HOUR = 60 * 60 * 1000;
+     5→function ago(days: number) { return new Date(Date.now() - days * DAY); }
+     6→function ahead(days: number) { return new Date(Date.now() + days * DAY); }
+     7→
+     8→export async function seedDatabase(force = false) {
+     9→  const existing = await db.brand.count();
+    10→  if (existing > 0 && !force) return { seeded: false, reason: "data already exists" };
+    11→
+    12→  // Clean (order matters)
+    13→  await db.changeRequest.deleteMany();
+    14→  await db.approvalRequest.deleteMany();
+    15→  await db.notificationState.deleteMany();
+    16→  await db.estimation.deleteMany();
+    17→  await db.quotation.deleteMany();
+    18→  await db.auditLog.deleteMany();
+    19→  await db.payment.deleteMany();
+    20→  await db.invoice.deleteMany();
+    21→  await db.milestone.deleteMany();
+    22→  await db.project.deleteMany();
+    23→  await db.note.deleteMany();
+    24→  await db.task.deleteMany();
+    25→  await db.interaction.deleteMany();
+    26→  await db.opportunity.deleteMany();
+    27→  await db.contact.deleteMany();
+    28→  await db.company.deleteMany();
+    29→  await db.followUpTemplate.deleteMany();
+    30→  await db.user.deleteMany();
+    31→  await db.brand.deleteMany();
+    32→
+    33→  // ============ BRANDS ============
+    34→  const [unimasi, segia, erfo, unicam] = await Promise.all([
+    35→    db.brand.create({ data: { name: "Unimasi", slug: "unimasi", color: "#ea580c", logoEmoji: "🎬", description: "Animasi company profile, pembelajaran, infografis, program/produk, sosialisasi & marketing.", website: "https://www.unimasi.com", invoicePrefix: "UMS", slaHours: 4 } }),
+    36→    db.brand.create({ data: { name: "Segia Tech", slug: "segia_tech", color: "#059669", logoEmoji: "💻", description: "Website, SEO, UI/UX, dan produksi konten digital.", website: "https://www.segiatech.com", invoicePrefix: "SGT", slaHours: 2 } }),
+    37→    db.brand.create({ data: { name: "Erfo Multimedia", slug: "erfo_multimedia", color: "#e11d48", logoEmoji: "📹", description: "Foto/video dokumentasi, shooting, live streaming, drone, video AI & video 360.", website: "https://www.erfomultimedia.com", invoicePrefix: "EFM", slaHours: 6 } }),
+    38→    db.brand.create({ data: { name: "Unicam Studio", slug: "unicam_studio", color: "#7c3aed", logoEmoji: "✨", description: "Corporate video, animasi 2D/3D, AI video, AR/VR, virtual tour, immersive experience & projection mapping.", website: "https://www.unicamstudio.com", invoicePrefix: "UCS", slaHours: 8 } }),
+    39→  ]);
+    40→
+    41→  // ============ USERS ============
+    42→  await db.user.createMany({ data: [
+    43→    { name: "Rian Pratama", email: "rian@grup.co.id", role: "super_admin", pin: "1234", avatarColor: "#0f766e" },
+    44→    { name: "Sari Wulandari", email: "sari@grup.co.id", role: "director", pin: "1234", avatarColor: "#b45309" },
+    45→    { name: "Dewi Lestari", email: "dewi@grup.co.id", role: "marketing", pin: "1234", avatarColor: "#be123c" },
+    46→    { name: "Andi Saputra", email: "andi@grup.co.id", role: "marketing", pin: "1234", avatarColor: "#7c3aed" },
+    47→    { name: "Maya Kusuma", email: "maya@grup.co.id", role: "finance", pin: "1234", avatarColor: "#0369a1" },
+    48→    { name: "Budi Hartono", email: "budi@grup.co.id", role: "production", pin: "1234", avatarColor: "#4d7c0f" },
+    49→    { name: "Hendra Wijaya", email: "hendra@nusantaranet.com", role: "client", pin: "1234", avatarColor: "#525252" },
+    50→  ]});
+    51→
+    52→  // ============ COMPANIES ============
+    53→  const companies = await Promise.all([
+    54→    db.company.create({ data: { name: "PT Nusantara Digital Raya", industry: "Teknologi", website: "https://nusantaranet.com", websiteDomain: "nusantaranet.com", country: "Indonesia", city: "Jakarta", size: "enterprise", defaultCurrency: "IDR", tags: JSON.stringify(["priority", "retainer"]), lifetimeValue: 485000000 } }),
+    55→    db.company.create({ data: { name: "Kementerian Pendidikan dan Kebudayaan", industry: "Pemerintahan", website: "kemdikbud.go.id", websiteDomain: "kemdikbud.go.id", country: "Indonesia", city: "Jakarta", size: "government", defaultCurrency: "IDR", tags: JSON.stringify(["government"]) } }),
+    56→    db.company.create({ data: { name: "PT Sawit Sejahtera Abadi", industry: "Agrikultur", website: "sawitsejahtera.co.id", websiteDomain: "sawitsejahtera.co.id", country: "Indonesia", city: "Medan", size: "enterprise", defaultCurrency: "IDR" } }),
+    57→    db.company.create({ data: { name: "Bank Berkah Sentosa", industry: "Perbankan", website: "bankberkah.co.id", websiteDomain: "bankberkah.co.id", country: "Indonesia", city: "Surabaya", size: "enterprise", defaultCurrency: "IDR", tags: JSON.stringify(["finance"]) } }),
+    58→    db.company.create({ data: { name: "PT Karya Wisata Nusantara", industry: "Pariwisata", website: "wisatanusantara.id", websiteDomain: "wisatanusantara.id", country: "Indonesia", city: "Denpasar", size: "sme", defaultCurrency: "IDR" } }),
+    59→    db.company.create({ data: { name: "RS Harapan Sehat", industry: "Kesehatan", website: "harapansehat.co.id", websiteDomain: "harapansehat.co.id", country: "Indonesia", city: "Bandung", size: "enterprise", defaultCurrency: "IDR" } }),
+    60→    db.company.create({ data: { name: "CV Manggala Kreatif", industry: "Kreatif", country: "Indonesia", city: "Yogyakarta", size: "sme", defaultCurrency: "IDR" } }),
+    61→    db.company.create({ data: { name: "PT Logistik Prima Indonesia", industry: "Logistik", website: "logistikprima.co.id", websiteDomain: "logistikprima.co.id", country: "Indonesia", city: "Semarang", size: "enterprise", defaultCurrency: "IDR" } }),
+    62→    db.company.create({ data: { name: "Global EdTech Pte Ltd", industry: "Pendidikan", website: "globaledtech.com", websiteDomain: "globaledtech.com", country: "Singapore", city: "Singapore", size: "sme", defaultCurrency: "USD" } }),
+    63→    db.company.create({ data: { name: "Dinas Pariwisata Daerah Kota Bandung", industry: "Pemerintahan", country: "Indonesia", city: "Bandung", size: "government", defaultCurrency: "IDR" } }),
+    64→  ]);
+    65→
+    66→  // ============ CONTACTS ============
+    67→  const contacts = await Promise.all([
+    68→    db.contact.create({ data: { firstName: "Hendra", lastName: "Wijaya", fullName: "Hendra Wijaya", position: "Chief Marketing Officer", email: "hendra@nusantaranet.com", whatsapp: "+6281234567890", phone: "+62215551001", country: "Indonesia", city: "Jakarta", timezone: "Asia/Jakarta", companyId: companies[0].id, preferredChannel: "whatsapp", linkedin: "linkedin.com/in/hendrawijaya", tags: JSON.stringify(["decision-maker"]) } }),
+    69→    db.contact.create({ data: { firstName: "Ratna", lastName: "Sari", fullName: "Ratna Sari", position: "Kepala Biro Komunikasi", email: "ratna.sari@kemdikbud.go.id", emailAlt: "ratna.kemdikbud@gmail.com", whatsapp: "+628128001234", phone: "+62215791234", country: "Indonesia", city: "Jakarta", timezone: "Asia/Jakarta", companyId: companies[1].id, preferredChannel: "email", tags: JSON.stringify(["government", "procurement"]) } }),
+    70→    db.contact.create({ data: { firstName: "Bambang", lastName: "Sutrisno", fullName: "Bambang Sutrisno", position: "Public Relations Manager", email: "bambang@sawitsejahtera.co.id", whatsapp: "+6281370012345", country: "Indonesia", city: "Medan", timezone: "Asia/Jakarta", companyId: companies[2].id, preferredChannel: "whatsapp" } }),
+    71→    db.contact.create({ data: { firstName: "Lina", lastName: "Hartati", fullName: "Lina Hartati", position: "Head of Digital Banking", email: "lina.hartati@bankberkah.co.id", whatsapp: "+6281170023456", country: "Indonesia", city: "Surabaya", timezone: "Asia/Jakarta", companyId: companies[3].id, preferredChannel: "email", language: "id" } }),
+    72→    db.contact.create({ data: { firstName: "Kadek", lastName: "Adnyana", fullName: "Kadek Adnyana", position: "Owner", email: "kadek@wisatanusantara.id", whatsapp: "+6281235098765", country: "Indonesia", city: "Denpasar", timezone: "Asia/Makassar", companyId: companies[4].id, preferredChannel: "whatsapp" } }),
+    73→    db.contact.create({ data: { firstName: "dr. Amelia", lastName: "Rahmawati", fullName: "dr. Amelia Rahmawati", position: "Direktur Umum", email: "amelia@harapansehat.co.id", whatsapp: "+6281220987654", country: "Indonesia", city: "Bandung", timezone: "Asia/Jakarta", companyId: companies[5].id, preferredChannel: "email" } }),
+    74→    db.contact.create({ data: { firstName: "Yoga", lastName: "Prasetyo", fullName: "Yoga Prasetyo", position: "Creative Director", email: "yoga@manggalakreatif.id", whatsapp: "+6281345012345", country: "Indonesia", city: "Yogyakarta", companyId: companies[6].id, preferredChannel: "instagram" } }),
+    75→    db.contact.create({ data: { firstName: "Sinta", lastName: "Mardiani", fullName: "Sinta Mardiani", position: "Ops Manager", email: "sinta@logistikprima.co.id", whatsapp: "+6281390012345", country: "Indonesia", city: "Semarang", companyId: companies[7].id, preferredChannel: "email" } }),
+    76→    db.contact.create({ data: { firstName: "Wei Ling", lastName: "Tan", fullName: "Wei Ling Tan", position: "Regional Marketing Head", email: "weiling@globaledtech.com", whatsapp: "+6591234567", country: "Singapore", city: "Singapore", timezone: "Asia/Singapore", language: "en", companyId: companies[8].id, preferredChannel: "email" } }),
+    77→    db.contact.create({ data: { firstName: "Dedy", lastName: "Kurniawan", fullName: "Dedy Kurniawan", position: "Kepala Seksi Promosi", email: "dedy@pariwisata.bandung.go.id", whatsapp: "+6281510012345", country: "Indonesia", city: "Bandung", companyId: companies[9].id, preferredChannel: "whatsapp" } }),
+    78→    // Kontak mirip (untuk demo duplicate warning)
+    79→    db.contact.create({ data: { firstName: "Ibu Ratna", fullName: "Ibu Ratna", position: "Staff Humas", email: "ratna.humas@kemdikbud.go.id", whatsapp: "+628128001234", country: "Indonesia", city: "Jakarta", companyId: companies[1].id, preferredChannel: "whatsapp" } }),
+    80→    db.contact.create({ data: { firstName: "Putri", lastName: "Ayunda", fullName: "Putri Ayunda", position: "Marketing Staff", email: "putri.ayunda@gmail.com", whatsapp: "+6281990456789", country: "Indonesia", city: "Jakarta", preferredChannel: "instagram" } }),
+    81→  ]);
+    82→
+    83→  // ============ OPPORTUNITIES ============
+    84→  type OppSeed = {
+    85→    title: string; brand: string; company?: number; contact: number;
+    86→    serviceCategory: string; serviceName: string; leadSource: string;
+    87→    stage: string; value?: number; probability?: number; owner?: string;
+    88→    temperature?: string; priority?: string; expectedClose?: number;
+    89→    lostReason?: string; lostNotes?: string; competitor?: string;
+    90→    nurtureSegment?: string; createdDaysAgo: number; brief?: string; nextAction?: string;
+    91→    currency?: string; lastOfferValue?: number; followUpDate?: Date;
+    92→  };
+    93→  const oppSeeds: OppSeed[] = [
+    94→    { title: "Website corporate baru + SEO", brand: segia.id, company: 0, contact: 0, serviceCategory: "website", serviceName: "Website Company Profile", leadSource: "referral", stage: "won", value: 245000000, probability: 100, owner: "Dewi Lestari", temperature: "hot", createdDaysAgo: 75, brief: "Redesign total website korporat dengan CMS, multibahasa, dan SEO on-page untuk 50 halaman." },
+    95→    { title: "Video company profile 2025", brand: unicam.id, company: 0, contact: 0, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "instagram", stage: "won", value: 185000000, probability: 100, owner: "Andi Saputra", createdDaysAgo: 60, brief: "Video profile 3 menit dengan drone dan motion graphic untuk investor relation." },
+    96→    { title: "Animasi edukasi literasi digital", brand: unimasi.id, company: 1, contact: 1, serviceCategory: "animation", serviceName: "Animasi Pembelajaran", leadSource: "website", stage: "won", value: 320000000, probability: 100, owner: "Dewi Lestari", createdDaysAgo: 90, brief: "12 episode animasi pembelajaran literasi digital untuk siswa SMA." },
+    97→    { title: "Dokumentasi pabrik + drone", brand: erfo.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Dokumentasi Foto/Video", leadSource: "whatsapp", stage: "negotiation", value: 96000000, probability: 60, owner: "Andi Saputra", temperature: "hot", createdDaysAgo: 20, nextAction: "Kirim revisi penawaran final" },
+    98→    { title: "Live streaming economic forum", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Live Streaming", leadSource: "event", stage: "proposal_sent", value: 145000000, probability: 50, owner: "Dewi Lestari", createdDaysAgo: 15, nextAction: "Follow-up proposal 3 kamera" },
+    99→    { title: "Virtual tour destinasi wisata", brand: unicam.id, company: 4, contact: 4, serviceCategory: "immersive", serviceName: "Virtual Tour", leadSource: "instagram", stage: "discovery", value: 210000000, probability: 40, owner: "Andi Saputra", createdDaysAgo: 12, nextAction: "Jadwalkan survey lokasi" },
+   100→    { title: "Website booking + UI/UX", brand: segia.id, company: 4, contact: 4, serviceCategory: "website", serviceName: "Web Application", leadSource: "referral", stage: "estimation", value: 165000000, probability: 45, owner: "Dewi Lestari", createdDaysAgo: 18 },
+   101→    { title: "Animasi 3D edukasi rumah sakit", brand: unimasi.id, company: 5, contact: 5, serviceCategory: "animation", serviceName: "Animasi 3D", leadSource: "email", stage: "qualified", value: 275000000, probability: 35, owner: "Dewi Lestari", createdDaysAgo: 9 },
+   102→    { title: "Projection mapping annual night", brand: unicam.id, company: 9, contact: 9, serviceCategory: "immersive", serviceName: "Projection Mapping", leadSource: "event", stage: "connected", value: 385000000, probability: 30, owner: "Andi Saputra", priority: "high", createdDaysAgo: 7 },
+   103→    { title: "Video AI onboarding karyawan", brand: unicam.id, company: 7, contact: 7, serviceCategory: "video", serviceName: "AI Video Production", leadSource: "linkedin", stage: "proposal_sent", value: 88000000, probability: 55, owner: "Dewi Lestari", createdDaysAgo: 22 },
+   104→    { title: "SEO & konten digital 6 bulan", brand: segia.id, company: 2, contact: 2, serviceCategory: "digital_marketing", serviceName: "SEO Optimization", leadSource: "website", stage: "verbal_agreement", value: 120000000, probability: 85, owner: "Andi Saputra", temperature: "hot", createdDaysAgo: 30, nextAction: "Tunggu PO resmi" },
+   105→    { title: "Animasi sosialisasi K3", brand: unimasi.id, company: 7, contact: 7, serviceCategory: "animation", serviceName: "Video Sosialisasi", leadSource: "whatsapp", stage: "contact_attempted", value: 65000000, probability: 20, owner: "Dewi Lestari", createdDaysAgo: 4 },
+   106→    { title: "Video profil internasional EN", brand: unicam.id, company: 8, contact: 8, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "linkedin", stage: "negotiation", value: 28000000, currency: "USD", probability: 65, owner: "Dewi Lestari", createdDaysAgo: 25 },
+   107→    { title: "Dokumentasi seminar nasional", brand: erfo.id, company: 1, contact: 10, serviceCategory: "video", serviceName: "Dokumentasi Foto/Video", leadSource: "email", stage: "new", value: 55000000, probability: 15, createdDaysAgo: 1 },
+   108→    { title: "Animasi laporan keuangan", brand: unimasi.id, company: 3, contact: 3, serviceCategory: "animation", serviceName: "Video Infografis", leadSource: "website", stage: "new", value: 72000000, probability: 15, createdDaysAgo: 2 },
+   109→    // Lost + alasan
+   110→    { title: "Shooting iklan ramadan", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Shooting Iklan", leadSource: "referral", stage: "lost", value: 320000000, probability: 0, owner: "Andi Saputra", createdDaysAgo: 70, lostReason: "Harga terlalu tinggi", lostNotes: "Klien memilih vendor dengan harga 35% lebih rendah, kualitas set resiko.", competitor: "Kroma Pictures", lastOfferValue: 320000000 },
+   111→    { title: "Redesign portal vendor", brand: segia.id, company: 7, contact: 7, serviceCategory: "website", serviceName: "Web Application", leadSource: "cold_outreach", stage: "lost", value: 190000000, probability: 0, owner: "Dewi Lestari", createdDaysAgo: 45, lostReason: "Ditunda internal klien", lostNotes: "Budget 2026 dialihkan ke ERP, reaktivasi awal 2026." },
+   112→    { title: "Animasi campaign antikorupsi", brand: unimasi.id, company: 9, contact: 9, serviceCategory: "animation", serviceName: "Video Marketing", leadSource: "instagram", stage: "lost", value: 95000000, probability: 0, owner: "Andi Saputra", createdDaysAgo: 50, lostReason: "Memilih kompetitor", competitor: "Studio Animasi Nusantara", lostNotes: "Rekomendasi re-offer untuk campaign 17 Agustus." },
+   113→    // Nurture
+   114→    { title: "Company profile keberlanjutan", brand: unicam.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "whatsapp", stage: "nurture", value: 155000000, probability: 25, owner: "Dewi Lestari", createdDaysAgo: 40, nurtureSegment: "budget_season", followUpDate: ahead(21) },
+   115→    { title: "Website marketplace UMKM", brand: segia.id, company: 6, contact: 6, serviceCategory: "website", serviceName: "Website E-Commerce", leadSource: "instagram", stage: "nurture", value: 135000000, probability: 25, owner: "Andi Saputra", createdDaysAgo: 35, nurtureSegment: "reoffer_30", followUpDate: ahead(9) },
+   116→    // Cross-sell dari won
+   117→    { title: "Animasi produk digital banking", brand: unimasi.id, company: 3, contact: 3, serviceCategory: "animation", serviceName: "Animasi Program/Produk", leadSource: "referral", stage: "estimation", value: 110000000, probability: 45, owner: "Dewi Lestari", createdDaysAgo: 14, brief: "Cross-sell dari Bank Berkah setelah sukses live streaming." },
+   118→  ];
+   119→
+   120→  const opps: Awaited<ReturnType<typeof db.opportunity.create>>[] = [];
+   121→  for (const s of oppSeeds) {
+   122→    const o = await db.opportunity.create({ data: {
+   123→      title: s.title,
+   124→      brandId: s.brand,
+   125→      companyId: s.company !== undefined ? companies[s.company].id : null,
+   126→      contactId: contacts[s.contact].id,
+   127→      serviceCategory: s.serviceCategory,
+   128→      serviceName: s.serviceName,
+   129→      leadSource: s.leadSource,
+   130→      brief: s.brief ?? "Brief awal dari komunikasi awal klien.",
+   131→      estimatedValue: s.value ?? null,
+   132→      currency: s.currency ?? "IDR",
+   133→      probability: s.probability ?? 20,
+   134→      ownerName: s.owner ?? null,
+   135→      stage: s.stage,
+   136→      temperature: s.temperature ?? (s.stage === "new" ? "warm" : "warm"),
+   137→      priority: s.priority ?? "medium",
+   138→      expectedCloseDate: s.expectedClose !== undefined ? ahead(s.expectedClose) : (["won", "lost", "nurture"].includes(s.stage) ? null : ahead(30 + Math.floor(Math.random() * 30))),
+   139→      lostReason: s.lostReason ?? null,
+   140→      lostNotes: s.lostNotes ?? null,
+   141→      competitor: s.competitor ?? null,
+   142→      lastOfferValue: s.lastOfferValue ?? null,
+   143→      nurtureSegment: s.nurtureSegment ?? null,
+   144→      followUpDate: s.followUpDate ?? (s.nurtureSegment ? ahead(14) : null),
+   145→      nextAction: s.nextAction ?? null,
+   146→      nextActionDate: s.nextAction ? ahead(2) : null,
+   147→      createdAt: ago(s.createdDaysAgo),
+   148→      updatedAt: ago(Math.max(0, s.createdDaysAgo - 5)),
+   149→    }});
+   150→    opps.push(o);
+   151→  }
+   152→
+   153→  // ============ INTERACTIONS ============
+   154→  async function inter(oppIdx: number, data: {
+   155→    channel: string; direction: string; content: string; subject?: string;
+   156→    sender?: string; recipient?: string; hoursAfterCreated?: number; respondedBy?: string;
+   157→  }) {
+   158→    const o = opps[oppIdx];
+   159→    const createdAt = new Date(o.createdAt.getTime() + (data.hoursAfterCreated ?? 0) * HOUR);
+   160→    return db.interaction.create({ data: {
+   161→      channel: data.channel, direction: data.direction, content: data.content,
+   162→      subject: data.subject ?? null, senderName: data.sender ?? null, recipientName: data.recipient ?? null,
+   163→      brandId: o.brandId, opportunityId: o.id, contactId: o.contactId, companyId: o.companyId,
+   164→      respondedBy: data.respondedBy ?? null, respondedAt: data.direction === "inbound" && data.respondedBy ? new Date(createdAt.getTime() + 2 * HOUR) : null,
+   165→      deliveryStatus: data.direction === "outbound" ? "read" : "delivered",
+   166→      createdAt,
+   167→    }});
+   168→  }
+   169→
+   170→  await inter(0, { channel: "referral", direction: "inbound", content: "Hendra dari Nusantara Digital minta info paket redesign website korporat, direferensikan oleh Bpk. Darmawan.", sender: "Hendra Wijaya", respondedBy: "Dewi Lestari" });
+   171→  await inter(0, { channel: "email", direction: "outbound", content: "Terima kasih Pak Hendra, kami kirimkan company deck Segia Tech dan jadwal discovery call minggu ini.", respondedBy: "Dewi Lestari" });
+   172→  await inter(0, { channel: "meeting", direction: "inbound", content: "Discovery call 45 menit: kebutuhan CMS, multibahasa, integrasi HRIS, timeline Q2.", sender: "Tim Segia" });
+   173→  await inter(1, { channel: "instagram", direction: "inbound", content: "DM Instagram: Kak, kami butuh video company profile untuk investor summit bulan depan. Bisa info paketnya?", sender: "hendra.wijaya", respondedBy: "Andi Saputra" });
+   174→  await inter(2, { channel: "website", direction: "inbound", content: "Form website: Permintaan proposal animasi pembelajaran literasi digital 12 episode, anggaran APBN 2025.", sender: "Ratna Sari", subject: "Request Proposal - Website Form", respondedBy: "Dewi Lestari" });
+   175→  await inter(2, { channel: "email", direction: "outbound", content: "Lampiran proposal animasi literasi digital dengan breakdown episode, timeline 4 bulan.", subject: "Proposal Animasi Pembelajaran - Unimasi" });
+   176→  await inter(3, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: Butuh tim dokumentasi pabrik 2 hari + drone untuk laporan keberlanjutan.", sender: "Bambang Sutrisno", respondedBy: "Andi Saputra" });
+   177→  await inter(4, { channel: "email", direction: "inbound", content: "Rundown economic forum 2 hari, est. 800 peserta. Mohon penawaran live streaming multi-kamera.", sender: "Lina Hartati", subject: "RFQ Live Streaming Economic Forum", respondedBy: "Dewi Lestari" });
+   178→  await inter(5, { channel: "instagram", direction: "inbound", content: "DM: Minat virtual tour 360 untuk 5 destinasi wisata unggulan.", sender: "kadek.wisata", respondedBy: "Andi Saputra" });
+   179→  await inter(8, { channel: "linkedin", direction: "inbound", content: "LinkedIn InMail:Butuh video onboarding AI presenter virtual untuk 300 karyawan baru/tahun.", sender: "Wei Ling Tan", respondedBy: "Dewi Lestari" });
+   180→
+   181→  // Lead inbox mentah (belum jadi opportunity)
+   182→  const rawLeads = [
+   183→    { channel: "whatsapp", sender: "+6281277345561", content: "Selamat siang, saya Dian dari PT Agro Makmur Lestari Medan. Kami butuh jasa foto produk dan video katalog untuk 40 produk kami. Estimasi budget? Mohon info ya.", contactIdx: null, brand: erfo.id },
+   184→    { channel: "instagram", sender: "@rani.creativehouse", content: "Halo kak! Saya Rani, content creator. Kami mau kolaborasi video AI untuk klien korporat kami. Boleh minta portfolio dan price list?", brand: unicam.id },
+   185→    { channel: "email", sender: "procurement@metroland.co.id", content: "Kepada Yth. Tim Unicam Studio,\n\nKami PT Metro Land Property mengundang Anda untuk tender pembuatan video profil proyek perumahan bersubsidi tahun 2026. Mohon kirim company profile dan legalitas sebelum akhir bulan.\n\nHormat kami,\nBagian Pengadaan", subject: "Invitation to Tender - Video Profil Proyek", brand: unicam.id },
+   186→    { channel: "website", sender: "farhan.hakim@gmail.com", content: "Halo, saya Farhan dari komunitas UMKM Bandung. Apakah bisa dibuatkan website toko online untuk 50 member UMKM dengan sistem payment gateway? Kira-kira estimasi biaya berapa?", brand: segia.id },
+   187→    { channel: "whatsapp", sender: "+6281399887766", content: "Permisi, saya sekretaris direksi RS. Kami rencananya mau buat animasi edukasi pasien tentang prosedur rawat inap. Mohon dikirimkan portofolio animasi rumah sakit.", brand: unimasi.id },
+   188→    // Duplikat dari identitas existing (Ratna Sari) — untuk demo identity matching
+   189→    { channel: "whatsapp", sender: "+62 812-8001-234", content: "Selamat pagi, ini Ratna lagi (Kementerian). Kami ada tambahan kebutuhan video sosialisasi program merit untuk 5 provinsi. Boleh dijadwalkan meeting pekan ini?", brand: unimasi.id },
+   190→  ];
+   191→  for (const l of rawLeads) {
+   192→    await db.interaction.create({ data: {
+   193→      channel: l.channel, direction: "inbound", content: l.content, senderName: l.sender,
+   194→      brandId: l.brand, deliveryStatus: "delivered", createdAt: ago(Math.random() * 3),
+   195→    }});
+   196→  }
+   197→
+   198→  // Interaksi tambahan utk opp aktif
+   199→  await inter(3, { channel: "meeting", direction: "inbound", content: "Meeting teknis di kantor Erfo: review shotlist, jadwal shooting, dan breakdown drone.", sender: "Tim Erfo + Bambang" });
+   200→  await inter(4, { channel: "email", direction: "outbound", content: "Proposal live streaming 3 kamera + LED wall + operator, berlaku 14 hari.", subject: "Proposal Live Streaming - Erfo Multimedia" });
+   201→  await inter(6, { channel: "whatsapp", direction: "inbound", content: "Kadek kirim referensi virtual tour dari hotel kompetitor, minta yang lebih interaktif dengan hotspot info.", sender: "Kadek Adnyana" });
+   202→  await inter(9, { channel: "email", direction: "inbound", content: "Wei Ling setuju scope, nego diskon 8% untuk kontrak 2 video per tahun.", sender: "Wei Ling Tan" });
+   203→  await inter(10, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: PO SEO bakal turun minggu ini, tolong siapkan onboarding.", sender: "Bambang Sutrisno", respondedBy: "Andi Saputra" });
+   204→
+   205→  // ============ TASKS ============
+   206→  const taskSeeds = [
+   207→    { title: "Follow-up 1: konfirmasi pesan diterima", type: "follow_up", priority: "high", assignee: "Dewi Lestari", due: ahead(1), opp: 13 },
+   208→    { title: "Kirim portfolio animasi RS", type: "follow_up", priority: "high", assignee: "Dewi Lestari", due: ahead(0), opp: 14 },
+   209→    { title: "Jadwalkan survey lokasi Denpasar", type: "meeting", priority: "medium", assignee: "Andi Saputra", due: ahead(3), opp: 5 },
+   210→    { title: "Siapkan estimasi biaya virtual tour", type: "internal", priority: "high", assignee: "Maya Kusuma", due: ahead(2), opp: 5 },
+   211→    { title: "Final revisi penawaran dokumentasi pabrik", type: "follow_up", priority: "urgent", assignee: "Andi Saputra", due: ahead(0), opp: 3 },
+   212→    { title: "Meeting negosiasi diskon Video AI", type: "meeting", priority: "high", assignee: "Dewi Lestari", due: ahead(1), opp: 9 },
+   213→    { title: "Tunggu & verifikasi PO SEO", type: "admin", priority: "medium", assignee: "Andi Saputra", due: ahead(5), opp: 10 },
+   214→    { title: "Re-offer animasi K3 setelah 7 hari", type: "follow_up", priority: "low", assignee: "Dewi Lestari", due: ahead(7), opp: 11 },
+   215→    { title: "Brief produksi: animasi literasi EP1-3", type: "internal", priority: "high", assignee: "Budi Hartono", due: ago(2), opp: 2, status: "done" },
+   216→    { title: "Kirim invoice termin 2 website Nusantara", type: "admin", priority: "high", assignee: "Maya Kusuma", due: ahead(1), opp: 0 },
+   217→    { title: "Follow-up ulang marketplace UMKM", type: "follow_up", priority: "medium", assignee: "Andi Saputra", due: ahead(9), opp: 19 },
+   218→    { title: "Reaktivasi campaign antikorupsi (17 Agustus)", type: "follow_up", priority: "low", assignee: "Andi Saputra", due: ahead(45), opp: 17 },
+   219→  ];
+   220→  for (const t of taskSeeds) {
+   221→    await db.task.create({ data: {
+   222→      title: t.title, type: t.type, priority: t.priority, assigneeName: t.assignee,
+   223→      dueDate: t.due, opportunityId: opps[t.opp].id, status: t.status ?? "open",
+   224→      completedAt: t.status === "done" ? ago(1) : null,
+   225→    }});
+   226→  }
+   227→
+   228→  // ============ NOTES ============
+   229→  await db.note.create({ data: { body: "Direktur: Nilai nego maksimal -5% dari offer terakhir. Prioritaskan closing sebelum akhir kuartal.", authorName: "Sari Wulandari", type: "director_feedback", opportunityId: opps[3].id } });
+   230→  await db.note.create({ data: { body: "Klien sensitif harga tapi volume besar. Tawarkan paket dokumentasi 3 hari + bonus 1 hari drone.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[3].id } });
+   231→  await db.note.create({ data: { body: "Kompetitor utama: vendor lokal Medan dengan harga murah. Kami unggul di kualitas equipment dan tim bersertifikasi.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[3].id } });
+   232→  await db.note.create({ data: { body: "Direktur: Approve diskon 8% untuk kontrak multi-video Global EdTech. Jaga margin minimal 30%.", authorName: "Sari Wulandari", type: "director_feedback", opportunityId: opps[12].id } });
+   233→  await db.note.create({ data: { body: "Pemerintahan: siapkan dokumen administrasi lengkap (NPWP, NIB, pengalaman kerja). Pembayaran via LS karena APBN.", authorName: "Dewi Lestari", type: "internal", opportunityId: opps[2].id } });
+   234→  await db.note.create({ data: { body: "Cross-sell potensi animasi edukasi pasien setelah virtual tour selesai.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[5].id } });
+   235→
+   236→  // ============ PROJECTS dari Won ============
+   237→  const wonDefs = [
+   238→    { opp: 0, code: "SGT-2025-001", name: "Redesign Website PT Nusantara Digital Raya", pm: "Budi Hartono", progress: 72, status: "in_progress", category: "website", start: ago(50), due: ahead(20) },
+   239→    { opp: 1, code: "UCS-2025-014", name: "Corporate Video Nusantara 2025", pm: "Budi Hartono", progress: 45, status: "in_progress", category: "video", start: ago(30), due: ahead(25) },
+   240→    { opp: 2, code: "UMS-2025-007", name: "Animasi Edukasi Literasi Digital 12 Episode", pm: "Budi Hartono", progress: 88, status: "review", category: "animation", start: ago(80), due: ahead(10) },
+   241→  ];
+   242→  for (const w of wonDefs) {
+   243→    const opp = opps[w.opp];
+   244→    const project = await db.project.create({ data: {
+   245→      code: w.code, name: w.name, brandId: opp.brandId, companyId: opp.companyId!,
+   246→      opportunityId: opp.id, serviceCategory: w.category, status: w.status, progress: w.progress,
+   247→      pmName: w.pm, startDate: w.start, dueDate: w.due,
+   248→      contractValue: opp.estimatedValue ?? 0, budgetInternal: Math.round((opp.estimatedValue ?? 0) * 0.62),
+   249→    }});
+   250→    const flow = (await import("@/lib/crm/constants")).workflowFor(w.category);
+   251→    const doneCount = Math.floor((w.progress / 100) * flow.length);
+   252→    for (let i = 0; i < flow.length; i++) {
+   253→      await db.milestone.create({ data: {
+   254→        projectId: project.id, name: flow[i], order: i,
+   255→        status: i < doneCount ? "done" : i === doneCount ? "in_progress" : "pending",
+   256→        dueDate: new Date(w.start.getTime() + ((i + 1) * (w.due.getTime() - w.start.getTime())) / flow.length),
+   257→      }});
+   258→    }
+   259→  }
+   260→
+   261→  // ============ INVOICES ============
+   262→  const invDefs = [
+   263→    { opp: 0, projIdx: 0, number: "SGT-2025-INV-001", desc: "Termin 1 (50%) - Redesign Website PT Nusantara Digital Raya", amount: 122500000, status: "paid", issue: ago(48), due: ago(33), pay: [{ amount: 122500000, method: "transfer", reference: "TRF-BCA-88120", at: ago(35) }] },
+   264→    { opp: 0, projIdx: 0, number: "SGT-2025-INV-002", desc: "Termin 2 (40%) - Milestone Development", amount: 98000000, status: "partial", issue: ago(10), due: ahead(5), pay: [{ amount: 49000000, method: "transfer", reference: "TRF-BCA-99341", at: ago(4) }] },
+   265→    { opp: 1, projIdx: 1, number: "UCS-2025-INV-014", desc: "DP 50% - Corporate Video Nusantara 2025", amount: 92500000, status: "paid", issue: ago(28), due: ago(14), pay: [{ amount: 92500000, method: "transfer", reference: "TRF-MANDIRI-4412", at: ago(20) }] },
+   266→    { opp: 2, projIdx: 2, number: "UMS-2025-INV-007", desc: "Termin 1 (30%) - Animasi Literasi Digital", amount: 96000000, status: "paid", issue: ago(75), due: ago(60), pay: [{ amount: 96000000, method: "transfer", reference: "LS-KEMDIKBUD-1207", at: ago(58) }] },
+   267→    { opp: 2, projIdx: 2, number: "UMS-2025-INV-008", desc: "Termin 2 (40%) - Episode 1-6 Approved", amount: 128000000, status: "overdue", issue: ago(25), due: ago(4) },
+   268→  ];
+   269→  for (const inv of invDefs) {
+   270→    const opp = opps[inv.opp];
+   271→    const taxAmount = Math.round(inv.amount * 0.11);
+   272→    const created = await db.invoice.create({ data: {
+   273→      number: inv.number, brandId: opp.brandId, companyId: opp.companyId!,
+   274→      opportunityId: opp.id, description: inv.desc, amount: inv.amount,
+   275→      taxRate: 11, taxAmount, total: inv.amount + taxAmount, currency: "IDR",
+   276→      status: inv.status, issueDate: inv.issue, dueDate: inv.due,
+   277→    }});
+   278→    for (const p of inv.pay ?? []) {
+   279→      await db.payment.create({ data: { invoiceId: created.id, amount: p.amount, method: p.method, reference: p.reference, paidAt: p.at } });
+   280→    }
+   281→  }
+   282→
+   283→  // ============ ESTIMATION, QUOTATION, APPROVAL (Fase 2) ============
+   284→  // Estimasi lengkap utk opp "Virtual tour destinasi wisata" (discovery) — draft
+   285→  const oppVt = opps[5];
+   286→  const estVtCost = { laborInternal: 28000000, vendorFreelance: 12000000, equipment: 18000000, transport: 6500000, accommodation: 9000000, talent: 0, locationFee: 4000000, softwareLicense: 3000000, hostingDomain: 1500000 };
+   287→  const vtTotalCost = Object.values(estVtCost).reduce((a, b) => a + b, 0);
+   288→  const vtRevenue = 210000000;
+   289→  const vtContingency = Math.round(vtTotalCost * 0.05);
+   290→  const vtMgmt = Math.round(vtTotalCost * 0.05);
+   291→  const vtMargin = vtRevenue - (vtTotalCost + vtContingency + vtMgmt);
+   292→  await db.estimation.create({ data: {
+   293→    opportunityId: oppVt.id, ...estVtCost,
+   294→    contingencyPct: 5, managementFeePct: 5, discountPct: 0, taxPct: 11, targetMarginPct: 30,
+   295→    totalCost: vtTotalCost, contingency: vtContingency, managementFee: vtMgmt,
+   296→    revenue: vtRevenue, discountAmount: 0, netRevenue: vtRevenue, taxAmount: Math.round(vtRevenue * 0.11),
+   297→    grandTotal: Math.round(vtRevenue * 1.11), margin: vtMargin,
+   298→    marginPct: Math.round((vtMargin / vtRevenue) * 1000) / 10,
+   299→    status: "draft", createdBy: "Andi Saputra",
+   300→    notes: "Survey 5 lokasi, kamera 360 + drone, hosting tour 1 tahun.",
+   301→  }});
+   302→
+   303→  // Estimasi utk opp "Live streaming economic forum" (proposal_sent) — PENDING APPROVAL (diskon 8%)
+   304→  const oppLs = opps[4];
+   305→  const lsCost = { laborInternal: 35000000, vendorFreelance: 22000000, equipment: 42000000, transport: 8000000, accommodation: 12000000, talent: 15000000, locationFee: 0, softwareLicense: 6000000, hostingDomain: 2000000 };
+   306→  const lsTotalCost = Object.values(lsCost).reduce((a, b) => a + b, 0);
+   307→  const lsRevenue = 145000000;
+   308→  const lsCont = Math.round(lsTotalCost * 0.05);
+   309→  const lsMgmt = Math.round(lsTotalCost * 0.05);
+   310→  const lsDiscount = Math.round(lsRevenue * 0.08);
+   311→  const lsNet = lsRevenue - lsDiscount;
+   312→  const lsMargin = lsNet - (lsTotalCost + lsCont + lsMgmt);
+   313→  const estLs = await db.estimation.create({ data: {
+   314→    opportunityId: oppLs.id, ...lsCost,
+   315→    contingencyPct: 5, managementFeePct: 5, discountPct: 8, taxPct: 11, targetMarginPct: 30,
+   316→    totalCost: lsTotalCost, contingency: lsCont, managementFee: lsMgmt,
+   317→    revenue: lsRevenue, discountAmount: lsDiscount, netRevenue: lsNet,
+   318→    taxAmount: Math.round(lsNet * 0.11), grandTotal: Math.round(lsNet * 1.11), margin: lsMargin,
+   319→    marginPct: Math.round((lsMargin / lsNet) * 1000) / 10,
+   320→    status: "pending_approval", createdBy: "Dewi Lestari",
+   321→    notes: "Diskon 8% untuk event 2 hari — butuh approval Direktur karena margin di bawah target.",
+   322→  }});
+   323→  await db.approvalRequest.create({ data: {
+   324→    entityType: "estimation", entityId: estLs.id,
+   325→    entityLabel: "Estimasi — Live streaming economic forum",
+   326→    opportunityId: oppLs.id, requestedBy: "Dewi Lestari",
+   327→    amount: Math.round(lsNet * 1.11), discountPct: 8,
+   328→    note: "Margin " + (Math.round((lsMargin / lsNet) * 1000) / 10) + "% (di bawah target 30%) karena kompetitif. Mohon persetujuan diskon 8%.",
+   329→  }});
+   330→
+   331→  // Quotation utk opp "Video AI onboarding karyawan" (proposal_sent) — sudah terkirim
+   332→  const oppAi = opps[9];
+   333→  const qItems = [
+   334→    { description: "Video AI presenter virtual (2 video, max 3 menit)", qty: 2, unitPrice: 38000000, subtotal: 76000000 },
+   335→    { description: "Script & storyboard", qty: 1, unitPrice: 8000000, subtotal: 8000000 },
+   336→    { description: "Voice over profesional EN", qty: 2, unitPrice: 2000000, subtotal: 4000000 },
+   337→  ];
+   338→  const qSubtotal = qItems.reduce((a, i) => a + i.subtotal, 0);
+   339→  const qTax = Math.round(qSubtotal * 0.11);
+   340→  await db.quotation.create({ data: {
+   341→    number: "UCS-2026-0001", brandId: oppAi.brandId, opportunityId: oppAi.id, companyId: oppAi.companyId!,
+   342→    items: JSON.stringify(qItems), subtotal: qSubtotal, discountPct: 0, discountAmount: 0,
+   343→    taxPct: 11, taxAmount: qTax, total: qSubtotal + qTax, currency: "IDR",
+   344→    status: "sent", validUntil: ahead(10), sentAt: ago(3),
+   345→    notes: "Harga berlaku 14 hari. Termasuk 2 kali revisi.",
+   346→  }});
+   347→
+   348→  // Quotation accepted utk opp "Dokumentasi pabrik + drone" (negotiation)
+   349→  const oppDok = opps[3];
+   350→  const dItems = [
+   351→    { description: "Dokumentasi foto & video pabrik 2 hari", qty: 1, unitPrice: 72000000, subtotal: 72000000 },
+   352→    { description: "Drone videography + lisensi udara", qty: 1, unitPrice: 18000000, subtotal: 18000000 },
+   353→    { description: "Editing final + color grading", qty: 1, unitPrice: 12000000, subtotal: 12000000 },
+   354→  ];
+   355→  const dSubtotal = dItems.reduce((a, i) => a + i.subtotal, 0);
+   356→  const dDiscount = Math.round(dSubtotal * 0.05);
+   357→  const dTax = Math.round((dSubtotal - dDiscount) * 0.11);
+   358→  await db.quotation.create({ data: {
+   359→    number: "EFM-2026-0001", brandId: oppDok.brandId, opportunityId: oppDok.id, companyId: oppDok.companyId!,
+   360→    items: JSON.stringify(dItems), subtotal: dSubtotal, discountPct: 5, discountAmount: dDiscount,
+   361→    taxPct: 11, taxAmount: dTax, total: dSubtotal - dDiscount + dTax, currency: "IDR",
+   362→    status: "accepted", validUntil: ahead(5), sentAt: ago(8), respondedAt: ago(1),
+   363→    notes: "Revisi penawaran final — disetujui client via WhatsApp.",
+   364→  }});
+   365→
+   366→  // ============ CHANGE REQUESTS (Fase 2 — Produksi) ============
+   367→  const projUms = await db.project.findUnique({ where: { code: "UMS-2025-007" } });
+   368→  const projUcs = await db.project.findUnique({ where: { code: "UCS-2025-014" } });
+   369→  if (projUms && projUcs) {
+   370→    // CR-2026-0001: sudah disetujui — kontrak naik + invoice tambahan draft terkait
+   371→    const cr1Tax = Math.round(12000000 * 0.11);
+   372→    const cr1Invoice = await db.invoice.create({ data: {
+   373→      number: "UMS-2025-INV-009", brandId: projUms.brandId, companyId: projUms.companyId,
+   374→      projectId: projUms.id, opportunityId: projUms.opportunityId,
+   375→      description: "Invoice tambahan — Change Request CR-2026-0001: Tambahan 3 episode subtitle bilingual",
+   376→      amount: 12000000, taxRate: 11, taxAmount: cr1Tax, total: 12000000 + cr1Tax,
+   377→      currency: "IDR", status: "sent", issueDate: ago(6), dueDate: ahead(8),
+   378→      notes: "Dibuat otomatis dari change request CR-2026-0001 (disetujui oleh Sari Wulandari)",
+   379→    }});
+   380→    const cr1 = await db.changeRequest.create({ data: {
+   381→      number: "CR-2026-0001", projectId: projUms.id,
+   382→      title: "Tambahan 3 episode subtitle bilingual",
+   383→      description: "Klien meminta 3 episode tambahan subtitle bahasa Inggris + Spain untuk distribusi internasional. Menambah beban translation & QC 3 hari kerja.",
+   384→      additionalCost: 12000000, additionalDays: 5,
+   385→      status: "approved", requestedBy: "Budi Hartono",
+   386→      decidedBy: "Sari Wulandari", decidedAt: ago(6),
+   387→      decisionNote: "Disetujui via email klien (Kemdikbud). Invoice tambahan diterbitkan.",
+   388→      invoiceId: cr1Invoice.id,
+   389→    }});
+   390→    await db.project.update({ where: { id: projUms.id }, data: { contractValue: { increment: 12000000 }, dueDate: projUms.dueDate ? new Date(projUms.dueDate.getTime() + 5 * DAY) : null } });
+   391→
+   392→    // CR-2026-0002: pending — menunggu persetujuan klien (tampil di Client Portal)
+   393→    await db.changeRequest.create({ data: {
+   394→      number: "CR-2026-0002", projectId: projUcs.id,
+   395→      title: "Tambahan versi bahasa Inggris video corporate",
+   396→      description: "PT Nusantara Digital Raya meminta narasi & grafis versi bahasa Inggris untuk pemirsa regional. Menambah voice over EN + 2 hari editing.",
+   397→      additionalCost: 18500000, additionalDays: 7,
+   398→      status: "pending", requestedBy: "Budi Hartono",
+   399→    }});
+   400→  }
+   401→
+   402→  // ============ FOLLOW-UP TEMPLATES ============
+   403→  await db.followUpTemplate.createMany({ data: [
+   404→    { name: "Follow-up 1 - Konfirmasi diterima", brandId: null, channel: "whatsapp", delayDays: 1, body: "Halo {{contact_name}}, saya {{marketing_name}} dari {{brand_name}}. Pesan Bapak/Ibu terkait {{service_name}} sudah kami terima. Apakah ada waktu 15 menit untuk konsultasi singkat minggu ini?", approved: true },
+   405→    { name: "Follow-up 2 - Tawarkan konsultasi", brandId: null, channel: "whatsapp", delayDays: 3, body: "Selamat siang {{contact_name}} dari {{company_name}}. Saya {{marketing_name}} dari {{brand_name}}. Apakah Bapak/Ibu berkenan diskusi kebutuhan {{service_name}} via {{meeting_link}}?", approved: true },
+   406→    { name: "Follow-up 3 - Kirim portfolio", brandId: null, channel: "email", delayDays: 7, body: "Yth. {{contact_name}},\n\nBersama email ini kami sampaikan portofolio {{brand_name}} yang relevan dengan kebutuhan {{service_name}} di {{company_name}}.\n\nHormat kami,\n{{marketing_name}}", approved: true },
+   407→    { name: "Follow-up 4 - Final follow-up", brandId: null, channel: "whatsapp", delayDays: 14, body: "Halo {{contact_name}}, ini follow-up terakhir saya terkait {{service_name}}. Jika saat ini belum sesuai prioritas, boleh saya hubungi kembali {{estimated_timeline}}?", approved: true },
+   408→    { name: "Nurture - Re-offer 30 hari", brandId: null, channel: "email", delayDays: 30, body: "Yth. {{contact_name}},\n\nSemoga {{company_name}} sehat selalu. Kami dari {{brand_name}} punya update paket {{service_name}} yang mungkin relevan untuk rencana {{estimated_timeline}}.\n\n{{marketing_name}}", approved: false },
+   409→  ]});
+   410→
+   411→  // ============ AUDIT LOGS ============
+   412→  const auditSeeds = [
+   413→    { actor: "Rian Pratama", role: "super_admin", action: "create", entity: "brand", label: "Unicam Studio", meta: "Konfigurasi brand baru dengan SLA 8 jam" },
+   414→    { actor: "Dewi Lestari", role: "marketing", action: "convert", entity: "opportunity", label: "Animasi edukasi literasi digital", meta: "Konversi dari lead website form" },
+   415→    { actor: "Sari Wulandari", role: "director", action: "stage_change", entity: "opportunity", label: "Dokumentasi pabrik + drone", field: "stage", oldValue: "estimation", newValue: "negotiation" },
+   416→    { actor: "Maya Kusuma", role: "finance", action: "create", entity: "invoice", label: "SGT-2025-INV-002", meta: "Termin 2 (40%) - Milestone Development" },
+   417→    { actor: "Andi Saputra", role: "marketing", action: "update", entity: "opportunity", label: "Video AI onboarding karyawan", field: "estimatedValue", oldValue: "95000000", newValue: "88000000" },
+   418→    { actor: "Andi Saputra", role: "marketing", action: "stage_change", entity: "opportunity", label: "Animasi campaign antikorupsi", field: "lostReason", oldValue: null, newValue: "Memilih kompetitor" },
+   419→    { actor: "Budi Hartono", role: "production", action: "create", entity: "change_request", label: "CR-2026-0002 — Tambahan versi bahasa Inggris video corporate", meta: "Change request +Rp 18.500.000, +7 hari — menunggu persetujuan klien" },
+   420→  ];
+   421→  for (let i = 0; i < auditSeeds.length; i++) {
+   422→    const a = auditSeeds[i];
+   423→    await db.auditLog.create({ data: {
+   424→      actorName: a.actor, actorRole: a.role, action: a.action, entity: a.entity,
+   425→      entityId: `seed-${i}`, entityLabel: a.label, field: a.field ?? null,
+   426→      oldValue: a.oldValue ?? null, newValue: a.newValue ?? null, metadata: a.meta ?? null,
+   427→      ip: "103.45.11." + (10 + i), userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+   428→      createdAt: ago(i + 1),
+   429→    }});
+   430→  }
+   431→
+   432→  const counts = {
+   433→    brands: 4, users: 7, companies: companies.length, contacts: contacts.length,
+   434→    opportunities: opps.length, projects: wonDefs.length, invoices: invDefs.length + 1,
+   435→    changeRequests: 2,
+   436→  };
+   437→  return { seeded: true, counts };
+   438→}
+   439→
