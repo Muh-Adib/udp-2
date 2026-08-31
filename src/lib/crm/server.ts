@@ -19,6 +19,35 @@ export async function readBody(req: NextRequest): Promise<Record<string, unknown
   }
 }
 
+// ===== Ronde 26 — helper validasi input (anti NaN/negatif → 500) =====
+
+/** Angka valid → number, selain itu null (jangan biarkan NaN masuk Prisma). */
+export function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Angka valid dibatasi min–max, selain itu fallback. */
+export function clampNum(v: unknown, min: number, max: number, fallback: number): number {
+  const n = numOrNull(v);
+  if (n === null) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** String → Date valid atau null (new Date("abc") → Invalid Date ≠ 500). */
+export function dateOrNull(v: unknown): Date | null {
+  if (v === null || v === undefined || v === "") return null;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Batas paging aman untuk findMany take. */
+export function pageLimit(v: string | null, def: number, max = 200): number {
+  const n = numOrNull(v) ?? def;
+  return Math.min(max, Math.max(1, Math.round(n)));
+}
+
 export async function logAudit(entry: {
   actorName: string;
   actorRole?: string | null;
@@ -53,98 +82,114 @@ export async function logAudit(entry: {
   });
 }
 
-/** Buat project + milestone + invoice DP ketika opportunity menjadi Won. */
+/** Buat project + milestone + invoice DP ketika opportunity menjadi Won.
+ * Ronde 26: seluruh penulisan dalam SATU transaksi — gagal di tengah tidak
+ * menyisakan project tanpa milestone atau invoice yatim. */
 export async function handleWonTransition(oppId: string) {
   const opp = await db.opportunity.findUnique({
     where: { id: oppId },
     include: { brand: true, contact: true },
   });
   if (!opp || !opp.companyId) return null;
+  // Narrowing TypeScript tidak menembus closure transaksi — tangkap ke konstanta lokal.
+  const companyId: string = opp.companyId;
 
-  const existing = await db.project.findUnique({ where: { opportunityId: opp.id } });
-  if (existing) return existing;
+  return db.$transaction(async (tx) => {
+    // Cek ulang DI DALAM transaksi (tutup race dua konversi Won bersamaan).
+    const existing = await tx.project.findUnique({ where: { opportunityId: opp.id } });
+    if (existing) return existing;
 
-  const year = new Date().getFullYear();
-  const count = await db.project.count();
-  const prefix = opp.brand.slug.slice(0, 3).toUpperCase().replace("_", "");
-  const code = `${prefix}-${year}-${String(count + 1).padStart(3, "0")}`;
+    const year = new Date().getFullYear();
+    const count = await tx.project.count();
+    const prefix = opp.brand.slug.slice(0, 3).toUpperCase().replace("_", "");
+    const code = `${prefix}-${year}-${String(count + 1).padStart(3, "0")}`;
 
-  const project = await db.project.create({
-    data: {
-      code,
-      name: opp.title,
-      brandId: opp.brandId,
-      companyId: opp.companyId,
-      opportunityId: opp.id,
-      serviceCategory: opp.serviceCategory,
-      status: "planning",
-      progress: 0,
-      pmName: "Budi Hartono",
-      startDate: new Date(),
-      dueDate: opp.targetDeadline ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
-      contractValue: opp.estimatedValue ?? 0,
-      budgetInternal: Math.round((opp.estimatedValue ?? 0) * 0.62),
-    },
-  });
-
-  const flow = workflowFor(opp.serviceCategory);
-  const span = project.dueDate ? project.dueDate.getTime() - (project.startDate?.getTime() ?? Date.now()) : 60 * 24 * 60 * 60 * 1000;
-  for (let i = 0; i < flow.length; i++) {
-    await db.milestone.create({
+    const project = await tx.project.create({
       data: {
+        code,
+        name: opp.title,
+        brandId: opp.brandId,
+        companyId,
+        opportunityId: opp.id,
+        serviceCategory: opp.serviceCategory,
+        status: "planning",
+        progress: 0,
+        pmName: "Budi Hartono",
+        startDate: new Date(),
+        dueDate: opp.targetDeadline ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        contractValue: opp.estimatedValue ?? 0,
+        budgetInternal: Math.round((opp.estimatedValue ?? 0) * 0.62),
+      },
+    });
+
+    const flow = workflowFor(opp.serviceCategory);
+    const span = project.dueDate ? project.dueDate.getTime() - (project.startDate?.getTime() ?? Date.now()) : 60 * 24 * 60 * 60 * 1000;
+    await tx.milestone.createMany({
+      data: flow.map((name, i) => ({
         projectId: project.id,
-        name: flow[i],
+        name,
         order: i,
         status: i === 0 ? "in_progress" : "pending",
         dueDate: new Date((project.startDate?.getTime() ?? Date.now()) + ((i + 1) * span) / flow.length),
-      },
+      })),
     });
-  }
 
-  // Draft invoice DP 50%
-  const invCount = await db.invoice.count();
-  const number = `${opp.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
-  const amount = Math.round((opp.estimatedValue ?? 0) * 0.5);
-  if (amount > 0) {
-    await db.invoice.create({
-      data: {
-        number,
-        brandId: opp.brandId,
-        companyId: opp.companyId,
-        projectId: project.id,
-        opportunityId: opp.id,
-        description: `DP 50% - ${opp.title}`,
-        amount,
-        taxRate: 11,
-        taxAmount: Math.round(amount * 0.11),
-        total: Math.round(amount * 1.11),
-        currency: opp.currency,
-        status: "draft",
-        dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      },
-    });
-  }
-  return project;
+    // Draft invoice DP 50%
+    const invCount = await tx.invoice.count();
+    const number = `${opp.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
+    const amount = Math.round((opp.estimatedValue ?? 0) * 0.5);
+    if (amount > 0) {
+      await tx.invoice.create({
+        data: {
+          number,
+          brandId: opp.brandId,
+          companyId,
+          projectId: project.id,
+          opportunityId: opp.id,
+          description: `DP 50% - ${opp.title}`,
+          amount,
+          taxRate: 11,
+          taxAmount: Math.round(amount * 0.11),
+          total: Math.round(amount * 1.11),
+          currency: opp.currency,
+          status: "draft",
+          dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+    return project;
+  });
 }
 
-/** Cari kandidat duplikat contact berdasar identitas ternormalisasi. */
-export async function findMatchCandidates(input: {
-  email?: string | null;
-  whatsapp?: string | null;
-  phone?: string | null;
-  fullName?: string | null;
-  companyName?: string | null;
-}) {
+/** Ronde 26 — muat pool kontak SEKALI per request; dipakai bersama banyak panggilan
+ * findMatchCandidates (mencegah N+1: 100 lead × query 500 kontak). */
+export type MatchContactRow = Awaited<ReturnType<typeof loadMatchContacts>>[number];
+export async function loadMatchContacts() {
+  return db.contact.findMany({
+    where: { deletedAt: null },
+    include: { company: true },
+    take: 500,
+  });
+}
+
+/** Cari kandidat duplikat contact berdasar identitas ternormalisasi.
+ * `pool` opsional: kumpulan kontak yang sudah dimuat (lihat loadMatchContacts). */
+export async function findMatchCandidates(
+  input: {
+    email?: string | null;
+    whatsapp?: string | null;
+    phone?: string | null;
+    fullName?: string | null;
+    companyName?: string | null;
+  },
+  pool?: MatchContactRow[],
+) {
   const email = normalizeEmail(input.email);
   const whatsapp = normalizePhone(input.whatsapp);
   const phone = normalizePhone(input.phone);
   const domain = extractDomain(input.email?.split("@")[1] ? input.email : input.companyName);
 
-  const contacts = await db.contact.findMany({
-    where: { deletedAt: null },
-    include: { company: true },
-    take: 500,
-  });
+  const contacts = pool ?? (await loadMatchContacts());
 
   const candidates = new Map<string, { score: number; reasons: string[] }>();
   for (const c of contacts) {

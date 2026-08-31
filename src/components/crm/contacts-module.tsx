@@ -2665,6 +2665,8 @@ function DuplicateScanDialog({
 
 export default function ContactsModule() {
   const user = useCrmStore((s) => s.user);
+  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
 
   const [tab, setTab] = useState<TabKey>("contacts");
   const [contactInput, setContactInput] = useState("");
@@ -2768,6 +2770,23 @@ export default function ContactsModule() {
     },
     [openContact]
   );
+
+  // Global search (ronde 26) — buka detail kontak / perusahaan hasil pencarian (⌘K).
+  // Menunggu data master termuat dulu (effect berjalan lagi saat data tiba); id tak ketemu
+  // → cukup pindah modul (clear) tanpa membuka sheet apa pun.
+  useEffect(() => {
+    if (!pendingFocus || pendingFocus.module !== "contacts") return;
+    if (loadingContacts || loadingCompanies) return; // tunggu list master termuat
+    const contact = allContacts.find((c) => c.id === pendingFocus.id);
+    if (contact) {
+      openContact(contact);
+      clearPendingFocus();
+      return;
+    }
+    const company = allCompanies.find((c) => c.id === pendingFocus.id);
+    if (company) openCompany(company);
+    clearPendingFocus();
+  }, [pendingFocus, allContacts, allCompanies, loadingContacts, loadingCompanies, openContact, openCompany, clearPendingFocus]);
 
   const handleContactSaved = useCallback(
     (updated: ContactRef) => {

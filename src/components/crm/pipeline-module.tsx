@@ -1037,6 +1037,8 @@ function ImportOpportunitiesDialog({
 
 export default function PipelineModule() {
   const { user, brands, activeBrandFilter, setActiveBrandFilter } = useCrmStore();
+  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
 
   const [opps, setOpps] = useState<OpportunityDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1141,6 +1143,35 @@ export default function PipelineModule() {
     setSelectedId(id);
     setDrawerOpen(true);
   }
+
+  // Global search (ronde 26) — buka detail opportunity hasil pencarian (⌘K).
+  // Loading ditunggu dulu (effect berjalan lagi saat daftar siap); id tak ditemukan di daftar
+  // → coba cocokkan sbg penawaran (buka opportunity induknya), selain itu tetap coba buka id
+  // tersebut (drawer memuat detail by id — meng-cover opportunity di luar filter aktif).
+  useEffect(() => {
+    if (!pendingFocus || pendingFocus.module !== "pipeline") return;
+    if (loading) return; // daftar belum termuat — tunggu data tiba
+    const opp = oppsRef.current.find((o) => o.id === pendingFocus.id);
+    if (opp) {
+      openDetail(opp.id);
+      clearPendingFocus();
+      return;
+    }
+    let cancelled = false;
+    api.quotations()
+      .then((res) => {
+        if (cancelled) return;
+        const quotation = res.quotations.find((x) => x.id === pendingFocus.id);
+        openDetail(quotation ? quotation.opportunityId : pendingFocus.id);
+        clearPendingFocus();
+      })
+      .catch(() => {
+        if (!cancelled) clearPendingFocus(); // gagal fetch → navigasi modul saja
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingFocus, loading, clearPendingFocus]);
 
   function toggleSort() {
     setSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));

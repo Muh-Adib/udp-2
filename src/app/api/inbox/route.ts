@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, findMatchCandidates, logAudit } from "@/lib/crm/server";
+import { ok, findMatchCandidates, loadMatchContacts, logAudit } from "@/lib/crm/server";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
 import { extractEmailFromText } from "@/lib/crm/utils";
 import { computeReplyChannels, inferBrandIdFromSource, senderTokens, threadKeyFor } from "@/lib/crm/thread";
@@ -131,6 +131,10 @@ export async function GET(req: NextRequest) {
     take: 100,
   });
 
+  // FIX r26 (N+1): pool kontak dimuat SEKALI untuk semua lead —
+  // sebelumnya tiap lead memicu query 500 kontak sendiri (≤100 query/request).
+  const contactPool = leads.length ? await loadMatchContacts() : [];
+
   // Untuk setiap lead, cari kandidat identitas + hitung SLA
   const enriched = await Promise.all(
     leads.map(async (lead) => {
@@ -140,7 +144,7 @@ export async function GET(req: NextRequest) {
         whatsapp: lead.senderName && /^\+?[\d][\d\s\-()+]{5,}$/.test(lead.senderName.trim()) ? lead.senderName : null,
         fullName: lead.contact?.fullName ?? null,
         companyName: lead.contact?.company?.name ?? null,
-      });
+      }, contactPool);
       const waitHours = Math.floor((Date.now() - lead.createdAt.getTime()) / (60 * 60 * 1000));
       return {
         ...lead,

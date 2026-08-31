@@ -188,6 +188,8 @@ type QuotationAction = "send" | "accept" | "reject" | "convert_invoice";
 export default function FinanceModule() {
   const user = useCrmStore((s) => s.user);
   const storeBrands = useCrmStore((s) => s.brands);
+  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
 
   const [activeTab, setActiveTab] = useState("invoice");
 
@@ -235,6 +237,17 @@ export default function FinanceModule() {
   }, [statusFilter, brandFilter]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Global search (ronde 26) — buka sheet detail invoice hasil pencarian (⌘K).
+  // Bila daftar belum termuat (null), pendingFocus dipertahankan — effect berjalan lagi
+  // saat data tiba; sudah termuat tapi id tak ketemu → cukup pindah modul (clear).
+  useEffect(() => {
+    if (!pendingFocus || pendingFocus.module !== "finance") return;
+    if (!invoices) return; // menunggu load pertama selesai
+    const target = invoices.find((i) => i.id === pendingFocus.id);
+    if (target) setDetail(target);
+    clearPendingFocus();
+  }, [pendingFocus, invoices, clearPendingFocus]);
 
   /** Quotation dimuat lazy saat tab Quotation pertama dibuka; refetch saat brand filter berubah. */
   const loadQuotations = useCallback(async () => {

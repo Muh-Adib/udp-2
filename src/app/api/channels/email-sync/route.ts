@@ -113,7 +113,10 @@ export async function POST(req: NextRequest) {
       for (const msg of messages) {
         scanned += 1;
         const messageId = msg.envelope?.messageId ?? `imap-${msg.uid}-${new Date(msg.internalDate ?? 0).getTime()}`;
-        const existing = await db.interaction.findFirst({ where: { externalId: messageId, channel: "email" }, select: { id: true } });
+        // FIX r26: dedupe harus pakai bentuk TERSIMPAN (slice 250) — Message-ID panjang
+        // dulu tidak pernah cocok → email re-sync duplikat setiap jalan.
+        const storedMessageId = messageId.slice(0, 250);
+        const existing = await db.interaction.findFirst({ where: { externalId: storedMessageId, channel: "email" }, select: { id: true } });
         if (existing) {
           skipped += 1;
           continue;
@@ -149,7 +152,7 @@ export async function POST(req: NextRequest) {
             channel: "email",
             direction: "inbound",
             brandId: config.brandId,
-            externalId: messageId.slice(0, 250),
+            externalId: storedMessageId,
             senderName: sender.slice(0, 250),
             recipientName: creds.smtpUser ?? config.accountRef,
             subject: msg.envelope?.subject ?? "(tanpa subjek)",

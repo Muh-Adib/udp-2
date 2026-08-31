@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, fail, logAudit, findMatchCandidates } from "@/lib/crm/server";
+import { ok, readBody, fail, logAudit, findMatchCandidates, loadMatchContacts } from "@/lib/crm/server";
 import { normalizeEmail, normalizePhone, isValidEmail } from "@/lib/crm/utils";
 
 /** Batas baris per impor — cukup untuk use case agency, mencegah abuse. */
@@ -96,6 +96,8 @@ export async function POST(req: NextRequest) {
     const seenPhone = new Map<string, number>();
     const results: PreviewResult[] = [];
 
+    // FIX r26 (N+1): muat pool kontak SEKALI untuk seluruh baris impor
+    const contactPool = await loadMatchContacts();
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const errors = validateRow(row);
@@ -113,10 +115,11 @@ export async function POST(req: NextRequest) {
         if (row.phone) seenPhone.set(row.phone, i);
       }
 
+      // FIX r26 (N+1): pool kontak dimuat sekali di luar loop (dulu hingga 200× query 500 kontak)
       const candidates = errors.length ? [] : await findMatchCandidates({
         email: row.email, whatsapp: row.whatsapp, phone: row.phone,
         fullName: row.fullName, companyName: row.company,
-      });
+      }, contactPool);
       const filtered = candidates.filter((c) => c.score >= 50).slice(0, 3);
 
       let action: RowAction = errors.length ? "invalid" : filtered.length > 0 ? "review" : "auto_create";

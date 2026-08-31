@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit, handleWonTransition } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, handleWonTransition, numOrNull, clampNum, dateOrNull } from "@/lib/crm/server";
 import { computeLeadScore } from "@/lib/crm/scoring";
 
 /** Hitung skor lead + sisipkan score/scoreReasons/_count ke row opportunity Prisma. */
@@ -93,10 +93,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!(field in body)) continue;
     let value = body[field];
     if (["expectedCloseDate", "targetDeadline", "nextActionDate", "followUpDate"].includes(field)) {
-      value = value ? new Date(String(value)) : null;
+      // FIX r26: tanggal invalid → null (jangan Invalid Date masuk Prisma → 500)
+      value = dateOrNull(value);
     }
-    if (["estimatedValue", "lastOfferValue", "probability"].includes(field)) {
-      value = value === null || value === "" ? null : Number(value);
+    if (["estimatedValue", "lastOfferValue"].includes(field)) {
+      const n = numOrNull(value);
+      // FIX r26: NaN dulu lolos → Prisma error 500; nilai tak-valid jadi null
+      value = value === null || value === "" ? null : n;
+    }
+    if (field === "probability") {
+      const n = numOrNull(value);
+      value = n === null ? null : clampNum(n, 0, 100, 20); // FIX r26: probabilitas 0–100
     }
     if (field === "reactivation") value = Boolean(value);
     const old = (current as unknown as Record<string, unknown>)[field];

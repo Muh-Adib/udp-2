@@ -29,10 +29,14 @@ interface CrmState {
   brands: Brand[];
   activeModule: ModuleKey;
   activeBrandFilter: string; // "all" | brandId
+  /** Target fokus lintas modul dari global search (ronde 26) — nonce utk guard idempoten; TIDAK dipersist. */
+  pendingFocus: { module: ModuleKey; id: string; nonce: number } | null;
   setUser: (u: SessionUser | null) => void;
   setBrands: (b: Brand[]) => void;
   setActiveModule: (m: ModuleKey) => void;
   setActiveBrandFilter: (b: string) => void;
+  setPendingFocus: (f: { module: ModuleKey; id: string }) => void;
+  clearPendingFocus: () => void;
 }
 
 export const useCrmStore = create<CrmState>()(
@@ -42,10 +46,13 @@ export const useCrmStore = create<CrmState>()(
       brands: [],
       activeModule: "dashboard",
       activeBrandFilter: "all",
+      pendingFocus: null,
       setUser: (user) => set({ user, activeModule: user ? "dashboard" : "dashboard" }),
       setBrands: (brands) => set({ brands }),
       setActiveModule: (activeModule) => set({ activeModule }),
       setActiveBrandFilter: (activeBrandFilter) => set({ activeBrandFilter }),
+      setPendingFocus: (f) => set({ pendingFocus: { ...f, nonce: Date.now() } }),
+      clearPendingFocus: () => set({ pendingFocus: null }),
     }),
     { name: "grupcrm-session", partialize: (s) => ({ user: s.user }) }
   )

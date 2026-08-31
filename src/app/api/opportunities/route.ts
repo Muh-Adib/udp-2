@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { computeLeadScore } from "@/lib/crm/scoring";
-import { normalizeEmail, normalizePhone } from "@/lib/crm/utils";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -123,7 +122,3 @@ export async function POST(req: NextRequest) {
   return ok({ opportunity: opp }, 201);
 }
 
-/** Utility dipakai route lain */
-export function normalizeIdentity(email?: string | null, phone?: string | null) {
-  return { email: normalizeEmail(email), phone: normalizePhone(phone) };
-}

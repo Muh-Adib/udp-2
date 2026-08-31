@@ -1,9 +1,9 @@
 import { db } from "@/lib/db";
-import { ok } from "@/lib/crm/server";
+import { ok, pageLimit } from "@/lib/crm/server";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const limit = Number(searchParams.get("limit") ?? 100);
+  const limit = pageLimit(searchParams.get("limit"), 100, 300); // FIX r26: limit=abc dulu → take NaN → 500
   const entity = searchParams.get("entity");
   const action = searchParams.get("action");
 
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
       ...(action && action !== "all" ? { action } : {}),
     },
     orderBy: { createdAt: "desc" },
-    take: Math.min(limit, 300),
+    take: limit,
   });
   return ok({ logs });
 }

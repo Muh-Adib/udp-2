@@ -60,13 +60,18 @@ export async function POST(req: NextRequest) {
   }
 
   // 5) File (bila diisi) maksimal 1.2 MB
+  // FIX r26: ukuran SELALU dihitung dari payload base64 nyata — body.sizeBytes dari
+  // klien tidak dipercaya lagi (dulu sizeBytes:100 + fileData 10MB lolos).
   const fileData = body.fileData !== undefined && body.fileData !== null ? String(body.fileData).trim() : "";
   let sizeBytes: number | null = null;
   if (fileData) {
-    const raw = Number(body.sizeBytes);
-    sizeBytes = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : Math.floor((fileData.length * 3) / 4);
+    const base64 = fileData.includes(",") ? fileData.slice(fileData.indexOf(",") + 1) : fileData;
+    sizeBytes = Math.floor((base64.length * 3) / 4);
     if (sizeBytes > MAX_FILE_BYTES) {
       return fail("Ukuran file melebihi batas 1.2 MB — gunakan tautan (mis. Google Drive) untuk file besar", 400);
+    }
+    if (fileData.startsWith("data:") && !/^data:[\w.+-]+\/[\w.+-]+;base64,/.test(fileData)) {
+      return fail("Format file (data URL) tidak valid", 400);
     }
   }
 

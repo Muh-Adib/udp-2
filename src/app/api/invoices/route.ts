@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, logAudit } from "@/lib/crm/server";
+import { ok, readBody, logAudit, numOrNull, pageLimit } from "@/lib/crm/server";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     },
     include: { brand: true, company: true, payments: true, project: true },
     orderBy: { issueDate: "desc" },
+    take: pageLimit(sp.get("limit"), 300, 500), // FIX r26: batasi payload (sebelumnya tanpa batas)
   });
 
   // Aging receivable
@@ -42,19 +43,31 @@ export async function POST(req: NextRequest) {
     const invoiceId = String(body.invoiceId ?? "");
     const invoice = await db.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
     if (!invoice) return ok({ error: "Invoice tidak ditemukan" }, 404);
-    const amount = Number(body.amount ?? 0);
-    await db.payment.create({
-      data: {
-        invoiceId, amount,
-        method: body.method ? String(body.method) : "transfer",
-        reference: body.reference ? String(body.reference) : null,
-      },
+    // FIX r26: amount wajib angka finite > 0 (NaN/negatif dulu lolos → status korup)
+    const amount = numOrNull(body.amount);
+    if (amount === null || amount <= 0) {
+      return ok({ error: "Nominal pembayaran harus angka lebih besar dari 0" }, 400);
+    }
+    if (invoice.status === "cancelled" || invoice.status === "paid") {
+      return ok({ error: `Invoice berstatus ${invoice.status} tidak bisa menerima pembayaran` }, 400);
+    }
+    // FIX r26: pembayaran + update status dalam SATU transaksi —
+    // total terbayar dihitung ulang dari DB di dalam tx (bukan memori basi).
+    const updated = await db.$transaction(async (tx) => {
+      await tx.payment.create({
+        data: {
+          invoiceId, amount,
+          method: body.method ? String(body.method) : "transfer",
+          reference: body.reference ? String(body.reference) : null,
+        },
+      });
+      const agg = await tx.payment.aggregate({ where: { invoiceId }, _sum: { amount: true } });
+      const paid = agg._sum.amount ?? 0;
+      let status = invoice.status;
+      if (paid >= invoice.total) status = "paid";
+      else if (paid > 0) status = "partial";
+      return tx.invoice.update({ where: { id: invoiceId }, data: { status }, include: { payments: true } });
     });
-    const paid = invoice.payments.reduce((s, p) => s + p.amount, 0) + amount;
-    let status = invoice.status;
-    if (paid >= invoice.total) status = "paid";
-    else if (paid > 0) status = "partial";
-    const updated = await db.invoice.update({ where: { id: invoiceId }, data: { status }, include: { payments: true } });
     await logAudit({
       actorName: String(body.actorName ?? "System"), actorRole: String(body.actorRole ?? "finance"),
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,

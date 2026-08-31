@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, clampNum } from "@/lib/crm/server";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -115,8 +115,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (items.length === 0) return fail("Minimal satu item quotation wajib diisi");
     data.items = JSON.stringify(items);
     const subtotal = items.reduce((s: number, it: { subtotal: number }) => s + it.subtotal, 0);
-    const discountPct = Number(body.discountPct ?? quotation.discountPct);
-    const taxPct = Number(body.taxPct ?? quotation.taxPct);
+    // FIX r26: persen dipatok 0–100 (dulu discountPct:1000 → total invoice negatif)
+    const discountPct = clampNum(body.discountPct ?? quotation.discountPct, 0, 100, quotation.discountPct);
+    const taxPct = clampNum(body.taxPct ?? quotation.taxPct, 0, 100, quotation.taxPct);
     const discountAmount = Math.round((subtotal * discountPct) / 100);
     const afterDiscount = subtotal - discountAmount;
     const taxAmount = Math.round((afterDiscount * taxPct) / 100);

@@ -1052,6 +1052,8 @@ type RescheduleTarget =
 export default function ProjectsModule() {
   const storeBrands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
+  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
 
   const [projects, setProjects] = useState<ProjectDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1220,6 +1222,17 @@ export default function ProjectsModule() {
     setDfOpen(false);
     resetDf();
   }
+
+  // Global search (ronde 26) — buka sheet detail project hasil pencarian (⌘K).
+  // Bila daftar belum termuat (null), pendingFocus dipertahankan — effect berjalan lagi
+  // saat data tiba; sudah termuat tapi id tak ketemu → cukup pindah modul (clear).
+  useEffect(() => {
+    if (!pendingFocus || pendingFocus.module !== "projects") return;
+    if (!projects) return; // menunggu load pertama selesai
+    const target = projects.find((p) => p.id === pendingFocus.id);
+    if (target) openDetail(target);
+    clearPendingFocus();
+  }, [pendingFocus, projects, clearPendingFocus]);
 
   function resetDf() {
     setDfName("");

@@ -49,9 +49,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     fileName = String(body.fileName ?? "").trim();
     fileData = body.fileData ? String(body.fileData) : "";
     if (!fileName || !fileData) return fail("File wajib dilampirkan (nama + isi file)", 400);
-    const size = Number(body.sizeBytes);
-    sizeBytes = Number.isFinite(size) && size > 0 ? Math.round(size) : null;
-    if (sizeBytes !== null && sizeBytes > 1_200_000) return fail("Ukuran file maksimal 1.2MB", 400);
+    // FIX r26: ukuran DIHITUNG dari payload nyata (base64), bukan percaya body.sizeBytes
+    // yang bisa dipalsukan klien — dulu sizeBytes kecil + fileData 10MB lolos filter.
+    const base64 = fileData.includes(",") ? fileData.slice(fileData.indexOf(",") + 1) : fileData;
+    sizeBytes = Math.floor((base64.length * 3) / 4);
+    if (sizeBytes > 1_200_000) return fail("Ukuran file maksimal 1.2MB", 400);
+    // Validasi data URL: wajib prefix data:<mime>;base64 bila dikirim sbg data URL
+    if (fileData.startsWith("data:") && !/^data:[\w.+-]+\/[\w.+-]+;base64,/.test(fileData)) {
+      return fail("Format file (data URL) tidak valid", 400);
+    }
     mimeType = body.mimeType ? String(body.mimeType) : null;
   }
 

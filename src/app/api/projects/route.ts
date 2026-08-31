@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { fail, logAudit, ok, readBody, clampNum } from "@/lib/crm/server";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -99,7 +99,8 @@ export async function PATCH(req: NextRequest) {
   const existing = await db.project.findUnique({ where: { id }, select: { id: true, code: true, name: true, dueDate: true } });
   if (!existing) return fail("Project tidak ditemukan", 404);
   const data: Record<string, unknown> = {};
-  if ("progress" in body) data.progress = Number(body.progress);
+  // FIX r26: progress dipastikan angka 0–100 (dulu NaN/negatif/1000 lolos ke Prisma)
+  if ("progress" in body) data.progress = clampNum(body.progress, 0, 100, 0);
   if ("status" in body) data.status = String(body.status);
   if ("pmName" in body) data.pmName = body.pmName ? String(body.pmName) : null;
   if ("budgetInternal" in body) data.budgetInternal = Number(body.budgetInternal);

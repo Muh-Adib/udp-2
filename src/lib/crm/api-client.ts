@@ -6,6 +6,16 @@ import type {
   InboxLeadDTO,
 } from "@/lib/crm/types";
 
+/** Satu entri hasil global search (ronde 26) — module = modul tujuan navigasi. */
+export type SearchItemDTO = {
+  id: string;
+  module: "contacts" | "pipeline" | "projects" | "finance" | "inbox";
+  label: string;
+  title: string;
+  subtitle: string;
+  badge?: string;
+};
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
@@ -283,6 +293,12 @@ export const api = {
       uptimeSec: number;
       rssMb: number;
     }>("/api/health"),
+
+  // Global search antar modul (ronde 26 — ⌘K command palette); signal utk batal saat query berubah
+  search: (q: string, signal?: AbortSignal) =>
+    request<{ q: string; total: number; items: SearchItemDTO[] }>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=5`, { signal }
+    ),
 };
 
 export type { DashboardData };
