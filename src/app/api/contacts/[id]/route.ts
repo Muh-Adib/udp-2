@@ -44,6 +44,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const last = (data.lastName as string) ?? current.lastName ?? "";
     data.fullName = `${first} ${last}`.trim();
   }
+  // Ronde 29 — edit identitas lead: perusahaan via nama (find-or-create, pola sama dgn inbox/convert).
+  if ("companyName" in body) {
+    const companyName = String(body.companyName ?? "").trim();
+    const oldCompanyId = current.companyId;
+    if (!companyName) {
+      if (oldCompanyId) { data.companyId = null; changes.push({ field: "company", oldValue: oldCompanyId, newValue: null }); }
+    } else {
+      let company = await db.company.findFirst({ where: { name: companyName, deletedAt: null } });
+      if (!company) {
+        company = await db.company.create({ data: { name: companyName } });
+      }
+      if (company.id !== oldCompanyId) {
+        data.companyId = company.id;
+        changes.push({ field: "company", oldValue: oldCompanyId, newValue: company.id });
+      }
+    }
+  }
 
   const contact = await db.contact.update({ where: { id }, data, include: { company: true } });
 
