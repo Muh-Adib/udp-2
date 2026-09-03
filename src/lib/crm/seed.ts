@@ -9,7 +9,7 @@ export async function seedDatabase(force = false) {
   const existing = await db.brand.count();
   if (existing > 0 && !force) return { seeded: false, reason: "data already exists" };
 
-  // Clean (order matters)
+  // Clean (order matters) — tabel tanpa cascade FK harus dihapus sebelum opportunity/brand.
   await db.changeRequest.deleteMany();
   await db.approvalRequest.deleteMany();
   await db.notificationState.deleteMany();
@@ -19,10 +19,19 @@ export async function seedDatabase(force = false) {
   await db.payment.deleteMany();
   await db.invoice.deleteMany();
   await db.milestone.deleteMany();
+  await db.projectDeliverable.deleteMany();
   await db.project.deleteMany();
   await db.note.deleteMany();
   await db.task.deleteMany();
   await db.interaction.deleteMany();
+  await db.clientDocument.deleteMany();
+  await db.clientPortalToken.deleteMany();
+  await db.userPreference.deleteMany();
+  await db.channelConfig.deleteMany();
+  await db.clientBrief.deleteMany();
+  await db.workflowStage.deleteMany();
+  await db.service.deleteMany();
+  await db.serviceCategory.deleteMany();
   await db.opportunity.deleteMany();
   await db.contact.deleteMany();
   await db.company.deleteMany();
@@ -30,13 +39,279 @@ export async function seedDatabase(force = false) {
   await db.user.deleteMany();
   await db.brand.deleteMany();
 
-  // ============ BRANDS ============
+  // ============ BRANDS — data asli dari situs resmi masing-masing ============
+  // Logo asli diunduh dari situs resmi (tanpa generate) → public/brands/.
   const [unimasi, segia, erfo, unicam] = await Promise.all([
-    db.brand.create({ data: { name: "Unimasi", slug: "unimasi", color: "#ea580c", logoEmoji: "🎬", description: "Animasi company profile, pembelajaran, infografis, program/produk, sosialisasi & marketing.", website: "https://www.unimasi.com", invoicePrefix: "UMS", slaHours: 4 } }),
-    db.brand.create({ data: { name: "Segia Tech", slug: "segia_tech", color: "#059669", logoEmoji: "💻", description: "Website, SEO, UI/UX, dan produksi konten digital.", website: "https://www.segiatech.com", invoicePrefix: "SGT", slaHours: 2 } }),
-    db.brand.create({ data: { name: "Erfo Multimedia", slug: "erfo_multimedia", color: "#e11d48", logoEmoji: "📹", description: "Foto/video dokumentasi, shooting, live streaming, drone, video AI & video 360.", website: "https://www.erfomultimedia.com", invoicePrefix: "EFM", slaHours: 6 } }),
-    db.brand.create({ data: { name: "Unicam Studio", slug: "unicam_studio", color: "#7c3aed", logoEmoji: "✨", description: "Corporate video, animasi 2D/3D, AI video, AR/VR, virtual tour, immersive experience & projection mapping.", website: "https://www.unicamstudio.com", invoicePrefix: "UCS", slaHours: 8 } }),
+    db.brand.create({ data: {
+      name: "Unimasi", slug: "unimasi", color: "#eab308", logoEmoji: "🎬",
+      description: "Penyedia jasa video animasi profesional: company profile, pembelajaran, marketing, dan infografis.",
+      website: "https://www.unimasi.com",
+      logoUrl: "/brands/logo-unimasi.png",
+      tagline: "Jagonya Buat Animasi",
+      address: "Jl. Raya Tajem, Denokan, Maguwoharjo, Kec. Depok, Kab. Sleman, Daerah Istimewa Yogyakarta 55281",
+      city: "Sleman, DIY",
+      phone: "+6281215082608",
+      whatsappNumber: "+6281215082608",
+      instagramHandle: "@unimasi_",
+      threadsHandle: "@unimasi_",
+      email: "info@unimasi.com",
+      invoicePrefix: "UMS", slaHours: 4,
+    } }),
+    db.brand.create({ data: {
+      name: "Segia Tech", slug: "segia_tech", color: "#059669", logoEmoji: "💻",
+      description: "Jasa pembuatan website dengan desain responsif, SEO teroptimasi, dan solusi UI/UX yang intuitif.",
+      website: "https://www.segiatech.com",
+      logoUrl: "/brands/logo-segia.png",
+      tagline: "Jasa Pembuatan Website & AI Apps",
+      city: "Jakarta",
+      phone: "+6281225929178",
+      whatsappNumber: "+6281225929178",
+      instagramHandle: "@segiatech",
+      threadsHandle: "@segiatech",
+      email: "marketing@udp.co.id",
+      invoicePrefix: "SGT", slaHours: 2,
+    } }),
+    db.brand.create({ data: {
+      name: "Erfo Multimedia", slug: "erfo_multimedia", color: "#e11d48", logoEmoji: "📹",
+      description: "Jasa video profesional: dokumentasi, live streaming, video shooting, serta video 360 di Yogyakarta dan sekitarnya.",
+      website: "https://www.erfomultimedia.com",
+      logoUrl: "/brands/logo-erfo.png",
+      tagline: "Jasa Video Dokumentasi, Streaming & 360",
+      city: "Yogyakarta",
+      phone: "+6281215082607",
+      whatsappNumber: "+6281215082607",
+      instagramHandle: "@erfomultimedia",
+      threadsHandle: "@erfomultimedia",
+      email: "info@erfomultimedia.com",
+      invoicePrefix: "EFM", slaHours: 6,
+    } }),
+    db.brand.create({ data: {
+      name: "Unicam Studio", slug: "unicam_studio", color: "#be123c", logoEmoji: "✨",
+      description: "Production house: corporate video, 3D animation, AI video, virtual tour & immersive experience.",
+      website: "https://www.unicamstudio.com",
+      logoUrl: "/brands/logo-unicam.png",
+      tagline: "Creative Visual & Technology",
+      city: "Yogyakarta · Jakarta",
+      phone: "+6281336359525",
+      whatsappNumber: "+6281336359525",
+      instagramHandle: "@unicam.studio",
+      threadsHandle: "@unicam.studio",
+      email: "marketing@udp.co.id",
+      invoicePrefix: "UCS", slaHours: 8,
+    } }),
   ]);
+
+  // ============ KATALOG LAYANAN & WORKFLOW PER BRAND (Ronde 29-b) ============
+  // Tiap brand punya kategori & layanan core berbeda + workflow produksi custom.
+  const seedCatalog = async (
+    brandId: string,
+    categories: Array<{ name: string; description?: string; services: Array<{
+      name: string; unit?: string; basePrice?: number;
+      workflow?: Array<{ phase: string; name: string; isMilestone?: boolean }>;
+    }> }>
+  ) => {
+    for (const [ci, cat] of categories.entries()) {
+      const created = await db.serviceCategory.create({
+        data: { brandId, name: cat.name, description: cat.description ?? null, order: ci },
+      });
+      for (const [si, svc] of cat.services.entries()) {
+        const createdSvc = await db.service.create({
+          data: {
+            brandId, categoryId: created.id, name: svc.name,
+            unit: svc.unit ?? null, basePrice: svc.basePrice ?? null, order: si,
+          },
+        });
+        if (svc.workflow?.length) {
+          await db.workflowStage.createMany({
+            data: svc.workflow.map((w, wi) => ({
+              serviceId: createdSvc.id, phase: w.phase, name: w.name,
+              isMilestone: w.isMilestone === true, order: wi,
+            })),
+          });
+        }
+      }
+    }
+  };
+
+  // Unimasi — contoh workflow user: Pra Production(Creative Concept & Story Board) → Production(milestone) → Post Production(milestone)
+  await seedCatalog(unimasi.id, [
+    {
+      name: "Animasi 3D", description: "Animasi 3D untuk pembelajaran, produk, dan promosi.",
+      services: [
+        { name: "Pembuatan Video Pembelajaran Anak Anak 3D", unit: "episode", basePrice: 35000000, workflow: [
+          { phase: "Pra Production", name: "Creative Concept & Story Board" },
+          { phase: "Production", name: "Modeling, Rigging & Animasi 3D", isMilestone: true },
+          { phase: "Post Production", name: "Rendering, Compositing & Final Delivery", isMilestone: true },
+        ] },
+        { name: "Animasi 3D Company Profile", unit: "video", basePrice: 45000000, workflow: [
+          { phase: "Pra Production", name: "Konsep & Naskah" },
+          { phase: "Production", name: "Produksi Animasi 3D", isMilestone: true },
+          { phase: "Post Production", name: "Editing & Final Render", isMilestone: true },
+        ] },
+      ],
+    },
+    {
+      name: "Ilustrasi 3D",
+      services: [
+        { name: "Ilustrasi 3D Produk", unit: "asset", basePrice: 12000000, workflow: [
+          { phase: "Pra Production", name: "Referensi & Sketch" },
+          { phase: "Production", name: "Modeling & Material", isMilestone: true },
+          { phase: "Post Production", name: "Lighting & Render Final", isMilestone: true },
+        ] },
+      ],
+    },
+    {
+      name: "Animasi 2D",
+      services: [
+        { name: "Animasi Video Sosialisasi", unit: "video", basePrice: 25000000, workflow: [
+          { phase: "Pra Production", name: "Naskah & Storyboard" },
+          { phase: "Production", name: "Produksi Animasi 2D", isMilestone: true },
+          { phase: "Post Production", name: "Sound Design & Delivery", isMilestone: true },
+        ] },
+        { name: "Animasi Video Infografis", unit: "video", basePrice: 20000000 },
+        { name: "Animasi Video Marketing/Iklan", unit: "video", basePrice: 30000000 },
+      ],
+    },
+  ]);
+
+  await seedCatalog(segia.id, [
+    {
+      name: "Website", description: "Pembuatan website responsif & SEO teroptimasi.",
+      services: [
+        { name: "Website Company Profile", unit: "proyek", basePrice: 8500000, workflow: [
+          { phase: "Discovery", name: "Analisis Kebutuhan & Sitemap" },
+          { phase: "Design", name: "UI/UX Design", isMilestone: true },
+          { phase: "Development", name: "Development & QA", isMilestone: true },
+          { phase: "Launch", name: "Deploy & SEO Setup", isMilestone: true },
+        ] },
+        { name: "Web Application", unit: "proyek", basePrice: 35000000 },
+        { name: "Website E-Commerce", unit: "proyek", basePrice: 28000000 },
+      ],
+    },
+    {
+      name: "AI Apps", description: "Pengembangan aplikasi berbasis AI.",
+      services: [
+        { name: "AI Apps Production", unit: "proyek", basePrice: 60000000, workflow: [
+          { phase: "Discovery", name: "Use Case & Data Audit" },
+          { phase: "Build", name: "Prototipe AI", isMilestone: true },
+          { phase: "Build", name: "Integrasi & Testing", isMilestone: true },
+          { phase: "Launch", name: "Go Live & Monitoring", isMilestone: true },
+        ] },
+      ],
+    },
+    {
+      name: "Digital Marketing",
+      services: [
+        { name: "SEO Optimization", unit: "bulan", basePrice: 5000000 },
+      ],
+    },
+  ]);
+
+  await seedCatalog(erfo.id, [
+    {
+      name: "Dokumentasi", description: "Foto & video dokumentasi profesional.",
+      services: [
+        { name: "Dokumentasi Foto/Video", unit: "hari", basePrice: 15000000, workflow: [
+          { phase: "Pra Produksi", name: "Rundown & Scaling Ekspisi" },
+          { phase: "Produksi", name: "Shooting di Lokasi", isMilestone: true },
+          { phase: "Pasca Produksi", name: "Editing & Color Grading", isMilestone: true },
+        ] },
+        { name: "Shooting Iklan", unit: "proyek", basePrice: 80000000 },
+      ],
+    },
+    {
+      name: "Live Streaming",
+      services: [
+        { name: "Live Streaming Event", unit: "hari", basePrice: 25000000, workflow: [
+          { phase: "Pra Produksi", name: "Survey Lokasi & Setup Plan" },
+          { phase: "Produksi", name: "Live Run Multi-Kamera", isMilestone: true },
+          { phase: "Pasca Produksi", name: "Highlight & Arsip", isMilestone: true },
+        ] },
+      ],
+    },
+    {
+      name: "Video 360",
+      services: [
+        { name: "Video 360 / Virtual Tour 360", unit: "lokasi", basePrice: 18000000, workflow: [
+          { phase: "Pra Produksi", name: "Mapping Titik Panorama" },
+          { phase: "Produksi", name: "Capture 360", isMilestone: true },
+          { phase: "Pasca Produksi", name: "Stitching & Publikasi Tour", isMilestone: true },
+        ] },
+      ],
+    },
+  ]);
+
+  await seedCatalog(unicam.id, [
+    {
+      name: "Video Production",
+      services: [
+        { name: "Corporate Video", unit: "video", basePrice: 65000000, workflow: [
+          { phase: "Pre Production", name: "Concept & Script" },
+          { phase: "Production", name: "Shooting", isMilestone: true },
+          { phase: "Post Production", name: "Editing & Motion Graphics", isMilestone: true },
+        ] },
+        { name: "3D Advertising Video", unit: "video", basePrice: 95000000 },
+      ],
+    },
+    {
+      name: "AI Video",
+      services: [
+        { name: "AI Video Production", unit: "video", basePrice: 38000000, workflow: [
+          { phase: "Pre Production", name: "Prompt Design & Asset Prep" },
+          { phase: "Production", name: "AI Generation & Curation", isMilestone: true },
+          { phase: "Post Production", name: "Final Assembly", isMilestone: true },
+        ] },
+        { name: "AI Short Film Production", unit: "film", basePrice: 120000000 },
+      ],
+    },
+    {
+      name: "Immersive",
+      services: [
+        { name: "Virtual Tour", unit: "lokasi", basePrice: 45000000, workflow: [
+          { phase: "Pre Production", name: "Survey & Scene Plan" },
+          { phase: "Production", name: "Capture & Interactive Build", isMilestone: true },
+          { phase: "Post Production", name: "Publish & QA Device", isMilestone: true },
+        ] },
+        { name: "Projection Mapping", unit: "event", basePrice: 150000000 },
+      ],
+    },
+  ]);
+
+  // ============ KANAL & INTEGRASI PER BRAND (Ronde 29-b) ============
+  // Tiap brand memiliki integrasinya sendiri-sendiri: WhatsApp, Instagram,
+  // Threads, Email — akun asli brand, kredensial buatan (mode demo).
+  const brandChannelMeta: Array<{ id: string; name: string; wa: string; ig: string; email: string }> = [
+    { id: unimasi.id, name: unimasi.name, wa: "+6281215082608", ig: "@unimasi_", email: "info@unimasi.com" },
+    { id: segia.id, name: segia.name, wa: "+6281225929178", ig: "@segiatech", email: "marketing@udp.co.id" },
+    { id: erfo.id, name: erfo.name, wa: "+6281215082607", ig: "@erfomultimedia", email: "info@erfomultimedia.com" },
+    { id: unicam.id, name: unicam.name, wa: "+6281336359525", ig: "@unicam.studio", email: "marketing@udp.co.id" },
+  ];
+  const seedDemoChannels = brandChannelMeta.flatMap((b) => [
+    {
+      channel: "whatsapp", brandId: b.id, displayName: `WhatsApp Business — ${b.name}`, accountRef: b.wa,
+      credentials: JSON.stringify({ phoneNumberId: `1093${b.id.slice(-6).replace(/\D/g, "") || "215904"}`, wabaId: "2039187654xx", accessToken: "EAAG-seed-demo-token", verifyToken: `seed-vt-${b.id.slice(-8)}` }),
+    },
+    {
+      channel: "instagram", brandId: b.id, displayName: `Instagram Direct — ${b.name}`, accountRef: b.ig,
+      credentials: JSON.stringify({ accountId: "1784145267xx", accessToken: "IGQV-seed-demo-token" }),
+    },
+    {
+      channel: "threads", brandId: b.id, displayName: `Threads — ${b.name}`, accountRef: b.ig,
+      credentials: JSON.stringify({ accountId: "9123456789xx", accessToken: "THQV-seed-demo-token" }),
+    },
+    {
+      channel: "email", brandId: b.id, displayName: `Email Bisnis — ${b.name}`, accountRef: b.email,
+      credentials: JSON.stringify({ provider: "zoho", smtpHost: "smtp.zoho.com", smtpPort: "465", smtpUser: b.email, smtpPassword: "seed-demo-pass", imapHost: "imap.zoho.com", imapPort: "993", imapUser: b.email, imapPassword: "seed-demo-pass" }),
+    },
+  ]);
+  await db.channelConfig.createMany({
+    data: seedDemoChannels.map((c) => ({
+      channel: c.channel, brandId: c.brandId, displayName: c.displayName, accountRef: c.accountRef,
+      credentials: c.credentials, status: "connected",
+      statusNote: "Koneksi demo — akun asli brand, kredensial buatan (seed)",
+      isDemo: true, connectedAt: new Date(), lastTestedAt: new Date(),
+    })),
+  });
 
   // ============ USERS ============
   await db.user.createMany({ data: [

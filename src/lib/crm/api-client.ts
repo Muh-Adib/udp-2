@@ -114,6 +114,20 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  // Ronde 29-b — katalog layanan & workflow per brand
+  brandServices: (id: string) =>
+    request<import("@/lib/crm/types").BrandServiceCatalog>(`/api/brands/${id}/services`),
+  brandServiceMutate: (
+    id: string,
+    payload: Record<string, unknown>,
+    method: "POST" | "PATCH" | "DELETE"
+  ) =>
+    request<Record<string, unknown>>(
+      method === "DELETE"
+        ? `/api/brands/${id}/services?kind=${encodeURIComponent(String(payload.kind ?? ""))}&id=${encodeURIComponent(String(payload.id ?? ""))}`
+        : `/api/brands/${id}/services`,
+      method === "DELETE" ? { method } : { method, body: JSON.stringify(payload) }
+    ),
   createTemplate: (payload: Record<string, unknown>) =>
     request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>("/api/followup-templates", {
       method: "POST",

@@ -14,6 +14,19 @@ export interface Brand {
   slaHours: number;
   portalDomain?: string | null;
   active: boolean;
+  // Ronde 29-b — identitas asli + integrasi per brand
+  logoUrl?: string | null;
+  tagline?: string | null;
+  address?: string | null;
+  city?: string | null;
+  phone?: string | null;
+  whatsappNumber?: string | null;
+  instagramHandle?: string | null;
+  threadsHandle?: string | null;
+  email?: string | null;
+  letterheadHeader?: string | null;
+  letterheadFooter?: string | null;
+  letterTemplate?: string | null;
 }
 
 export interface SessionUser {
@@ -777,4 +790,42 @@ export interface PortalTokenPayload {
     brandName?: string | null;
     deliverables: import("@/lib/crm/types").ProjectDeliverableDTO[];
   }[];
+}
+
+// ============ Ronde 29-b — Katalog layanan & workflow produksi per brand ============
+
+export interface WorkflowStageDTO {
+  id: string;
+  phase: string;
+  name: string;
+  description?: string | null;
+  isMilestone: boolean;
+  order: number;
+}
+
+export interface ServiceDTO {
+  id: string;
+  categoryId?: string | null;
+  name: string;
+  description?: string | null;
+  unit?: string | null;
+  basePrice?: number | null;
+  order: number;
+  active: boolean;
+  workflow: WorkflowStageDTO[];
+}
+
+export interface ServiceCategoryDTO {
+  id: string;
+  name: string;
+  description?: string | null;
+  order: number;
+  active: boolean;
+}
+
+/** Payload GET /api/brands/[id]/services — katalog lengkap satu brand. */
+export interface BrandServiceCatalog {
+  brand: { id: string; name: string; slug: string };
+  categories: ServiceCategoryDTO[];
+  services: ServiceDTO[];
 }

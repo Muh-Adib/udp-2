@@ -1,13 +1,17 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
-import { CHANNEL_TYPES, DEMO_CONNECTIONS } from "@/lib/crm/channels";
+import { CHANNEL_TYPES, DEMO_CONNECTIONS, brandDemoConnection } from "@/lib/crm/channels";
 import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 /**
  * Ronde 20 — Mode Demo: hubungkan kanal dengan 1 klik (kredensial buatan).
  * Tujuan: user yang kesulitan setup manual tetap bisa melihat alur end-to-end
  * tanpa akun Meta / server SMTP. Koneksi ditandai isDemo di UI & audit log.
+ *
+ * Ronde 29-b — PER BRAND: bila brandId diberikan, akun demo mengikuti data
+ * asli brand (nomor WA / IG / Threads / email milik brand tersebut), jadi
+ * tiap brand punya integrasinya sendiri-sendiri.
  *
  * POST /api/channels/demo — body: { channel, brandId?, actorName?, actorRole? }
  */
@@ -21,14 +25,22 @@ export async function POST(req: NextRequest) {
   const channel = typeof body.channel === "string" ? body.channel : "";
   if (!CHANNEL_TYPES[channel]) return fail("Tipe kanal tidak dikenal", 400);
 
-  const demo = DEMO_CONNECTIONS[channel];
-  if (!demo) return fail("Preset demo belum tersedia untuk kanal ini", 400);
-
   const brandId = typeof body.brandId === "string" && body.brandId ? body.brandId : null;
+  // Ronde 29-b — PER BRAND: bila brandId diberikan, akun demo mengikuti data
+  // asli brand (nomor WA / IG / Threads / email milik brand tersebut).
+  let preset: { displayName: string; accountRef: string; credentials: Record<string, string> } | null = null;
   if (brandId) {
-    const brand = await db.brand.findUnique({ where: { id: brandId } });
+    const brand = await db.brand.findUnique({
+      where: { id: brandId },
+      select: { name: true, whatsappNumber: true, instagramHandle: true, threadsHandle: true, email: true },
+    });
     if (!brand) return fail("Brand tidak ditemukan", 404);
+    preset = brandDemoConnection(channel, brand);
+  } else {
+    preset = DEMO_CONNECTIONS[channel] ?? null;
   }
+  if (!preset) return fail("Preset demo belum tersedia untuk kanal ini", 400);
+  const demo = preset;
 
   const existing = await db.channelConfig.findFirst({ where: { channel, brandId } });
   if (existing) {

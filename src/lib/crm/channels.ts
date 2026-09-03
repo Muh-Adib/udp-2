@@ -51,6 +51,18 @@ export const CHANNEL_TYPES: Record<string, ChannelTypeMeta> = {
       { key: "accessToken", label: "Access Token", required: true, secret: true, placeholder: "IGQV…" },
     ],
   },
+  threads: {
+    key: "threads",
+    label: "Threads",
+    color: "#0a0a0a",
+    description: "Balas percakapan Threads bisnis dari inbox terpusat (Meta Threads API).",
+    accountRefLabel: "Username Threads",
+    accountRefPlaceholder: "@unimasi_",
+    fields: [
+      { key: "accountId", label: "Threads User ID", required: true, placeholder: "mis. 1234567890" },
+      { key: "accessToken", label: "Access Token", required: true, secret: true, placeholder: "THQV…", hint: "Token dengan izin threads_basic & threads_manage_reply" },
+    ],
+  },
   email: {
     key: "email",
     label: "Email Bisnis",
@@ -334,6 +346,14 @@ export const DEMO_CONNECTIONS: Record<string, { displayName: string; accountRef:
       accessToken: `IGQV-demo-${randSuffix(20)}`,
     },
   },
+  threads: {
+    displayName: "Threads (Demo)",
+    accountRef: "@unimasi.demo",
+    credentials: {
+      accountId: `9${randSuffix(15)}`,
+      accessToken: `THQV-demo-${randSuffix(20)}`,
+    },
+  },
   email: {
     displayName: "Email Bisnis (Demo)",
     accountRef: "hello@demo-unimasi.co.id",
@@ -350,3 +370,54 @@ export const DEMO_CONNECTIONS: Record<string, { displayName: string; accountRef:
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// Ronde 29-b — Preset demo PER BRAND: tiap brand punya integrasinya sendiri
+// (nomor WA / akun IG / Threads / email dari data asli brand). Dipakai seed
+// dan endpoint 1-klik /api/channels/demo saat brandId diberikan.
+// ---------------------------------------------------------------------------
+
+export interface BrandLike {
+  name: string;
+  whatsappNumber?: string | null;
+  instagramHandle?: string | null;
+  threadsHandle?: string | null;
+  email?: string | null;
+}
+
+/** Preset demo untuk kanal milik brand tertentu (akun asli brand, kredensial buatan). */
+export function brandDemoConnection(channel: string, brand: BrandLike): { displayName: string; accountRef: string; credentials: Record<string, string> } | null {
+  if (!CHANNEL_TYPES[channel]) return null;
+  const fallback = DEMO_CONNECTIONS[channel];
+  const displayName = `${CHANNEL_TYPES[channel].label} — ${brand.name} (Demo)`;
+  if (channel === "whatsapp") {
+    return {
+      displayName,
+      accountRef: brand.whatsappNumber || fallback.accountRef,
+      credentials: { ...fallback.credentials },
+    };
+  }
+  if (channel === "instagram") {
+    return {
+      displayName,
+      accountRef: brand.instagramHandle || fallback.accountRef,
+      credentials: { ...fallback.credentials },
+    };
+  }
+  if (channel === "threads") {
+    return {
+      displayName,
+      accountRef: brand.threadsHandle || brand.instagramHandle || fallback.accountRef,
+      credentials: { ...fallback.credentials },
+    };
+  }
+  if (channel === "email") {
+    const addr = brand.email || fallback.accountRef;
+    return {
+      displayName,
+      accountRef: addr,
+      credentials: { ...fallback.credentials, smtpUser: addr, imapUser: addr },
+    };
+  }
+  return { ...fallback };
+}

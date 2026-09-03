@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  BellRing, CheckCircle2, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
-  Link2, Loader2, Mail, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Tag, Trash2, Video, Wand2,
+  AtSign, BellRing, CheckCircle2, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
+  Link2, Loader2, Mail, MapPin, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
+import BrandSettingsDialog, { BrandLogo } from "@/components/crm/brand-settings-dialog";
 import { BRAND_SERVICES, PIPELINE_STAGES, stageLabel } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type { Brand, FollowUpTemplateDTO } from "@/lib/crm/types";
@@ -113,39 +114,78 @@ function previewTemplateBody(body: string): string {
 
 // ============ Sub-komponen kecil ============
 
-function BrandCard({ brand, onEdit }: { brand: Brand; onEdit: (brand: Brand) => void }) {
+function BrandCard({ brand, onEdit, onSettings }: { brand: Brand; onEdit: (brand: Brand) => void; onSettings: (brand: Brand) => void }) {
   const services = BRAND_SERVICES[brand.slug] ?? [];
+  const contactChips: Array<{ key: string; value: string | null | undefined; label: string }> = [
+    { key: "wa", value: brand.whatsappNumber, label: "WhatsApp" },
+    { key: "ig", value: brand.instagramHandle, label: "Instagram" },
+    { key: "threads", value: brand.threadsHandle, label: "Threads" },
+    { key: "email", value: brand.email, label: "Email" },
+  ];
   return (
     <div className="relative flex flex-col overflow-hidden rounded-xl border bg-white p-5 pl-6 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
       <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: brand.color }} aria-hidden />
       <div className="flex items-start gap-3">
-        <span
-          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-3xl"
-          style={{ backgroundColor: `${brand.color}1a` }}
-          aria-hidden
-        >
-          {brand.logoEmoji}
-        </span>
+        <BrandLogo brand={brand} size="lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="truncate text-base font-bold text-zinc-900">{brand.name}</p>
             {!brand.active ? <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-zinc-500">Nonaktif</Badge> : null}
           </div>
-          <p className="truncate font-mono text-xs text-zinc-500">{brand.slug}</p>
+          {brand.tagline ? (
+            <p className="truncate text-xs font-medium italic" style={{ color: brand.color }}>&ldquo;{brand.tagline}&rdquo;</p>
+          ) : (
+            <p className="truncate font-mono text-xs text-zinc-500">{brand.slug}</p>
+          )}
           {brand.description ? (
             <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{brand.description}</p>
           ) : null}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0 text-zinc-400 hover:text-zinc-800"
-          onClick={() => onEdit(brand)}
-          aria-label={`Edit brand ${brand.name}`}
-        >
-          <Pencil className="h-4 w-4" aria-hidden />
-        </Button>
+        <div className="flex shrink-0 flex-col gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-zinc-400 hover:text-zinc-800"
+            onClick={() => onSettings(brand)}
+            aria-label={`Kelola brand ${brand.name}`}
+            title="Kelola: identitas, layanan & workflow, surat, integrasi"
+          >
+            <Settings2 className="h-4 w-4" aria-hidden />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-zinc-400 hover:text-zinc-800"
+            onClick={() => onEdit(brand)}
+            aria-label={`Edit dasar brand ${brand.name}`}
+            title="Edit dasar (nama, warna, SLA, prefix)"
+          >
+            <Pencil className="h-4 w-4" aria-hidden />
+          </Button>
+        </div>
       </div>
+
+      {/* Kontak resmi brand (data asli situs) */}
+      {contactChips.some((c) => c.value) ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {contactChips.filter((c) => c.value).map((c) => (
+            <span key={c.key} className="inline-flex max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-600" title={c.label}>
+              {c.key === "wa" ? <MessageCircle className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+                : c.key === "ig" ? <Instagram className="h-3 w-3 shrink-0 text-pink-600" aria-hidden />
+                : c.key === "threads" ? <AtSign className="h-3 w-3 shrink-0 text-zinc-700" aria-hidden />
+                : <Mail className="h-3 w-3 shrink-0 text-zinc-500" aria-hidden />}
+              <span className="truncate font-mono">{c.value}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {brand.city || brand.address ? (
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-zinc-500">
+          <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+          <span className="line-clamp-1" title={brand.address ?? brand.city ?? ""}>{brand.city ?? brand.address}</span>
+        </p>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
         <span className="inline-flex items-center gap-1.5 text-zinc-600" title="Warna brand">
@@ -349,6 +389,10 @@ export default function BrandsModule() {
   const [editingBrand, setEditingBrand] = useState<Brand | null>(null);
   const [draft, setDraft] = useState<BrandDraft>(EMPTY_DRAFT);
   const [submitting, setSubmitting] = useState(false);
+
+  // Ronde 29-b — dialog Pengaturan Brand (identitas/layanan/surat/integrasi)
+  const [settingsBrand, setSettingsBrand] = useState<Brand | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [templates, setTemplates] = useState<FollowUpTemplateDTO[] | null>(null);
   const [templatesLoading, setTemplatesLoading] = useState(true);
@@ -624,7 +668,7 @@ export default function BrandsModule() {
 
       {/* Grid brand */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onEdit={openBrandEdit} />)}
+        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onEdit={openBrandEdit} onSettings={(brand) => { setSettingsBrand(brand); setSettingsOpen(true); }} />)}
 
         {/* Kartu tambah */}
         <button
@@ -969,6 +1013,17 @@ export default function BrandsModule() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Ronde 29-b — Pengaturan Brand lengkap (identitas asli, layanan & workflow, surat, integrasi) */}
+      <BrandSettingsDialog
+        brand={settingsBrand}
+        open={settingsOpen}
+        onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsBrand(null); }}
+        onSaved={(updated) => {
+          setSettingsBrand((prev) => (prev && prev.id === updated.id ? updated : prev));
+          setBrands((prev) => (prev ?? []).map((b) => (b.id === updated.id ? updated : b)));
+        }}
+      />
     </div>
   );
 }

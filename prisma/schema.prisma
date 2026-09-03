@@ -26,13 +26,29 @@ model Brand {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  opportunities Opportunity[]
-  projects      Project[]
-  invoices      Invoice[]
-  interactions  Interaction[]
-  quotations    Quotation[]
-  briefs        ClientBrief[]
-  channels      ChannelConfig[]
+  // ==== Ronde 29-b — Identitas brand dari data asli situs ====
+  logoUrl          String? // path aset publik ("/brands/logo-x.png") atau data URL upload
+  tagline          String? // tagline resmi (mis. "Jagonya Buat Animasi")
+  address          String? // alamat lengkap kantor
+  city             String? // kota utama operasional
+  phone            String? // telepon utama
+  whatsappNumber   String? // nomor WA bisnis utama brand
+  instagramHandle  String? // akun IG resmi (mis. @unimasi_)
+  threadsHandle    String? // akun Threads resmi
+  email            String? // email bisnis utama brand
+  letterheadHeader String? // gambar kop surat atas (data URL ≤1.6MB)
+  letterheadFooter String? // gambar kaki surat bawah (data URL)
+  letterTemplate   String? // JSON style template surat {fontFamily, accentColor, headerStyle, showLogo, footerNote}
+
+  opportunities     Opportunity[]
+  projects          Project[]
+  invoices          Invoice[]
+  interactions      Interaction[]
+  quotations        Quotation[]
+  briefs            ClientBrief[]
+  channels          ChannelConfig[]
+  serviceCategories ServiceCategory[]
+  services          Service[]
 }
 
 model User {
@@ -571,13 +587,78 @@ model ClientDocument {
   @@index([companyId, kind])
 }
 
+// ============ KATALOG LAYANAN & WORKFLOW PRODUKSI (Ronde 29-b) ============
+// Brand memiliki kategori layanan sendiri; tiap kategori berisi layanan;
+// tiap layanan punya workflow produksi custom (fase + langkah, sebagian jadi
+// milestone project). Contoh Unimasi: kategori "Animasi 3D" → layanan
+// "Pembuatan Video Pembelajaran Anak Anak 3D" dengan flow
+// Pra Production (Creative Concept & Story Board) → Production (milestone)
+// → Post Production (milestone).
+model ServiceCategory {
+  id          String   @id @default(cuid())
+  brandId     String
+  brand       Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  services Service[]
+
+  @@index([brandId])
+}
+
+model Service {
+  id          String          @id @default(cuid())
+  brandId     String
+  brand       Brand           @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name        String
+  description String?
+  unit        String? // satuan penjualan (video, episode, proyek, bulan)
+  basePrice   Float? // harga acuan (opsional)
+  order       Int             @default(0)
+  active      Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workflowStages WorkflowStage[]
+
+  @@index([brandId])
+  @@index([categoryId])
+}
+
+/**
+ * Langkah workflow produksi per layanan. phase = nama fase bebas
+ * (mis. "Pra Production", "Production", "Post Production"); isMilestone
+ * menandai langkah yang tampil/terhitung sbg milestone saat project dibuat
+ * dari opportunity.
+ */
+model WorkflowStage {
+  id          String   @id @default(cuid())
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  phase       String   @default("Production")
+  name        String
+  description String?
+  isMilestone Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([serviceId])
+}
+
 // ============ FASE 3: SALURAN & INTEGRASI ============
 // Koneksi kanal komunikasi (WhatsApp Business, Instagram, Email) per brand
 // atau organisasi. Kredensial disimpan JSON dan DIRESPONS TERSENSA oleh API.
 // Webhook WhatsApp memakai verifyToken/appSecret dari sini sbg fallback env.
 model ChannelConfig {
   id           String    @id @default(cuid())
-  channel      String // whatsapp, instagram, email
+  channel      String // whatsapp, instagram, threads, email, dll (lihat CHANNEL_TYPES)
   brandId      String?
   brand        Brand?    @relation(fields: [brandId], references: [id])
   displayName  String

@@ -26,18 +26,38 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
 
   return (
     <div id="print-area" className="mx-auto max-w-[820px] text-zinc-900">
-      {/* Kop surat */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          {brand?.logoEmoji ? <span className="text-3xl leading-none">{brand.logoEmoji}</span> : null}
-          <div>
-            <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
-              {brand?.name ?? "Grup Agensi Kreatif"}
-            </p>
-            {brand?.website ? <p className="text-xs text-zinc-600">{brand.website}</p> : null}
-            {brand?.description ? <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand.description}</p> : null}
+      {/* Kop surat — Ronde 29-b: pakai gambar kop milik brand bila ada, fallback logo asli */}
+      {brand?.letterheadHeader ? (
+        <div className="mb-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={brand.letterheadHeader} alt={`Kop surat ${brand.name}`} className="h-24 w-full object-contain object-top sm:h-28" />
+        </div>
+      ) : null}
+      {!brand?.letterheadHeader ? (
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            {brand?.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
+            ) : brand?.logoEmoji ? <span className="text-3xl leading-none">{brand.logoEmoji}</span> : null}
+            <div>
+              <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
+                {brand?.name ?? "Grup Agensi Kreatif"}
+              </p>
+              {brand?.tagline ? <p className="text-xs italic text-zinc-600">{brand.tagline}</p> : null}
+              {brand?.address || brand?.city ? (
+                <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand?.address || brand?.city}</p>
+              ) : brand?.description ? (
+                <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand.description}</p>
+              ) : null}
+              {brand?.phone || brand?.email ? (
+                <p className="mt-0.5 text-[11px] text-zinc-500">{[brand?.phone, brand?.email, brand?.website].filter(Boolean).join(" · ")}</p>
+              ) : null}
+            </div>
           </div>
         </div>
+      ) : null}
+      <div className="mt-2 flex items-end justify-end gap-4">
         <div className="text-right">
           <p className="text-2xl font-bold uppercase tracking-wide text-zinc-900">Quotation</p>
           <p className="font-mono text-sm font-semibold">{q.number}</p>
@@ -157,9 +177,17 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
         </div>
       </div>
 
-      <p className="mt-8 border-t border-dashed border-zinc-300 pt-2 text-center text-[10px] text-zinc-500">
-        Terima kasih atas kepercayaan Anda.
-      </p>
+      {/* Footer surat — Ronde 29-b: gambar kaki surat brand / catatan footer */}
+      {brand?.letterheadFooter ? (
+        <div className="mt-8">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={brand.letterheadFooter} alt={`Kaki surat ${brand.name}`} className="h-16 w-full object-contain object-bottom" />
+        </div>
+      ) : (
+        <p className="mt-8 border-t border-dashed border-zinc-300 pt-2 text-center text-[10px] text-zinc-500">
+          {brand?.website ? `${brand.name} · ${brand.website.replace(/^https?:\/\//, "")} · ` : ""}Terima kasih atas kepercayaan Anda.
+        </p>
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  AtSign,
   BookOpen,
   Building2,
   Check,
@@ -72,6 +73,7 @@ import ChannelSetupWizard from "./channel-setup-wizard";
 const CHANNEL_ICONS: Record<string, LucideIcon> = {
   whatsapp: MessageCircle,
   instagram: Instagram,
+  threads: AtSign,
   email: Mail,
 };
 
