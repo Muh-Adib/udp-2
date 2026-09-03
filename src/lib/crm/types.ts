@@ -537,6 +537,73 @@ export interface DashboardData {
   pendingChangeRequests?: number;
   /** Jumlah task eskalasi otomatis yang dibuat sweep SLA pada fetch ini (Fase 3). */
   autoEscalated?: number;
+  /** Ronde 31 — tampilan dashboard terpersonalisasi per role (data dihitung server-side). */
+  roleView?: DashboardRoleView;
+}
+
+// ============ Ronde 31 — Dashboard per-role ============
+
+/** Cockpit personal marketing (berdasar opportunity.ownerName = nama user sesi). */
+export interface DashboardMineView {
+  openLeads: number;
+  pipelineValue: number;
+  wonCount: number;
+  wonValue: number;
+  tasksOpen: number;
+  tasksDueToday: number;
+  tasksOverdue: number;
+  topDeals: {
+    id: string;
+    title: string;
+    stage: string;
+    value: number | null;
+    brandName: string;
+    brandColor: string;
+    companyName: string | null;
+  }[];
+  myTasks: { id: string; title: string; dueDate: string | null; priority: string; overdue: boolean; dueToday: boolean; opportunityTitle: string | null }[];
+  funnel: { stage: string; count: number; value: number }[];
+}
+
+/** Cockpit finance — kesehatan arus kas & tagihan. */
+export interface DashboardFinanceView {
+  outstanding: number;
+  overdueCount: number;
+  collectedThisMonth: number;
+  billedThisMonth: number;
+  byStatus: { status: string; count: number; total: number }[];
+  overdueList: { id: string; number: string; company: string; total: number; dueDate: string | null; status: string }[];
+  byBrand: { name: string; color: string; outstanding: number; count: number }[];
+}
+
+/** Cockpit production — antrian produksi & deliverables. */
+export interface DashboardProductionView {
+  activeProjects: number;
+  atRisk: number;
+  inReview: number;
+  pendingCRs: number;
+  deliverablesPending: number;
+  milestonesDueSoon: { projectCode: string; projectName: string; name: string; dueDate: string | null; status: string }[];
+  queue: { code: string; name: string; brandName: string; brandColor: string; progress: number; status: string; dueDate: string | null; companyName: string }[];
+}
+
+/** Ikhtisar tim (HR & manager). */
+export interface DashboardTeamView {
+  totalUsers: number;
+  activeUsers: number;
+  usersByRole: { role: string; count: number; active: number }[];
+  tasksOpen: number;
+  tasksDueToday: number;
+  tasksOverdue: number;
+}
+
+export interface DashboardRoleView {
+  role: string;
+  userName: string | null;
+  mine?: DashboardMineView;
+  finance?: DashboardFinanceView;
+  production?: DashboardProductionView;
+  team?: DashboardTeamView;
 }
 
 // ============ NOTIFIKASI (Fase 3) ============

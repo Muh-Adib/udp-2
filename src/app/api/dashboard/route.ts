@@ -1,12 +1,15 @@
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok } from "@/lib/crm/server";
 import { OPEN_STAGES } from "@/lib/crm/constants";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
+import { getSessionUser } from "@/lib/crm/session";
+import type { DashboardMineView, DashboardProductionView, DashboardTeamView, DashboardFinanceView, DashboardRoleView as DashboardRoleViewType } from "@/lib/crm/types";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   // Fase 3 — SLA auto-sweep: berjalan periodik selama dashboard terbuka
   // (polling 60 dtk, throttle 5 menit di lib). Kegagalan sweep diabaikan.
   let autoEscalated = 0;
@@ -16,6 +19,10 @@ export async function GET() {
     autoEscalated = 0;
   }
 
+  // Ronde 31 — dashboard per-role: identitas dari sesi (best-effort, GET terbuka —
+  // tanpa sesi → roleView guest → UI menampilkan view eksekutif bawaan).
+  const session = await getSessionUser(req);
+
   const [
     opportunities, interactions, tasks, invoices, projects, recentAudit, brands, pendingApprovals,
     unresolvedInbound, pendingChangeRequests,
@@ -23,8 +30,8 @@ export async function GET() {
     db.opportunity.findMany({ where: { deletedAt: null }, include: { brand: true, contact: true, company: true } }),
     db.interaction.findMany({ orderBy: { createdAt: "desc" }, take: 500 }),
     db.task.findMany({ where: { status: "open" } }),
-    db.invoice.findMany({ include: { payments: true } }),
-    db.project.findMany(),
+    db.invoice.findMany({ include: { payments: true, company: { select: { name: true } } } }),
+    db.project.findMany({ include: { brand: { select: { name: true, color: true } }, company: { select: { name: true } } } }),
     db.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 8 }),
     db.brand.findMany(),
     db.approvalRequest.findMany({
@@ -155,6 +162,178 @@ export async function GET() {
   });
   const lostReasons = [...lostMap.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count);
 
+  // ==== Ronde 31 — ROLE VIEW (data terpersonalisasi per peran) ====
+  let roleView: DashboardRoleViewType | undefined;
+  if (session) {
+    const role = session.role;
+    const userName = session.name;
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(startOfDay.getTime() + DAY);
+    const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
+
+    const needsMine = role === "marketing" || role === "manager" || role === "super_admin" || role === "director";
+    const needsFinance = role === "finance" || role === "super_admin" || role === "director";
+    const needsProduction = role === "production" || role === "manager" || role === "super_admin" || role === "director";
+    const needsTeam = role === "hr" || role === "manager" || role === "super_admin" || role === "director";
+
+    const [usersAgg, milestonesSoon, deliverablesPending] = await Promise.all([
+      needsTeam
+        ? db.user.findMany({ select: { role: true, active: true } })
+        : Promise.resolve([]),
+      needsProduction
+        ? db.milestone.findMany({
+            where: { status: { not: "done" }, dueDate: { not: null, lte: new Date(now + 7 * DAY) } },
+            include: { project: { select: { name: true, code: true } } },
+            orderBy: { dueDate: "asc" },
+            take: 8,
+          })
+        : Promise.resolve([]),
+      needsProduction
+        ? db.projectDeliverable.count({ where: { status: "pending" } })
+        : Promise.resolve(0),
+    ]);
+
+    // MARKETING — cockpit personal (ownerName = nama user)
+    if (needsMine) {
+      const mine = opportunities.filter((o) => o.ownerName === userName);
+      const myOpen = mine.filter((o) => (OPEN_STAGES as string[]).includes(o.stage));
+      const myWon = mine.filter((o) => o.stage === "won");
+      const myTasks = tasks.filter((t) => t.assigneeName === userName);
+      const mineView: DashboardMineView = {
+        openLeads: myOpen.length,
+        pipelineValue: myOpen.reduce((s, o) => s + (o.estimatedValue ?? 0), 0),
+        wonCount: myWon.length,
+        wonValue: myWon.reduce((s, o) => s + (o.estimatedValue ?? 0), 0),
+        tasksOpen: myTasks.length,
+        tasksDueToday: myTasks.filter((t) => t.dueDate && t.dueDate >= startOfDay && t.dueDate < endOfDay).length,
+        tasksOverdue: myTasks.filter((t) => t.dueDate && t.dueDate < startOfDay).length,
+        topDeals: [...myOpen]
+          .sort((a, b) => (b.estimatedValue ?? 0) - (a.estimatedValue ?? 0))
+          .slice(0, 5)
+          .map((o) => ({
+            id: o.id,
+            title: o.title,
+            stage: o.stage,
+            value: o.estimatedValue,
+            brandName: o.brand.name,
+            brandColor: o.brand.color,
+            companyName: o.company?.name ?? null,
+          })),
+        myTasks: myTasks
+          .sort((a, b) => (a.dueDate?.getTime() ?? Infinity) - (b.dueDate?.getTime() ?? Infinity))
+          .slice(0, 6)
+          .map((t) => ({
+            id: t.id,
+            title: t.title,
+            dueDate: t.dueDate?.toISOString() ?? null,
+            priority: t.priority,
+            overdue: Boolean(t.dueDate && t.dueDate < startOfDay),
+            dueToday: Boolean(t.dueDate && t.dueDate >= startOfDay && t.dueDate < endOfDay),
+            opportunityTitle: t.opportunityId ? (opportunities.find((o) => o.id === t.opportunityId)?.title ?? null) : null,
+          })),
+        funnel: stageOrder.map((stage) => {
+          const items = mine.filter((o) => o.stage === stage);
+          return { stage, count: items.length, value: items.reduce((s, o) => s + (o.estimatedValue ?? 0), 0) };
+        }),
+      };
+      roleView = { ...(roleView ?? { role, userName }), role, userName, mine: mineView };
+    }
+
+    // FINANCE — arus kas & tagihan
+    if (needsFinance) {
+      const live = invoices.filter((i) => i.status !== "draft" && i.status !== "cancelled");
+      const outstandingOf = (i: (typeof live)[number]) => i.total - i.payments.reduce((p, pay) => p + pay.amount, 0);
+      const statusKeys = ["sent", "partial", "overdue", "paid"];
+      const financeView: DashboardFinanceView = {
+        outstanding: live.reduce((s, i) => s + Math.max(outstandingOf(i), 0), 0),
+        overdueCount: live.filter((i) => i.status === "overdue" || (i.dueDate && i.dueDate.getTime() < now && outstandingOf(i) > 0)).length,
+        collectedThisMonth: Math.round(live.reduce((s, i) => s + i.payments.filter((p) => p.paidAt >= startOfMonth).reduce((p, pay) => p + pay.amount, 0), 0)),
+        billedThisMonth: Math.round(live.filter((i) => i.issueDate >= startOfMonth).reduce((s, i) => s + i.total, 0)),
+        byStatus: statusKeys.map((status) => {
+          const items = live.filter((i) => i.status === status);
+          return { status, count: items.length, total: Math.round(items.reduce((s, i) => s + i.total, 0)) };
+        }),
+        overdueList: live
+          .filter((i) => i.status === "overdue" || (i.dueDate && i.dueDate.getTime() < now && outstandingOf(i) > 0))
+          .sort((a, b) => (a.dueDate?.getTime() ?? Infinity) - (b.dueDate?.getTime() ?? Infinity))
+          .slice(0, 5)
+          .map((i) => ({
+            id: i.id,
+            number: i.number,
+            company: i.company?.name ?? "—",
+            total: Math.round(outstandingOf(i)),
+            dueDate: i.dueDate?.toISOString() ?? null,
+            status: i.status,
+          })),
+        byBrand: brands.map((b) => {
+          const items = live.filter((i) => i.brandId === b.id);
+          return {
+            name: b.name,
+            color: b.color,
+            outstanding: Math.round(items.reduce((s, i) => s + Math.max(outstandingOf(i), 0), 0)),
+            count: items.length,
+          };
+        }).filter((b) => b.count > 0),
+      };
+      roleView = { ...(roleView ?? { role, userName }), role, userName, finance: financeView };
+    }
+
+    // PRODUCTION — antrian produksi
+    if (needsProduction) {
+      const activeProjects = projects.filter((p) => p.status === "in_progress" || p.status === "planning" || p.status === "review");
+      const productionView: DashboardProductionView = {
+        activeProjects: activeProjects.length,
+        atRisk: projects.filter((p) => p.dueDate && p.dueDate.getTime() < now + 7 * DAY && p.status !== "completed" && p.status !== "cancelled").length,
+        inReview: projects.filter((p) => p.status === "review").length,
+        pendingCRs: pendingChangeRequests,
+        deliverablesPending,
+        milestonesDueSoon: milestonesSoon.map((m) => ({
+          projectCode: m.project.code,
+          projectName: m.project.name,
+          name: m.name,
+          dueDate: m.dueDate?.toISOString() ?? null,
+          status: m.status,
+        })),
+        queue: activeProjects
+          .sort((a, b) => (a.dueDate?.getTime() ?? Infinity) - (b.dueDate?.getTime() ?? Infinity))
+          .slice(0, 6)
+          .map((p) => ({
+            code: p.code,
+            name: p.name,
+            brandName: p.brand.name,
+            brandColor: p.brand.color,
+            progress: p.progress,
+            status: p.status,
+            dueDate: p.dueDate?.toISOString() ?? null,
+            companyName: p.company.name,
+          })),
+      };
+      roleView = { ...(roleView ?? { role, userName }), role, userName, production: productionView };
+    }
+
+    // TEAM (HR/manager) — orang & beban kerja
+    if (needsTeam) {
+      const byRole = new Map<string, { count: number; active: number }>();
+      for (const u of usersAgg) {
+        const cur = byRole.get(u.role) ?? { count: 0, active: 0 };
+        cur.count += 1;
+        if (u.active) cur.active += 1;
+        byRole.set(u.role, cur);
+      }
+      const teamView: DashboardTeamView = {
+        totalUsers: usersAgg.length,
+        activeUsers: usersAgg.filter((u) => u.active).length,
+        usersByRole: [...byRole.entries()].map(([r, v]) => ({ role: r, count: v.count, active: v.active })).sort((a, b) => b.count - a.count),
+        tasksOpen: tasks.length,
+        tasksDueToday: tasks.filter((t) => t.dueDate && t.dueDate >= startOfDay && t.dueDate < endOfDay).length,
+        tasksOverdue: tasks.filter((t) => t.dueDate && t.dueDate.getTime() < now).length,
+      };
+      roleView = { ...(roleView ?? { role, userName }), role, userName, team: teamView };
+    }
+
+    if (!roleView) roleView = { role, userName };
+  }
+
   // Marketing performance
   const mktMap = new Map<string, { leads: number; won: number; resp: number; respCount: number }>();
   opportunities.forEach((o) => {
@@ -218,5 +397,6 @@ export async function GET() {
     slaBreaches,
     pendingChangeRequests,
     autoEscalated,
+    roleView,
   });
 }

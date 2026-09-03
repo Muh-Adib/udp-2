@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlarmClockOff, AlertTriangle, ArrowRight, Bell, Check, CheckCircle2, Clock3, Factory, GitPullRequestArrow, Globe, Handshake, Minus, ReceiptText,
-  RefreshCw, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, Wallet, X, type LucideIcon,
+  AlarmClockOff, AlertTriangle, ArrowRight, Banknote, Bell, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3, Coins, Factory, GitPullRequestArrow, Globe, Handshake, ListTodo, Minus, ReceiptText,
+  RefreshCw, Rocket, ShieldAlert, Stamp, Target, Timer, TrendingDown, TrendingUp, Trophy, UserCheck, Users, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -24,7 +24,7 @@ import { api } from "@/lib/crm/api-client";
 import { CHANNELS, PIPELINE_STAGES, ROLES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { applyNotifPrefs, useNotifPrefs } from "@/lib/crm/notif-prefs";
 import { canAccess, useCrmStore, type ModuleKey } from "@/lib/crm/store";
-import type { ApprovalRequestDTO, DashboardData, NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
+import type { ApprovalRequestDTO, AuditLogDTO, DashboardData, DashboardFinanceView, DashboardMineView, DashboardProductionView, DashboardTeamView, NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
 import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 import { NOTIF_CHANGED_EVENT, OPEN_NOTIF_EVENT } from "@/components/crm/notification-center";
@@ -507,6 +507,496 @@ function DashboardSkeleton() {
 
 // ============ Module utama ============
 
+// ============ Ronde 31 — Dashboard per-role ============
+
+/** Subtitle header Command Center sesuai peran. */
+const ROLE_DASH_SUBTITLE: Record<string, string> = {
+  super_admin: "Ringkasan eksekutif lintas brand",
+  director: "Ringkasan eksekutif lintas brand",
+  manager: "Pantauan tim, pipeline & SLA",
+  marketing: "Cockpit penjualan personal",
+  finance: "Kesehatan arus kas & tagihan",
+  production: "Antrian produksi & deliverables",
+  hr: "Ikhtisar tim & aktivitas",
+  client: "Portal klien",
+};
+
+/** Meta status invoice utk chip finance. */
+function invoiceStatusMeta(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "paid": return { label: "Terbayar", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+    case "overdue": return { label: "Terlambat", cls: "bg-rose-50 text-rose-700 border-rose-200" };
+    case "partial": return { label: "Sebagian", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+    case "sent": return { label: "Terkirim", cls: "bg-zinc-50 text-zinc-700 border-zinc-200" };
+    default: return { label: status, cls: "bg-zinc-50 text-zinc-700 border-zinc-200" };
+  }
+}
+
+function projectStatusMeta(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "in_progress": return { label: "Berjalan", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+    case "planning": return { label: "Perencanaan", cls: "bg-zinc-50 text-zinc-600 border-zinc-200" };
+    case "review": return { label: "Review", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+    case "completed": return { label: "Selesai", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+    case "cancelled": return { label: "Batal", cls: "bg-rose-50 text-rose-700 border-rose-200" };
+    default: return { label: status, cls: "bg-zinc-50 text-zinc-600 border-zinc-200" };
+  }
+}
+
+function priorityBadge(priority: string) {
+  if (priority === "high") return <Badge className="border-transparent bg-rose-100 text-rose-700">Urgent</Badge>;
+  if (priority === "low") return <Badge variant="outline" className="bg-zinc-50 text-zinc-500">Rendah</Badge>;
+  return <Badge variant="outline" className="bg-amber-50 text-amber-700">Sedang</Badge>;
+}
+
+/** Daftar audit ringkas — dipakai kartu Produksi & Risiko dan cockpit HR. */
+function RecentAuditList({ items, maxHeight = "max-h-64" }: { items: AuditLogDTO[]; maxHeight?: string }) {
+  if (items.length === 0) return <p className="py-2 text-sm text-zinc-400">Belum ada aktivitas tercatat.</p>;
+  return (
+    <ul className={`crm-scroll ${maxHeight} overflow-y-auto pr-1`}>
+      {items.map((a) => (
+        <li
+          key={a.id}
+          className="flex flex-col gap-1 border-b border-zinc-100 py-2 last:border-0 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-medium text-zinc-900">{a.actorName}</span>
+            <Badge className={`border-transparent uppercase ${actionBadgeClass(a.action)}`}>
+              {a.action.replace(/_/g, " ")}
+            </Badge>
+            <span className="truncate text-xs text-zinc-600">{a.entityLabel ?? a.entity}</span>
+          </div>
+          <span className="shrink-0 text-xs text-zinc-400">{timeAgo(a.createdAt)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Cockpit MARKETING — tugas personal + deal terbesar + funnel personal. */
+function MarketingCockpit({ view, onOpen }: { view: DashboardMineView; onOpen: (m: ModuleKey) => void }) {
+  return (
+    <section aria-label="Cockpit penjualan personal" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* Tugas saya */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <ListTodo className="h-4 w-4 text-orange-600" aria-hidden /> Tugas Saya
+          </h3>
+          <div className="flex gap-1.5">
+            {view.tasksDueToday > 0 ? (
+              <Badge className="border-transparent bg-amber-100 text-amber-700 tabular-nums">{view.tasksDueToday} hari ini</Badge>
+            ) : null}
+            {view.tasksOverdue > 0 ? (
+              <Badge className="border-transparent bg-rose-100 text-rose-700 tabular-nums">{view.tasksOverdue} terlambat</Badge>
+            ) : null}
+          </div>
+        </div>
+        {view.myTasks.length === 0 ? (
+          <EmptyState text="Tidak ada tugas terbuka — kerja bagus!" />
+        ) : (
+          <ul className="crm-scroll max-h-56 space-y-1.5 overflow-y-auto pr-1">
+            {view.myTasks.map((t) => (
+              <li key={t.id} className="flex items-start justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-zinc-800" title={t.title}>{t.title}</p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {t.opportunityTitle ? `${t.opportunityTitle} · ` : ""}
+                    {t.dueDate ? new Date(t.dueDate).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : "tanpa tenggat"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  {priorityBadge(t.priority)}
+                  {t.overdue ? <span className="text-[10px] font-semibold text-rose-600">TERLAMBAT</span> : null}
+                  {!t.overdue && t.dueToday ? <span className="text-[10px] font-semibold text-amber-600">HARI INI</span> : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("followups")} aria-label="Buka Follow-up Center">
+          Buka Follow-up Center <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      {/* Deal terbesar saya */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <Target className="h-4 w-4 text-orange-600" aria-hidden /> Deal Terbesar Saya
+          </h3>
+          <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.openLeads} terbuka</Badge>
+        </div>
+        {view.topDeals.length === 0 ? (
+          <EmptyState text="Belum ada deal terbuka — mulai dari Lead Inbox." />
+        ) : (
+          <ul className="space-y-1.5">
+            {view.topDeals.map((d) => (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  onClick={() => onOpen("pipeline")}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-2 text-left transition-colors hover:border-zinc-300 hover:bg-white"
+                  aria-label={`Buka pipeline: ${d.title}`}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-zinc-800" title={d.title}>{d.title}</p>
+                    <p className="truncate text-xs text-zinc-500">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: d.brandColor }} aria-hidden />
+                      {" "}{d.brandName}{d.companyName ? ` · ${d.companyName}` : ""}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-semibold tabular-nums text-zinc-900">{formatCurrency(d.value)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("pipeline")} aria-label="Buka Sales Pipeline">
+          Buka Sales Pipeline <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      {/* Funnel personal */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+          <TrendingUp className="h-4 w-4 text-orange-600" aria-hidden /> Pipeline Saya per Tahap
+        </h3>
+        <div className="space-y-1.5">
+          {view.funnel.filter((f) => f.count > 0).length === 0 ? (
+            <EmptyState text="Belum ada opportunity." />
+          ) : (
+            view.funnel.filter((f) => f.count > 0).map((f) => {
+              const max = Math.max(...view.funnel.map((x) => x.count), 1);
+              return (
+                <div key={f.stage} className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 truncate text-xs text-zinc-600" title={stageLabel(f.stage)}>{stageLabel(f.stage)}</span>
+                  <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
+                    <div className="h-full rounded bg-orange-500 transition-all duration-500" style={{ width: `${Math.round((f.count / max) * 100)}%` }} />
+                  </div>
+                  <span className="w-8 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">{f.count}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-100 pt-3 text-center">
+          <div className="rounded-lg bg-zinc-50 p-2">
+            <p className="text-lg font-bold tabular-nums text-zinc-900">{formatCurrency(view.pipelineValue)}</p>
+            <p className="text-[11px] text-zinc-500">pipeline terbuka</p>
+          </div>
+          <div className="rounded-lg bg-emerald-50 p-2">
+            <p className="text-lg font-bold tabular-nums text-emerald-700">{formatCurrency(view.wonValue)}</p>
+            <p className="text-[11px] text-emerald-700">{view.wonCount} deal won</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Cockpit FINANCE — status invoice, tagihan terlambat, outstanding per brand. */
+function FinanceCockpit({ view, onOpen }: { view: DashboardFinanceView; onOpen: (m: ModuleKey) => void }) {
+  const maxBrandOutstanding = Math.max(...view.byBrand.map((b) => b.outstanding), 1);
+  return (
+    <section aria-label="Cockpit keuangan" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* Status invoice */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+          <Coins className="h-4 w-4 text-orange-600" aria-hidden /> Status Invoice
+        </h3>
+        <div className="space-y-1.5">
+          {view.byStatus.map((s) => {
+            const meta = invoiceStatusMeta(s.status);
+            return (
+              <div key={s.status} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 ${meta.cls}`}>
+                <span className="text-sm font-medium">{meta.label}</span>
+                <span className="text-right">
+                  <span className="block text-sm font-bold tabular-nums">{s.count}</span>
+                  <span className="block text-[11px] tabular-nums opacity-80">{formatCurrency(s.total)}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-100 pt-3 text-center">
+          <div className="rounded-lg bg-emerald-50 p-2">
+            <p className="text-base font-bold tabular-nums text-emerald-700">{formatCurrency(view.collectedThisMonth)}</p>
+            <p className="text-[11px] text-emerald-700">terkumpul bulan ini</p>
+          </div>
+          <div className="rounded-lg bg-zinc-50 p-2">
+            <p className="text-base font-bold tabular-nums text-zinc-900">{formatCurrency(view.billedThisMonth)}</p>
+            <p className="text-[11px] text-zinc-500">diterbitkan bulan ini</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tagihan terlambat */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <Banknote className="h-4 w-4 text-rose-600" aria-hidden /> Tagihan Terlambat
+          </h3>
+          {view.overdueCount > 0 ? (
+            <Badge className="border-transparent bg-rose-100 text-rose-700 tabular-nums">{view.overdueCount} invoice</Badge>
+          ) : (
+            <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">0</Badge>
+          )}
+        </div>
+        {view.overdueList.length === 0 ? (
+          <EmptyState text="Tidak ada tagihan terlambat — kesehatan kas terjaga." />
+        ) : (
+          <ul className="crm-scroll max-h-64 space-y-1.5 overflow-y-auto pr-1">
+            {view.overdueList.map((i) => (
+              <li key={i.id}>
+                <button
+                  type="button"
+                  onClick={() => onOpen("finance")}
+                  className="w-full rounded-lg border border-rose-100 bg-rose-50/60 px-2.5 py-2 text-left transition-colors hover:bg-rose-50"
+                  aria-label={`Buka invoice ${i.number} di modul finance`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-mono text-xs font-semibold text-zinc-800">{i.number}</span>
+                    <span className="shrink-0 text-sm font-bold tabular-nums text-rose-700">{formatCurrency(i.total)}</span>
+                  </div>
+                  <p className="truncate text-xs text-zinc-500">
+                    {i.company} · jatuh tempo{" "}
+                    {i.dueDate ? new Date(i.dueDate).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                  </p>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("finance")} aria-label="Buka modul Finance">
+          Buka Finance <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      {/* Outstanding per brand */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+          <ReceiptText className="h-4 w-4 text-orange-600" aria-hidden /> Outstanding per Brand
+        </h3>
+        {view.byBrand.length === 0 ? (
+          <EmptyState text="Belum ada invoice pada brand." />
+        ) : (
+          <div className="space-y-2.5">
+            {view.byBrand.map((b) => (
+              <div key={b.name}>
+                <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                  <span className="flex min-w-0 items-center gap-1.5 text-zinc-700">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: b.color }} aria-hidden />
+                    <span className="truncate font-medium">{b.name}</span>
+                    <span className="shrink-0 text-zinc-400">· {b.count} inv</span>
+                  </span>
+                  <span className="shrink-0 font-semibold tabular-nums text-zinc-900">{formatCurrency(b.outstanding)}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${Math.round((b.outstanding / maxBrandOutstanding) * 100)}%`, backgroundColor: b.color }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-3 border-t border-zinc-100 pt-2.5 text-xs text-zinc-500">
+          Total outstanding <span className="font-bold text-zinc-900">{formatCurrency(view.outstanding)}</span>
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/** Cockpit PRODUCTION — antrian proyek + milestone due. */
+function ProductionCockpit({ view, onOpen }: { view: DashboardProductionView; onOpen: (m: ModuleKey) => void }) {
+  return (
+    <section aria-label="Cockpit produksi" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Antrian proyek */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <Rocket className="h-4 w-4 text-orange-600" aria-hidden /> Antrian Produksi
+          </h3>
+          <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.activeProjects} aktif</Badge>
+        </div>
+        {view.queue.length === 0 ? (
+          <EmptyState text="Tidak ada proyek aktif — menunggu deal won." />
+        ) : (
+          <ul className="crm-scroll max-h-72 space-y-2 overflow-y-auto pr-1">
+            {view.queue.map((p) => {
+              const meta = projectStatusMeta(p.status);
+              const overdue = p.dueDate ? new Date(p.dueDate).getTime() < Date.now() : false;
+              return (
+                <li key={p.code}>
+                  <button
+                    type="button"
+                    onClick={() => onOpen("projects")}
+                    className="w-full rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-2 text-left transition-colors hover:border-zinc-300 hover:bg-white"
+                    aria-label={`Buka proyek ${p.name}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.brandColor }} aria-hidden />
+                        <span className="truncate text-sm font-medium text-zinc-800" title={p.name}>{p.name}</span>
+                      </span>
+                      <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 text-[10px] ${meta.cls}`}>{meta.label}</Badge>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200" role="progressbar" aria-valuenow={p.progress} aria-valuemin={0} aria-valuemax={100}>
+                        <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${p.progress}%` }} />
+                      </div>
+                      <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">{p.progress}%</span>
+                    </div>
+                    <p className={`mt-0.5 truncate text-xs ${overdue ? "font-semibold text-rose-600" : "text-zinc-500"}`}>
+                      {p.code} · {p.companyName} · tenggat{" "}
+                      {p.dueDate ? new Date(p.dueDate).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : "—"}
+                      {overdue ? " (terlambat)" : ""}
+                    </p>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("projects")} aria-label="Buka modul Projects">
+          Buka Projects <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      {/* Milestone due + deliverables */}
+      <div className="flex flex-col gap-4">
+        <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+              <CalendarClock className="h-4 w-4 text-orange-600" aria-hidden /> Milestone ≤ 7 Hari
+            </h3>
+            <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.milestonesDueSoon.length}</Badge>
+          </div>
+          {view.milestonesDueSoon.length === 0 ? (
+            <EmptyState text="Tidak ada milestone jatuh tempo 7 hari ke depan." />
+          ) : (
+            <ul className="crm-scroll max-h-44 space-y-1.5 overflow-y-auto pr-1">
+              {view.milestonesDueSoon.map((m, i) => (
+                <li key={`${m.projectCode}-${m.name}-${i}`} className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-1.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-zinc-800">{m.name}</p>
+                    <p className="truncate text-xs text-zinc-500">{m.projectCode} · {m.projectName}</p>
+                  </div>
+                  <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+                    {m.dueDate ? new Date(m.dueDate).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className={`rounded-lg border p-3 text-center ${view.deliverablesPending > 0 ? "border-amber-200 bg-amber-50" : "bg-zinc-50"}`}>
+            <ClipboardList className={`mx-auto h-4 w-4 ${view.deliverablesPending > 0 ? "text-amber-600" : "text-zinc-400"}`} aria-hidden />
+            <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{view.deliverablesPending}</p>
+            <p className="text-[11px] text-zinc-500">deliverable menunggu review</p>
+          </div>
+          <div className={`rounded-lg border p-3 text-center ${view.inReview > 0 ? "border-amber-200 bg-amber-50" : "bg-zinc-50"}`}>
+            <Factory className={`mx-auto h-4 w-4 ${view.inReview > 0 ? "text-amber-600" : "text-zinc-400"}`} aria-hidden />
+            <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{view.inReview}</p>
+            <p className="text-[11px] text-zinc-500">proyek status review</p>
+          </div>
+          <div className={`rounded-lg border p-3 text-center ${view.pendingCRs > 0 ? "border-rose-200 bg-rose-50" : "bg-zinc-50"}`}>
+            <GitPullRequestArrow className={`mx-auto h-4 w-4 ${view.pendingCRs > 0 ? "text-rose-600" : "text-zinc-400"}`} aria-hidden />
+            <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{view.pendingCRs}</p>
+            <p className="text-[11px] text-zinc-500">CR menunggu klien</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Cockpit TEAM (HR/Manager) — komposisi tim + beban tugas + audit. */
+function TeamCockpit({ view, auditItems, onOpen }: { view: DashboardTeamView; auditItems: AuditLogDTO[]; onOpen: (m: ModuleKey) => void }) {
+  return (
+    <section aria-label="Ikhtisar tim" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <Users className="h-4 w-4 text-orange-600" aria-hidden /> Komposisi Tim
+          </h3>
+          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 tabular-nums">{view.activeUsers}/{view.totalUsers} aktif</Badge>
+        </div>
+        <ul className="divide-y divide-zinc-100">
+          {view.usersByRole.map((r) => (
+            <li key={r.role} className="flex items-center justify-between gap-2 py-2">
+              <span className="flex items-center gap-1.5 text-sm text-zinc-700">
+                <UserCheck className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+                {ROLES.find((x) => x.key === r.role)?.label ?? r.role}
+              </span>
+              <span className="text-sm tabular-nums">
+                <span className="font-bold text-zinc-900">{r.count}</span>
+                {r.active < r.count ? <span className="ml-1 text-xs text-rose-500">({r.count - r.active} nonaktif)</span> : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("users")} aria-label="Buka User & Access">
+          Kelola Pengguna <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+          <ListTodo className="h-4 w-4 text-orange-600" aria-hidden /> Beban Tugas Tim
+        </h3>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-lg bg-zinc-50 p-3">
+            <p className="text-2xl font-bold tabular-nums text-zinc-900">{view.tasksOpen}</p>
+            <p className="text-[11px] text-zinc-500">tugas terbuka</p>
+          </div>
+          <div className={`rounded-lg p-3 ${view.tasksDueToday > 0 ? "bg-amber-50" : "bg-zinc-50"}`}>
+            <p className={`text-2xl font-bold tabular-nums ${view.tasksDueToday > 0 ? "text-amber-700" : "text-zinc-900"}`}>{view.tasksDueToday}</p>
+            <p className="text-[11px] text-zinc-500">due hari ini</p>
+          </div>
+          <div className={`rounded-lg p-3 ${view.tasksOverdue > 0 ? "bg-rose-50" : "bg-zinc-50"}`}>
+            <p className={`text-2xl font-bold tabular-nums ${view.tasksOverdue > 0 ? "text-rose-600" : "text-zinc-900"}`}>{view.tasksOverdue}</p>
+            <p className="text-[11px] text-zinc-500">terlambat</p>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" className="mt-3 w-full text-zinc-500" onClick={() => onOpen("followups")} aria-label="Buka Follow-up Center">
+          Buka Follow-up Center <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+
+      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
+        <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+          <Clock3 className="h-4 w-4 text-orange-600" aria-hidden /> Aktivitas Terbaru
+        </h3>
+        <RecentAuditList items={auditItems} maxHeight="max-h-64" />
+        <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("audit")} aria-label="Buka Audit Logs">
+          Buka Audit Logs <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/** View minimal untuk role client — arahkan ke portal. */
+function ClientWelcome({ onOpen }: { onOpen: (m: ModuleKey) => void }) {
+  return (
+    <section aria-label="Selamat datang klien" className="rounded-xl border bg-white p-8 text-center shadow-sm">
+      <UserCheck className="mx-auto h-10 w-10 text-orange-500" aria-hidden />
+      <h2 className="mt-3 text-lg font-bold text-zinc-900">Selamat datang di Grup CRM</h2>
+      <p className="mx-auto mt-1 max-w-md text-sm text-zinc-500">
+        Akun klien diproses lewat Portal Klien — di sana Anda bisa meninjau deliverable, memberi persetujuan, dan mengajukan change request.
+      </p>
+      <Button size="sm" className="mt-4" onClick={() => onOpen("portal")} aria-label="Buka Portal Klien">
+        Buka Portal Klien <ArrowRight className="h-4 w-4" aria-hidden />
+      </Button>
+    </section>
+  );
+}
+
 export default function DashboardModule() {
   const brands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
@@ -625,6 +1115,21 @@ export default function DashboardModule() {
   const funnelMax = Math.max(...data.funnel.map((f) => f.count), 1);
   const wonCount = data.funnel.find((f) => f.stage === "won")?.count ?? 0;
 
+  // ==== Ronde 31 — per-role dashboard ====
+  const role = user?.role ?? null;
+  const roleView = data.roleView;
+  const isExec = role === "super_admin" || role === "director";
+  const isManager = role === "manager";
+  const isMarketing = role === "marketing";
+  const isFinance = role === "finance";
+  const isProduction = role === "production";
+  const isHr = role === "hr";
+  const isClient = role === "client";
+  // Seksi eksekutif tampil utk owner + manager; marketing/finance/production/hr/client
+  // mendapat cockpit khusus sebagai pengganti.
+  const showExecSections = isExec || isManager;
+  const showSlaStrip = isExec || isManager || isMarketing;
+
   const bestMarketerIdx = data.marketingPerf.reduce((best, m, i, arr) => {
     const cur = arr[best];
     if (m.won > cur.won || (m.won === cur.won && m.leads > cur.leads)) return i;
@@ -633,33 +1138,55 @@ export default function DashboardModule() {
 
   const lostMax = Math.max(...data.lostReasons.map((r) => r.count), 1);
 
-  const kpiCards: KpiDef[] = [
-    {
-      key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue),
-      icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up",
-    },
-    {
-      key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline),
-      icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up",
-    },
-    {
-      key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`,
-      icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, accent: true, goodWhen: "up",
-    },
-    {
-      key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue),
-      icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up",
-    },
-    {
-      key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours),
-      icon: Timer, hint: "rata-rata waktu respons lead", accent: false, goodWhen: "down",
-      badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge>,
-    },
-    {
-      key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices),
-      icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down",
-    },
-  ];
+  // ==== Ronde 31 — KPI cards sesuai peran ====
+  interface RoleKpi { key?: KpiTrendKey; label: string; value: string; icon: LucideIcon; hint: string; accent?: boolean; goodWhen?: "up" | "down"; badge?: ReactNode; tone?: "default" | "danger" | "ok" }
+  const roleKpis: RoleKpi[] = (() => {
+    const mv = roleView?.mine;
+    const fv = roleView?.finance;
+    const pv = roleView?.production;
+    if (isMarketing && mv) {
+      return [
+        { label: "Pipeline Saya", value: formatCurrency(mv.pipelineValue), icon: Wallet, hint: `${mv.openLeads} deal terbuka milik saya`, accent: true },
+        { label: "Deal Won Saya", value: formatCurrency(mv.wonValue), icon: Trophy, hint: `${mv.wonCount} deal berhasil ditutup`, accent: true },
+        { label: "Tugas Due Hari Ini", value: String(mv.tasksDueToday), icon: CalendarClock, hint: mv.tasksDueToday > 0 ? "selesaikan sebelum hari berakhir" : "tidak ada tenggat hari ini", tone: mv.tasksDueToday > 0 ? "danger" : "ok" },
+        { label: "Tugas Terlambat", value: String(mv.tasksOverdue), icon: AlarmClockOff, hint: mv.tasksOverdue > 0 ? "segera follow-up kembali" : "semua tugas dalam kontrol", tone: mv.tasksOverdue > 0 ? "danger" : "ok" },
+      ];
+    }
+    if (isFinance && fv) {
+      return [
+        { label: "Outstanding", value: formatCurrency(fv.outstanding), icon: ReceiptText, hint: "total tagihan belum lunas", accent: true, goodWhen: "down" },
+        { label: "Terkumpul Bulan Ini", value: formatCurrency(fv.collectedThisMonth), icon: Coins, hint: "payment diterima bulan berjalan", accent: true },
+        { label: "Diterbitkan Bulan Ini", value: formatCurrency(fv.billedThisMonth), icon: Banknote, hint: "invoice terbit bulan berjalan" },
+        { label: "Invoice Terlambat", value: String(fv.overdueCount), icon: AlarmClockOff, hint: fv.overdueCount > 0 ? "perlu penagihan segera" : "semua tagihan lancar", tone: fv.overdueCount > 0 ? "danger" : "ok" },
+      ];
+    }
+    if (isProduction && pv) {
+      return [
+        { label: "Proyek Aktif", value: String(pv.activeProjects), icon: Rocket, hint: "planning + berjalan + review", accent: true },
+        { label: "Proyek Berisiko", value: String(pv.atRisk), icon: AlertTriangle, hint: "tenggat ≤ 7 hari & belum selesai", tone: pv.atRisk > 0 ? "danger" : "ok" },
+        { label: "Milestone ≤ 7 Hari", value: String(pv.milestonesDueSoon.length), icon: CalendarClock, hint: "milestone jatuh tempo minggu ini", tone: pv.milestonesDueSoon.length > 0 ? "danger" : "ok" },
+        { label: "Deliverable Pending", value: String(pv.deliverablesPending), icon: ClipboardList, hint: "menunggu review internal/klien", tone: pv.deliverablesPending > 0 ? "danger" : "ok" },
+      ];
+    }
+    if (isHr && roleView?.team) {
+      const tv = roleView.team;
+      return [
+        { label: "Total Pengguna", value: String(tv.totalUsers), icon: Users, hint: "seluruh akun terdaftar", accent: true },
+        { label: "Pengguna Aktif", value: String(tv.activeUsers), icon: UserCheck, hint: `${tv.totalUsers - tv.activeUsers} akun nonaktif`, tone: tv.activeUsers < tv.totalUsers ? "danger" : "ok" },
+        { label: "Tugas Tim Terbuka", value: String(tv.tasksOpen), icon: ListTodo, hint: `${tv.tasksDueToday} due hari ini` },
+        { label: "Tugas Tim Terlambat", value: String(tv.tasksOverdue), icon: AlarmClockOff, hint: tv.tasksOverdue > 0 ? "butuh redistribusi beban" : "beban tim terkendali", tone: tv.tasksOverdue > 0 ? "danger" : "ok" },
+      ];
+    }
+    // Eksekutif (super_admin/director/manager) + fallback — KPI bawaan
+    return [
+      { key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue), icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up" },
+      { key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline), icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up" },
+      { key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`, icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, accent: true, goodWhen: "up" },
+      { key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue), icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up" },
+      { key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours), icon: Timer, hint: "rata-rata waktu respons lead", accent: false, goodWhen: "down", badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge> },
+      { key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices), icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down" },
+    ];
+  })();
 
   return (
     <div className="space-y-6">
@@ -667,7 +1194,9 @@ export default function DashboardModule() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">Command Center</h1>
-          <p className="mt-0.5 text-sm text-zinc-500">Ringkasan eksekutif lintas brand</p>
+          <p className="mt-0.5 text-sm text-zinc-500">
+            {role ? (ROLE_DASH_SUBTITLE[role] ?? "Ringkasan eksekutif lintas brand") : "Ringkasan eksekutif lintas brand"}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {user ? (
@@ -703,8 +1232,8 @@ export default function DashboardModule() {
         </div>
       </header>
 
-      {/* ============ Alert strip SLA (Fase 3) ============ */}
-      {slaBreaches > 0 ? (
+      {/* ============ Alert strip SLA (Fase 3) — hanya peran penjualan ============ */}
+      {showSlaStrip && slaBreaches > 0 ? (
         <div
           role="alert"
           aria-label="Peringatan SLA terlambat"
@@ -735,38 +1264,58 @@ export default function DashboardModule() {
         </div>
       ) : null}
 
-      {/* ============ KPI ============ */}
+      {/* ============ KPI (sesuai peran — Ronde 31) ============ */}
       <section aria-label="KPI utama" className="space-y-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Ringkasan Kinerja</h2>
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {kpiCards.map((c) => (
+          {roleKpis.map((c) => (
             <KpiCard
-              key={c.key}
+              key={c.label}
               label={c.label}
               value={c.value}
               icon={c.icon}
               hint={c.hint}
               badge={c.badge}
-              trend={trendNode(trends[c.key] ?? null, c.goodWhen)}
+              trend={c.key ? trendNode(trends[c.key] ?? null, c.goodWhen ?? "up") : null}
               accentColor={c.accent ? firstBrandColor : undefined}
+              tone={c.tone ?? "default"}
             />
           ))}
-          <KpiCard
-            label="SLA Terlambat"
-            value={String(slaBreaches)}
-            icon={AlarmClockOff}
-            hint={slaBreaches > 0 ? "lead melewati SLA respons" : "Semua lead dalam SLA"}
-            tone={slaBreaches > 0 ? "danger" : "ok"}
-          />
-          <KpiCard
-            label="CR Menunggu Klien"
-            value={String(pendingCRs)}
-            icon={GitPullRequestArrow}
-            hint={pendingCRs > 0 ? "change request menunggu persetujuan klien" : "Tidak ada change request pending"}
-            tone={pendingCRs > 0 ? "danger" : "ok"}
-          />
+          {showSlaStrip ? (
+            <KpiCard
+              label="SLA Terlambat"
+              value={String(slaBreaches)}
+              icon={AlarmClockOff}
+              hint={slaBreaches > 0 ? "lead melewati SLA respons" : "Semua lead dalam SLA"}
+              tone={slaBreaches > 0 ? "danger" : "ok"}
+            />
+          ) : null}
+          {showExecSections || isProduction ? (
+            <KpiCard
+              label="CR Menunggu Klien"
+              value={String(pendingCRs)}
+              icon={GitPullRequestArrow}
+              hint={pendingCRs > 0 ? "change request menunggu persetujuan klien" : "Tidak ada change request pending"}
+              tone={pendingCRs > 0 ? "danger" : "ok"}
+            />
+          ) : null}
         </div>
       </section>
+
+      {/* ============ Cockpit per role (Ronde 31) ============ */}
+      {isClient ? <ClientWelcome onOpen={setActiveModule} /> : null}
+      {isMarketing && roleView?.mine ? (
+        <MarketingCockpit view={roleView.mine} onOpen={setActiveModule} />
+      ) : null}
+      {isFinance && roleView?.finance ? (
+        <FinanceCockpit view={roleView.finance} onOpen={setActiveModule} />
+      ) : null}
+      {isProduction && roleView?.production ? (
+        <ProductionCockpit view={roleView.production} onOpen={setActiveModule} />
+      ) : null}
+      {isHr && roleView?.team ? (
+        <TeamCockpit view={roleView.team} auditItems={data.recentAudit} onOpen={setActiveModule} />
+      ) : null}
 
       {/* ============ Notifikasi Ringkas (Fase 3) ============ */}
       <NotificationBriefWidget />
@@ -804,7 +1353,8 @@ export default function DashboardModule() {
         </section>
       ) : null}
 
-      {/* ============ Funnel + Charts ============ */}
+      {/* ============ Funnel + Charts (eksekutif & manager) ============ */}
+      {showExecSections ? (
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <SectionCard
           ariaLabel="Funnel konversi"
@@ -909,8 +1459,10 @@ export default function DashboardModule() {
           </SectionCard>
         </div>
       </div>
+      ) : null}
 
-      {/* ============ Pipeline per Brand ============ */}
+      {/* ============ Pipeline per Brand (eksekutif, manager & marketing) ============ */}
+      {showExecSections || isMarketing ? (
       <section aria-label="Pipeline per brand" className="space-y-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Perbandingan Brand</p>
@@ -961,39 +1513,45 @@ export default function DashboardModule() {
           </div>
         )}
       </section>
+      ) : null}
 
-      {/* ============ Lost Reasons + Marketing Perf ============ */}
+      {/* ============ Lost Reasons (eksekutif & manager) + Marketing Perf (eksekutif, manager & marketing) ============ */}
+      {showExecSections || isMarketing ? (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {showExecSections ? (
         <SectionCard
           ariaLabel="Alasan lost"
           title="Alasan Lost"
           subtitle="Distribusi alasan kegagalan deal"
           overline="Evaluasi Deal"
         >
-          {data.lostReasons.length === 0 ? (
-            <EmptyState text="Tidak ada opportunity lost — bagus, pertahankan!" />
-          ) : (
-            <div className="space-y-3">
-              {data.lostReasons.map((r) => {
-                const pct = Math.round((r.count / lostMax) * 100);
-                return (
-                  <div key={r.reason} className="flex items-center gap-3">
-                    <div className="w-32 shrink-0 truncate text-xs text-zinc-600 sm:w-44" title={r.reason}>{r.reason}</div>
-                    <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
-                      <div
-                        className="h-full rounded transition-all duration-500"
-                        style={{ width: `${pct}%`, backgroundColor: "#dc2626" }}
-                      />
+          {showExecSections ? (
+            data.lostReasons.length === 0 ? (
+              <EmptyState text="Tidak ada opportunity lost — bagus, pertahankan!" />
+            ) : (
+              <div className="space-y-3">
+                {data.lostReasons.map((r) => {
+                  const pct = Math.round((r.count / lostMax) * 100);
+                  return (
+                    <div key={r.reason} className="flex items-center gap-3">
+                      <div className="w-32 shrink-0 truncate text-xs text-zinc-600 sm:w-44" title={r.reason}>{r.reason}</div>
+                      <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
+                        <div
+                          className="h-full rounded transition-all duration-500"
+                          style={{ width: `${pct}%`, backgroundColor: "#dc2626" }}
+                        />
+                      </div>
+                      <div className="w-6 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">
+                        {r.count}
+                      </div>
                     </div>
-                    <div className="w-6 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">
-                      {r.count}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )
+          ) : null}
         </SectionCard>
+        ) : null}
 
         <SectionCard
           ariaLabel="Performa marketing"
@@ -1038,9 +1596,12 @@ export default function DashboardModule() {
           )}
         </SectionCard>
       </div>
+      ) : null}
 
-      {/* ============ Distribusi + Produksi & Risiko ============ */}
+      {/* ============ Distribusi (eksekutif & manager) + Produksi & Risiko (eksekutif, manager & produksi) ============ */}
+      {showExecSections || isProduction ? (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {showExecSections ? (
         <SectionCard
           ariaLabel="Distribusi kanal dan negara"
           title="Distribusi Kanal & Negara"
@@ -1083,6 +1644,7 @@ export default function DashboardModule() {
             </div>
           </div>
         </SectionCard>
+        ) : null}
 
         <SectionCard
           ariaLabel="Produksi dan risiko"
@@ -1112,29 +1674,10 @@ export default function DashboardModule() {
           </div>
 
           <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">Audit Terbaru</h3>
-          {data.recentAudit.length === 0 ? (
-            <p className="py-2 text-sm text-zinc-400">Belum ada aktivitas tercatat.</p>
-          ) : (
-            <ul className="crm-scroll max-h-64 overflow-y-auto pr-1">
-              {data.recentAudit.map((a) => (
-                <li
-                  key={a.id}
-                  className="flex flex-col gap-1 border-b border-zinc-100 py-2 last:border-0 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="text-sm font-medium text-zinc-900">{a.actorName}</span>
-                    <Badge className={`border-transparent uppercase ${actionBadgeClass(a.action)}`}>
-                      {a.action.replace(/_/g, " ")}
-                    </Badge>
-                    <span className="truncate text-xs text-zinc-600">{a.entityLabel ?? a.entity}</span>
-                  </div>
-                  <span className="shrink-0 text-xs text-zinc-400">{timeAgo(a.createdAt)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <RecentAuditList items={data.recentAudit} />
         </SectionCard>
       </div>
+      ) : null}
 
       {/* ============ Footer ============ */}
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 text-xs text-zinc-500">
