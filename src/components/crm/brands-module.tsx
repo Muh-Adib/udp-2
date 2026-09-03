@@ -383,12 +383,19 @@ function ServiceMapSection() {
   const loadMap = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000); // R30: skeleton tidak boleh menggantung selamanya
     try {
-      const res = await api.serviceMap();
+      const res = await api.serviceMap({ signal: ctrl.signal });
       setData(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat peta layanan");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setError("Waktu muat habis — periksa koneksi lalu coba lagi");
+      } else {
+        setError(err instanceof Error ? err.message : "Gagal memuat peta layanan");
+      }
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }, []);
@@ -417,6 +424,8 @@ function ServiceMapSection() {
       ? String(data.stats.avgBrandsPerCompany)
       : data.stats.avgBrandsPerCompany.toFixed(1)
     : "0";
+  const billedTotal = (data?.crossSell ?? []).reduce((sum, c) => sum + (c.billedValue ?? 0), 0);
+  const isEmpty = Boolean(data) && (data?.brands.length ?? 0) === 0;
 
   return (
     <section aria-label="Peta Layanan & Cross-Selling" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
@@ -428,7 +437,7 @@ function ServiceMapSection() {
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold text-zinc-900">Peta Layanan &amp; Cross-Selling</span>
             <span className="mt-0.5 block text-xs text-zinc-500">
-              Panduan strategi cross-selling antar brand &amp; acuan harga layanan (template rincian biaya)
+              Matriks layanan × brand &amp; peluang cross-selling — dihitung dari opportunity dan invoice per perusahaan
             </span>
           </span>
           <ChevronDown className={`mt-1.5 h-4 w-4 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
@@ -459,6 +468,14 @@ function ServiceMapSection() {
                 <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
               </Button>
             </div>
+          ) : isEmpty ? (
+            <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+              <MapIcon className="h-8 w-8 text-zinc-300" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-700">Belum ada brand aktif</p>
+              <p className="max-w-sm text-xs text-zinc-500">
+                Tambahkan brand dan layanan pada Pengaturan Brand — peta layanan akan terisi otomatis.
+              </p>
+            </div>
           ) : data ? (
             <>
               {/* Stat chips */}
@@ -475,6 +492,11 @@ function ServiceMapSection() {
                 <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
                   <span className="font-bold text-zinc-900">{data.stats.activeServices}</span> layanan aktif
                 </span>
+                {billedTotal > 0 ? (
+                  <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                    invoice terealisasi <span className="font-bold text-emerald-700">{fmtIDR(billedTotal)}</span>
+                  </span>
+                ) : null}
               </div>
 
               {/* Sub-tab internal */}
@@ -582,7 +604,7 @@ function ServiceMapSection() {
                       <Building2 className="h-8 w-8 text-zinc-300" aria-hidden />
                       <p className="text-sm font-semibold text-zinc-700">Belum ada data perusahaan</p>
                       <p className="max-w-sm text-xs text-zinc-500">
-                        Ringkasan cross-selling muncul setelah perusahaan memiliki opportunity atau invoice pada brand.
+                        Ringkasan cross-selling dihitung dari opportunity dan invoice per perusahaan — akan muncul setelah perusahaan digarap di salah satu brand.
                       </p>
                     </div>
                   ) : (
@@ -597,9 +619,16 @@ function ServiceMapSection() {
                                 </span>
                                 <p className="truncate text-sm font-semibold text-zinc-900">{c.companyName}</p>
                               </div>
-                              <span className="shrink-0 text-sm font-bold text-zinc-900" title="Total nilai belanja semua brand">
-                                {fmtIDR(c.totalValue)}
-                              </span>
+                              <div className="shrink-0 text-right">
+                                <p className="text-sm font-bold text-zinc-900" title="Total nilai opportunity semua brand">
+                                  {fmtIDR(c.totalValue)}
+                                </p>
+                                {(c.billedValue ?? 0) > 0 ? (
+                                  <p className="text-[11px] text-emerald-700" title="Total invoice terealisasi (bukan draft/cancelled)">
+                                    invoice {fmtIDR(c.billedValue ?? 0)}
+                                  </p>
+                                ) : null}
+                              </div>
                             </div>
 
                             {c.purchases.length > 0 ? (
@@ -611,7 +640,10 @@ function ServiceMapSection() {
                                         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.brandColor }} aria-hidden />
                                         {p.brandName}
                                       </span>
-                                      <span className="text-zinc-500">{p.serviceCount} layanan · {fmtIDR(p.totalValue)}</span>
+                                      <span className="text-zinc-500">
+                                        {p.serviceCount} layanan · {fmtIDR(p.totalValue)}
+                                        {(p.billedValue ?? 0) > 0 ? <span className="text-emerald-700"> · invoice {fmtIDR(p.billedValue ?? 0)}</span> : null}
+                                      </span>
                                     </span>
                                     {p.services.length > 0 ? (
                                       <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={p.services.join(", ")}>

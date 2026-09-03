@@ -129,8 +129,8 @@ export const api = {
       method === "DELETE" ? { method } : { method, body: JSON.stringify(payload) }
     ),
   // Ronde 29-b — peta layanan × brand & peluang cross-selling (owner view)
-  serviceMap: () =>
-    request<import("@/lib/crm/types").ServiceMapData>("/api/service-map"),
+  serviceMap: (init?: RequestInit) =>
+    request<import("@/lib/crm/types").ServiceMapData>("/api/service-map", init),
   createTemplate: (payload: Record<string, unknown>) =>
     request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>("/api/followup-templates", {
       method: "POST",

@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok } from "@/lib/crm/server";
-import { resolveActor } from "@/lib/crm/auth";
 import type { CrossSellCompany, CrossSellPurchase, CrossSellSuggestion, ServiceCostItem, ServiceMapRow } from "@/lib/crm/types";
 
 /**
@@ -15,7 +14,9 @@ import type { CrossSellCompany, CrossSellPurchase, CrossSellSuggestion, ServiceC
  *    + saran layanan brand lain yang BELUM digarap (strategi cross-selling)
  *  - stats: sebaran (perusahaan aktif, perusahaan yang pakai semua brand, rata-rata brand)
  *
- * Cross-sell dihitung dari opportunity non-lost (won + aktif) per perusahaan × brand.
+ * Cross-sell dihitung dari opportunity non-lost (won + aktif) + invoice non-draft/non-cancelled
+ * per perusahaan × brand. GET read-only terbuka (konsisten dgn seluruh GET modul ini —
+ * R30: gate sesi dihapus karena dulu bikin data tampil KOSONG diam-diam saat sesi kedaluwarsa).
  */
 function costTotalOf(costItemsJson: string | null): number | null {
   if (!costItemsJson) return null;
@@ -36,15 +37,11 @@ function suggestedOf(costTotal: number | null, marginPct: number | null, basePri
   return basePrice ?? null;
 }
 
-export async function GET(req: NextRequest) {
-  // Read-only agregat — aktor diverifikasi (401 bila sesi rusak) tanpa gate role;
-  // penyaringan tampilan dilakukan di UI (section hanya untuk super_admin/director).
-  const actor = await resolveActor(req, {});
-  if (actor.denied) {
-    return ok({ brands: [], rows: [], crossSell: [], stats: { companies: 0, coveredAll: 0, avgBrandsPerCompany: 0, activeServices: 0 } });
-  }
-
-  const [brands, categories, services, opportunities] = await Promise.all([
+export async function GET(_req: NextRequest) {
+  // Read-only agregat terbuka — konsisten dgn seluruh route GET modul (trade-off demo
+  // terdokumentasi). R30 FIX: dulu resolveActor denied → balas 200 KOSONG diam-diam,
+  // sehingga peta layanan tampil "tidak ada data" saat sesi tidak valid.
+  const [brands, categories, services, opportunities, invoices] = await Promise.all([
     db.brand.findMany({
       where: { active: true },
       orderBy: { createdAt: "asc" },
@@ -61,6 +58,11 @@ export async function GET(req: NextRequest) {
     db.opportunity.findMany({
       where: { deletedAt: null, companyId: { not: null } },
       select: { companyId: true, brandId: true, serviceName: true, estimatedValue: true, stage: true },
+    }),
+    // Invoice nyata = pembelanjaan terealisasi (bukan draft/cancelled).
+    db.invoice.findMany({
+      where: { status: { notIn: ["draft", "cancelled"] } },
+      select: { companyId: true, brandId: true, total: true, status: true },
     }),
   ]);
 
@@ -88,24 +90,33 @@ export async function GET(req: NextRequest) {
       };
     });
 
-  // ==== Cross-sell: grup opportunity per perusahaan × brand ====
-  interface Purchase { brandId: string; serviceCount: number; totalValue: number; services: Set<string> }
+  // ==== Cross-sell: grup opportunity + invoice per perusahaan × brand ====
+  interface Purchase { brandId: string; serviceCount: number; totalValue: number; billedValue: number; services: Set<string> }
   const byCompany = new Map<string, Map<string, Purchase>>();
-  for (const o of opportunities) {
-    if (!o.companyId || !brandById.has(o.brandId)) continue;
-    let perBrand = byCompany.get(o.companyId);
+  const touch = (companyId: string, brandId: string): Purchase => {
+    let perBrand = byCompany.get(companyId);
     if (!perBrand) {
       perBrand = new Map();
-      byCompany.set(o.companyId, perBrand);
+      byCompany.set(companyId, perBrand);
     }
-    let p = perBrand.get(o.brandId);
+    let p = perBrand.get(brandId);
     if (!p) {
-      p = { brandId: o.brandId, serviceCount: 0, totalValue: 0, services: new Set() };
-      perBrand.set(o.brandId, p);
+      p = { brandId, serviceCount: 0, totalValue: 0, billedValue: 0, services: new Set() };
+      perBrand.set(brandId, p);
     }
+    return p;
+  };
+  for (const o of opportunities) {
+    if (!o.companyId || !brandById.has(o.brandId)) continue;
+    const p = touch(o.companyId, o.brandId);
     p.serviceCount += 1;
     p.totalValue += o.estimatedValue ?? 0;
     if (o.serviceName) p.services.add(o.serviceName);
+  }
+  for (const inv of invoices) {
+    if (!brandById.has(inv.brandId)) continue;
+    const p = touch(inv.companyId, inv.brandId);
+    p.billedValue += inv.total ?? 0;
   }
 
   const companyIds = [...byCompany.keys()];
@@ -132,6 +143,7 @@ export async function GET(req: NextRequest) {
           brandColor: brand.color,
           serviceCount: p.serviceCount,
           totalValue: p.totalValue,
+          billedValue: p.billedValue,
           services: [...p.services],
         };
       })
@@ -155,6 +167,7 @@ export async function GET(req: NextRequest) {
       companyName: companyName.get(companyId) ?? "Perusahaan",
       purchases,
       totalValue: purchases.reduce((sum, p) => sum + p.totalValue, 0),
+      billedValue: purchases.reduce((sum, p) => sum + (p.billedValue ?? 0), 0),
       suggestions,
     });
   }

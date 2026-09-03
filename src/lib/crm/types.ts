@@ -865,6 +865,8 @@ export interface CrossSellPurchase {
   brandColor: string;
   serviceCount: number;
   totalValue: number;
+  /** Nilai invoice terealisasi (non-draft/cancelled) perusahaan tsb pada brand ini (R30). */
+  billedValue?: number;
   services: string[];
 }
 
@@ -882,6 +884,8 @@ export interface CrossSellCompany {
   companyName: string;
   purchases: CrossSellPurchase[];
   totalValue: number;
+  /** Total invoice terealisasi seluruh brand (R30). */
+  billedValue?: number;
   suggestions: CrossSellSuggestion[];
 }
 
