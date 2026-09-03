@@ -1,0 +1,545 @@
+   486→      brandId: t.brandId ?? "all",
+   487→      stage: t.stage ?? "",
+   488→      delayDays: String(t.delayDays),
+   489→      body: t.body,
+   490→      approved: t.approved,
+   491→    });
+   492→    setTemplateOpen(true);
+   493→  }
+   494→
+   495→  async function submitTemplate(e: React.FormEvent<HTMLFormElement>) {
+   496→    e.preventDefault();
+   497→    if (!templateDraft.name.trim()) { toast.error("Nama template wajib diisi"); return; }
+   498→    if (!templateDraft.body.trim()) { toast.error("Isi template wajib diisi"); return; }
+   499→    const delay = Number(templateDraft.delayDays);
+   500→    if (!Number.isInteger(delay) || delay < 0 || delay > 30) { toast.error("Jeda hari harus antara 0 dan 30"); return; }
+   501→    if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
+   502→    setTemplateSubmitting(true);
+   503→    try {
+   504→      const payload = {
+   505→        name: templateDraft.name.trim(),
+   506→        channel: templateDraft.channel,
+   507→        brandId: templateDraft.brandId === "all" ? null : templateDraft.brandId,
+   508→        stage: templateDraft.stage.trim() || null,
+   509→        delayDays: delay,
+   510→        body: templateDraft.body.trim(),
+   511→        approved: canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false),
+   512→        actorName: user.name,
+   513→        actorRole: user.role,
+   514→      };
+   515→      if (editingTemplate) {
+   516→        await api.updateTemplate(editingTemplate.id, payload);
+   517→        toast.success("Template diperbarui");
+   518→      } else {
+   519→        await api.createTemplate(payload);
+   520→        toast.success("Template dibuat");
+   521→      }
+   522→      setTemplateDraft(EMPTY_TEMPLATE_DRAFT);
+   523→      setEditingTemplate(null);
+   524→      setTemplateOpen(false);
+   525→      await loadTemplates();
+   526→    } catch (err) {
+   527→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan template");
+   528→    } finally {
+   529→      setTemplateSubmitting(false);
+   530→    }
+   531→  }
+   532→
+   533→  async function handleDeleteTemplate(t: FollowUpTemplateDTO) {
+   534→    if (!window.confirm(`Hapus template "${t.name}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+   535→    try {
+   536→      await api.deleteTemplate(t.id);
+   537→      toast.success(`Template "${t.name}" dihapus`);
+   538→      await loadTemplates();
+   539→    } catch (err) {
+   540→      toast.error(err instanceof Error ? err.message : "Gagal menghapus template");
+   541→    }
+   542→  }
+   543→
+   544→  function openBrandCreate() {
+   545→    setEditingBrand(null);
+   546→    setDraft(EMPTY_DRAFT);
+   547→    setCreateOpen(true);
+   548→  }
+   549→
+   550→  function openBrandEdit(brand: Brand) {
+   551→    setEditingBrand(brand);
+   552→    setDraft({
+   553→      name: brand.name,
+   554→      slug: brand.slug,
+   555→      color: brand.color,
+   556→      logoEmoji: brand.logoEmoji,
+   557→      description: brand.description ?? "",
+   558→      website: brand.website ?? "",
+   559→      primaryCurrency: brand.primaryCurrency,
+   560→      invoicePrefix: brand.invoicePrefix,
+   561→      quotePrefix: brand.quotePrefix,
+   562→      slaHours: String(brand.slaHours),
+   563→      portalDomain: brand.portalDomain ?? "",
+   564→      active: brand.active,
+   565→    });
+   566→    setCreateOpen(true);
+   567→  }
+   568→
+   569→  function handleNameChange(name: string) {
+   570→    // Mode edit: slug tidak ikut berubah otomatis (bisa diatur manual).
+   571→    setDraft((d) => (editingBrand ? { ...d, name } : { ...d, name, slug: slugify(name) }));
+   572→  }
+   573→
+   574→  function handleInvoicePrefixChange(value: string) {
+   575→    const upper = value.toUpperCase();
+   576→    setDraft((d) =>
+   577→      editingBrand
+   578→        ? { ...d, invoicePrefix: upper }
+   579→        : { ...d, invoicePrefix: upper, quotePrefix: quotePrefixFrom(upper) },
+   580→    );
+   581→  }
+   582→
+   583→  async function submitDraft(e: React.FormEvent<HTMLFormElement>) {
+   584→    e.preventDefault();
+   585→    if (!draft.name.trim()) { toast.error("Nama brand wajib diisi"); return; }
+   586→    if (!draft.slug.trim()) { toast.error("Slug brand wajib diisi"); return; }
+   587→    const sla = Number(draft.slaHours);
+   588→    if (!Number.isFinite(sla) || sla < 1 || sla > 72) { toast.error("SLA harus antara 1 dan 72 jam"); return; }
+   589→    if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
+   590→    setSubmitting(true);
+   591→    try {
+   592→      const payload = {
+   593→        name: draft.name.trim(),
+   594→        slug: draft.slug.trim(),
+   595→        color: draft.color,
+   596→        logoEmoji: draft.logoEmoji.trim() || "✨",
+   597→        description: draft.description.trim(),
+   598→        website: draft.website.trim(),
+   599→        primaryCurrency: draft.primaryCurrency,
+   600→        invoicePrefix: draft.invoicePrefix.trim(),
+   601→        quotePrefix: editingBrand
+   602→          ? (draft.quotePrefix.trim() || quotePrefixFrom(draft.invoicePrefix))
+   603→          : quotePrefixFrom(draft.invoicePrefix),
+   604→        slaHours: sla,
+   605→        portalDomain: draft.portalDomain.trim(),
+   606→        active: draft.active,
+   607→        actorName: user.name,
+   608→        actorRole: user.role,
+   609→      };
+   610→      if (editingBrand) {
+   611→        await api.updateBrand(editingBrand.id, payload);
+   612→        toast.success("Brand diperbarui");
+   613→      } else {
+   614→        const res = await api.createBrand(payload);
+   615→        toast.success(`Brand ${res.brand.name} dikonfigurasi`);
+   616→      }
+   617→      setDraft(EMPTY_DRAFT);
+   618→      setEditingBrand(null);
+   619→      setCreateOpen(false);
+   620→      await load(true);
+   621→    } catch (err) {
+   622→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan brand");
+   623→    } finally {
+   624→      setSubmitting(false);
+   625→    }
+   626→  }
+   627→
+   628→  if (loading && brands === null) return <BrandsSkeleton />;
+   629→
+   630→  return (
+   631→    <div className="space-y-6">
+   632→      {/* Header */}
+   633→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   634→        <div>
+   635→          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Konfigurasi Brand</h1>
+   636→          <p className="text-sm text-zinc-500">Tambah brand baru tanpa mengubah source code</p>
+   637→        </div>
+   638→        <div className="flex items-center gap-2">
+   639→          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar brand">
+   640→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   641→          </Button>
+   642→          <Button size="sm" onClick={openBrandCreate} aria-label="Tambah brand baru">
+   643→            <Plus className="h-4 w-4" aria-hidden /> Tambah Brand
+   644→          </Button>
+   645→        </div>
+   646→      </div>
+   647→
+   648→      {error ? (
+   649→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+   650→      ) : null}
+   651→
+   652→      {/* Filter layanan */}
+   653→      <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+   654→        <div className="flex items-center gap-2">
+   655→          <Layers className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+   656→          <Select value={serviceFilter} onValueChange={setServiceFilter}>
+   657→            <SelectTrigger className="w-full sm:w-[260px]" aria-label="Filter brand berdasarkan layanan">
+   658→              <SelectValue placeholder="Semua layanan" />
+   659→            </SelectTrigger>
+   660→            <SelectContent>
+   661→              <SelectItem value="all">Semua Layanan</SelectItem>
+   662→              {allServices.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+   663→            </SelectContent>
+   664→          </Select>
+   665→        </div>
+   666→        <span className="text-xs text-zinc-500 sm:ml-auto">{filteredBrands.length} dari {brands?.length ?? 0} brand</span>
+   667→      </div>
+   668→
+   669→      {/* Grid brand */}
+   670→      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+   671→        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onEdit={openBrandEdit} onSettings={(brand) => { setSettingsBrand(brand); setSettingsOpen(true); }} />)}
+   672→
+   673→        {/* Kartu tambah */}
+   674→        <button
+   675→          type="button"
+   676→          onClick={openBrandCreate}
+   677→          aria-label="Tambah brand baru"
+   678→          className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-300 p-5 text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-600"
+   679→        >
+   680→          <Plus className="h-8 w-8" aria-hidden />
+   681→          <span className="text-sm font-semibold">Tambah Brand</span>
+   682→          <span className="max-w-[220px] text-center text-xs">Definisikan brand, warna, SLA, dan prefix invoice</span>
+   683→        </button>
+   684→      </div>
+   685→
+   686→      {/* Konfigurasi pipeline standar */}
+   687→      <section aria-label="Konfigurasi pipeline standar" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+   688→        <div className="mb-4">
+   689→          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+   690→            <Wand2 className="h-3.5 w-3.5" aria-hidden /> Standar Tim Sales
+   691→          </p>
+   692→          <h2 className="mt-1 text-sm font-semibold text-zinc-900">Konfigurasi Pipeline Standar (12 Stage)</h2>
+   693→          <p className="mt-0.5 text-xs text-zinc-500">
+   694→            Acuan baku dari lead baru hingga deal — dipakai sebagai acuan aktivitas follow-up di semua brand.
+   695→          </p>
+   696→        </div>
+   697→        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+   698→          {PIPELINE_STAGES.map((s, i) => <PipelineStageCard key={s.key} stage={s} index={i} />)}
+   699→        </div>
+   700→      </section>
+   701→
+   702→      {/* Template follow-up */}
+   703→      <section aria-label="Template follow-up" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+   704→        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+   705→          <div>
+   706→            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+   707→              <FileText className="h-3.5 w-3.5" aria-hidden /> Template Pesan
+   708→            </p>
+   709→            <h2 className="mt-1 text-sm font-semibold text-zinc-900">Template Follow-up</h2>
+   710→            <p className="mt-0.5 text-xs text-zinc-500">
+   711→              Pesan siap pakai dengan variabel kontak/brand — terkirim otomatis sesuai jeda H+ dan kanal.
+   712→            </p>
+   713→          </div>
+   714→          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+   715→            <Button size="sm" variant="outline" onClick={openTemplateCreate} aria-label="Tambah template follow-up baru">
+   716→              <Plus className="h-4 w-4" aria-hidden /> Template Baru
+   717→            </Button>
+   718→            <Select value={channelFilter} onValueChange={setChannelFilter}>
+   719→              <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filter template berdasarkan kanal">
+   720→                <SelectValue placeholder="Semua kanal" />
+   721→              </SelectTrigger>
+   722→              <SelectContent>
+   723→                <SelectItem value="all">Semua Kanal</SelectItem>
+   724→                {templateChannels.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+   725→              </SelectContent>
+   726→            </Select>
+   727→            <span className="hidden text-xs text-zinc-500 lg:inline">{filteredTemplates.length} template</span>
+   728→          </div>
+   729→        </div>
+   730→
+   731→        {templatesLoading && templates === null ? (
+   732→          <TemplatesSkeleton />
+   733→        ) : templatesError ? (
+   734→          <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+   735→            <span>{templatesError}</span>
+   736→            <Button variant="outline" size="sm" onClick={() => void loadTemplates()} aria-label="Coba lagi memuat template follow-up">
+   737→              <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+   738→            </Button>
+   739→          </div>
+   740→        ) : filteredTemplates.length === 0 ? (
+   741→          <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+   742→            <FileText className="h-8 w-8 text-zinc-300" aria-hidden />
+   743→            <p className="text-sm font-semibold text-zinc-700">Belum ada template follow-up</p>
+   744→            <p className="max-w-sm text-xs text-zinc-500">
+   745→              {channelFilter && channelFilter !== "all"
+   746→                ? "Tidak ada template untuk kanal ini — coba pilih kanal lain."
+   747→                : "Template akan muncul di sini setelah ditambahkan ke daftar pesan bawaan."}
+   748→            </p>
+   749→          </div>
+   750→        ) : (
+   751→          <div className="crm-scroll max-h-96 overflow-y-auto pr-1">
+   752→            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+   753→              {filteredTemplates.map((t) => (
+   754→                <TemplateCard
+   755→                  key={t.id}
+   756→                  template={t}
+   757→                  brandName={t.brandId ? brandNameById.get(t.brandId) : undefined}
+   758→                  onEdit={openTemplateEdit}
+   759→                  onDelete={(tpl) => void handleDeleteTemplate(tpl)}
+   760→                />
+   761→              ))}
+   762→            </div>
+   763→          </div>
+   764→        )}
+   765→      </section>
+   766→
+   767→      {/* Dialog tambah / edit brand */}
+   768→      <Dialog open={createOpen} onOpenChange={(open) => { if (!submitting) { setCreateOpen(open); if (!open) setEditingBrand(null); } }}>
+   769→        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+   770→          <DialogHeader>
+   771→            <DialogTitle>{editingBrand ? "Edit Brand" : "Tambah Brand Baru"}</DialogTitle>
+   772→            <DialogDescription>
+   773→              {editingBrand
+   774→                ? `Perubahan brand ${editingBrand.name} tersimpan ke database dan langsung dipakai di seluruh modul CRM.`
+   775→                : "Detail brand akan tersimpan ke database dan langsung dipakai di seluruh modul CRM — tanpa mengubah source code."}
+   776→            </DialogDescription>
+   777→          </DialogHeader>
+   778→          <form onSubmit={submitDraft} className="grid gap-4 py-2">
+   779→            <div className="grid gap-4 sm:grid-cols-2">
+   780→              <div className="grid gap-2">
+   781→                <Label htmlFor="brand-name">Nama Brand *</Label>
+   782→                <Input
+   783→                  id="brand-name" value={draft.name} required
+   784→                  onChange={(e) => handleNameChange(e.target.value)}
+   785→                  placeholder="Contoh: Zenith Creative"
+   786→                />
+   787→              </div>
+   788→              <div className="grid gap-2">
+   789→                <Label htmlFor="brand-slug">Slug</Label>
+   790→                <Input
+   791→                  id="brand-slug" value={draft.slug} required
+   792→                  onChange={(e) => setDraft((d) => ({ ...d, slug: slugify(e.target.value) }))}
+   793→                  placeholder="zenith_creative"
+   794→                />
+   795→                <p className="text-[11px] text-zinc-400">Unik, dipakai di URL/invoice prefix</p>
+   796→              </div>
+   797→            </div>
+   798→            <div className="grid gap-4 sm:grid-cols-2">
+   799→              <div className="grid gap-2">
+   800→                <Label htmlFor="brand-color" className="items-center gap-2">
+   801→                  <Palette className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Warna Brand
+   802→                </Label>
+   803→                <div className="flex items-center gap-2">
+   804→                  <Input
+   805→                    id="brand-color" type="color" className="h-10 w-14 cursor-pointer p-1"
+   806→                    value={draft.color}
+   807→                    onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))}
+   808→                    aria-label="Pilih warna brand"
+   809→                  />
+   810→                  <span className="flex items-center gap-1.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs font-mono text-zinc-600">
+   811→                    <span className="h-3 w-3 rounded-full border border-zinc-200" style={{ backgroundColor: draft.color }} aria-hidden />
+   812→                    {draft.color}
+   813→                  </span>
+   814→                </div>
+   815→              </div>
+   816→              <div className="grid gap-2">
+   817→                <Label htmlFor="brand-emoji">Logo Emoji</Label>
+   818→                <Input
+   819→                  id="brand-emoji" value={draft.logoEmoji} maxLength={4}
+   820→                  onChange={(e) => setDraft((d) => ({ ...d, logoEmoji: e.target.value }))}
+   821→                  placeholder="✨"
+   822→                />
+   823→              </div>
+   824→            </div>
+   825→            <div className="grid gap-2">
+   826→              <Label htmlFor="brand-desc">Deskripsi</Label>
+   827→              <Input
+   828→                id="brand-desc" value={draft.description}
+   829→                onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+   830→                placeholder="Bidang layanan utama brand ini"
+   831→              />
+   832→            </div>
+   833→            <div className="grid gap-4 sm:grid-cols-3">
+   834→              <div className="grid gap-2">
+   835→                <Label htmlFor="brand-currency">Mata Uang</Label>
+   836→                <Select value={draft.primaryCurrency} onValueChange={(v) => setDraft((d) => ({ ...d, primaryCurrency: v }))}>
+   837→                  <SelectTrigger id="brand-currency"><SelectValue /></SelectTrigger>
+   838→                  <SelectContent>
+   839→                    {CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+   840→                  </SelectContent>
+   841→                </Select>
+   842→              </div>
+   843→              <div className="grid gap-2">
+   844→                <Label htmlFor="brand-prefix">Prefix Invoice</Label>
+   845→                <Input
+   846→                  id="brand-prefix" value={draft.invoicePrefix}
+   847→                  onChange={(e) => handleInvoicePrefixChange(e.target.value)}
+   848→                  placeholder="ZTH-2026"
+   849→                />
+   850→              </div>
+   851→              <div className="grid gap-2">
+   852→                <Label htmlFor="brand-sla">SLA (jam)</Label>
+   853→                <Input
+   854→                  id="brand-sla" type="number" min={1} max={72} value={draft.slaHours}
+   855→                  onChange={(e) => setDraft((d) => ({ ...d, slaHours: e.target.value }))}
+   856→                  aria-label="SLA respons dalam jam (1 sampai 72)"
+   857→                />
+   858→              </div>
+   859→            </div>
+   860→            <div className="grid gap-4 sm:grid-cols-2">
+   861→              <div className="grid gap-2">
+   862→                <Label htmlFor="brand-quote-prefix">Prefix Quotation</Label>
+   863→                <Input
+   864→                  id="brand-quote-prefix" value={draft.quotePrefix}
+   865→                  onChange={(e) => setDraft((d) => ({ ...d, quotePrefix: e.target.value.toUpperCase() }))}
+   866→                  placeholder="QZTH"
+   867→                />
+   868→                {!editingBrand ? (
+   869→                  <p className="text-[11px] text-zinc-400">Otomatis mengikuti prefix invoice — boleh diubah.</p>
+   870→                ) : null}
+   871→              </div>
+   872→              <div className="grid gap-2">
+   873→                <Label htmlFor="brand-website">Website</Label>
+   874→                <Input
+   875→                  id="brand-website" type="url" value={draft.website}
+   876→                  onChange={(e) => setDraft((d) => ({ ...d, website: e.target.value }))}
+   877→                  placeholder="https://zenith.co.id"
+   878→                />
+   879→              </div>
+   880→              <div className="grid gap-2">
+   881→                <Label htmlFor="brand-portal">Portal Domain</Label>
+   882→                <Input
+   883→                  id="brand-portal" value={draft.portalDomain}
+   884→                  onChange={(e) => setDraft((d) => ({ ...d, portalDomain: e.target.value }))}
+   885→                  placeholder="portal.zenith.co.id"
+   886→                />
+   887→              </div>
+   888→              <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+   889→                <div className="space-y-0.5">
+   890→                  <Label htmlFor="brand-active" className="text-sm">Brand aktif</Label>
+   891→                  <p className="text-[11px] text-zinc-500">Brand nonaktif disembunyikan dari daftar brand.</p>
+   892→                </div>
+   893→                <Switch
+   894→                  id="brand-active"
+   895→                  checked={draft.active}
+   896→                  onCheckedChange={(v) => setDraft((d) => ({ ...d, active: v }))}
+   897→                  aria-label="Aktifkan atau nonaktifkan brand"
+   898→                />
+   899→              </div>
+   900→            </div>
+   901→            <DialogFooter className="mt-2">
+   902→              <Button type="button" variant="outline" onClick={() => { setCreateOpen(false); setEditingBrand(null); }} disabled={submitting}>Batal</Button>
+   903→              <Button type="submit" disabled={submitting} aria-label={editingBrand ? "Simpan perubahan brand" : "Simpan brand baru"}>
+   904→                {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : editingBrand ? <Pencil className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+   905→                {submitting ? "Menyimpan…" : editingBrand ? "Simpan Perubahan" : "Simpan Brand"}
+   906→              </Button>
+   907→            </DialogFooter>
+   908→          </form>
+   909→        </DialogContent>
+   910→      </Dialog>
+   911→
+   912→      {/* Dialog template follow-up (baru / edit) */}
+   913→      <Dialog open={templateOpen} onOpenChange={(open) => { if (!templateSubmitting) { setTemplateOpen(open); if (!open) setEditingTemplate(null); } }}>
+   914→        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-xl">
+   915→          <DialogHeader>
+   916→            <DialogTitle>{editingTemplate ? "Edit Template Follow-up" : "Template Follow-up Baru"}</DialogTitle>
+   917→            <DialogDescription>
+   918→              {editingTemplate
+   919→                ? `Mengubah isi pesan akan menaikkan versi template (saat ini v${editingTemplate.version}).`
+   920→                : "Pesan siap pakai yang terkirim otomatis sesuai jeda H+ dan kanal — tanpa mengubah source code."}
+   921→            </DialogDescription>
+   922→          </DialogHeader>
+   923→          <form onSubmit={submitTemplate} className="grid gap-4 py-2">
+   924→            <div className="grid gap-4 sm:grid-cols-2">
+   925→              <div className="grid gap-2">
+   926→                <Label htmlFor="tpl-name">Nama Template *</Label>
+   927→                <Input
+   928→                  id="tpl-name" value={templateDraft.name} required
+   929→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, name: e.target.value }))}
+   930→                  placeholder="Contoh: Follow-up Kunjungan H+1"
+   931→                />
+   932→              </div>
+   933→              <div className="grid gap-2">
+   934→                <Label htmlFor="tpl-channel">Kanal *</Label>
+   935→                <Select value={templateDraft.channel} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, channel: v }))}>
+   936→                  <SelectTrigger id="tpl-channel"><SelectValue /></SelectTrigger>
+   937→                  <SelectContent>
+   938→                    {TEMPLATE_CHANNELS.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+   939→                  </SelectContent>
+   940→                </Select>
+   941→              </div>
+   942→              <div className="grid gap-2">
+   943→                <Label htmlFor="tpl-brand">Cakupan Brand</Label>
+   944→                <Select value={templateDraft.brandId} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, brandId: v }))}>
+   945→                  <SelectTrigger id="tpl-brand"><SelectValue /></SelectTrigger>
+   946→                  <SelectContent>
+   947→                    <SelectItem value="all">Semua brand</SelectItem>
+   948→                    {(brands ?? []).map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+   949→                  </SelectContent>
+   950→                </Select>
+   951→              </div>
+   952→              <div className="grid gap-2">
+   953→                <Label htmlFor="tpl-delay">Jeda (hari, H+)</Label>
+   954→                <Input
+   955→                  id="tpl-delay" type="number" min={0} max={30} value={templateDraft.delayDays} required
+   956→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, delayDays: e.target.value }))}
+   957→                  aria-label="Jeda follow-up dalam hari (0 sampai 30)"
+   958→                />
+   959→              </div>
+   960→              <div className="grid gap-2 sm:col-span-2">
+   961→                <Label htmlFor="tpl-stage">Stage Pipeline (opsional)</Label>
+   962→                <Input
+   963→                  id="tpl-stage" value={templateDraft.stage}
+   964→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, stage: e.target.value }))}
+   965→                  placeholder="cth. after_visit"
+   966→                />
+   967→              </div>
+   968→            </div>
+   969→            <div className="grid gap-2">
+   970→              <Label htmlFor="tpl-body">Isi Pesan *</Label>
+   971→              <Textarea
+   972→                id="tpl-body" rows={6} value={templateDraft.body} required
+   973→                onChange={(e) => setTemplateDraft((d) => ({ ...d, body: e.target.value }))}
+   974→                placeholder={"Halo {namaKontak}, terima kasih sudah bertemu dengan tim {brand}. Berikut penawaran {layanan} dari kami…"}
+   975→              />
+   976→              <p className="text-[11px] text-zinc-400">
+   977→                Placeholder otomatis diganti saat pengiriman: <code className="font-mono">{"{namaKontak}"}</code>{" "}
+   978→                <code className="font-mono">{"{brand}"}</code> <code className="font-mono">{"{layanan}"}</code>
+   979→              </p>
+   980→            </div>
+   981→            <div className="rounded-lg border bg-zinc-50 p-3">
+   982→              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Pratinjau</p>
+   983→              {templateDraft.body.trim() ? (
+   984→                <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-700">{templatePreview}</p>
+   985→              ) : (
+   986→                <p className="text-sm text-zinc-400">Isi pesan untuk melihat pratinjau dengan contoh nilai.</p>
+   987→              )}
+   988→            </div>
+   989→            <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+   990→              <div className="space-y-0.5">
+   991→                <Label htmlFor="tpl-approved" className="text-sm">Setujui template</Label>
+   992→                <p className="text-[11px] text-zinc-500">
+   993→                  {canApproveTemplates
+   994→                    ? "Template disetujui siap dipakai pengiriman otomatis."
+   995→                    : "Hanya Direktur/Super Admin yang bisa menandai disetujui."}
+   996→                </p>
+   997→              </div>
+   998→              <Switch
+   999→                id="tpl-approved"
+  1000→                checked={canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false)}
+  1001→                disabled={!canApproveTemplates}
+  1002→                onCheckedChange={(v) => setTemplateDraft((d) => ({ ...d, approved: v }))}
+  1003→                aria-label="Tandai template disetujui"
+  1004→              />
+  1005→            </div>
+  1006→            <DialogFooter className="mt-2">
+  1007→              <Button type="button" variant="outline" onClick={() => { setTemplateOpen(false); setEditingTemplate(null); }} disabled={templateSubmitting}>Batal</Button>
+  1008→              <Button type="submit" disabled={templateSubmitting} aria-label={editingTemplate ? "Simpan perubahan template" : "Simpan template baru"}>
+  1009→                {templateSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+  1010→                {templateSubmitting ? "Menyimpan…" : editingTemplate ? "Simpan Perubahan" : "Simpan Template"}
+  1011→              </Button>
+  1012→            </DialogFooter>
+  1013→          </form>
+  1014→        </DialogContent>
+  1015→      </Dialog>
+  1016→
+  1017→      {/* Ronde 29-b — Pengaturan Brand lengkap (identitas asli, layanan & workflow, surat, integrasi) */}
+  1018→      <BrandSettingsDialog
+  1019→        brand={settingsBrand}
+  1020→        open={settingsOpen}
+  1021→        onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsBrand(null); }}
+  1022→        onSaved={(updated) => {
+  1023→          setSettingsBrand((prev) => (prev && prev.id === updated.id ? updated : prev));
+  1024→          setBrands((prev) => (prev ?? []).map((b) => (b.id === updated.id ? updated : b)));
+  1025→        }}
+  1026→      />
+  1027→    </div>
+  1028→  );
+  1029→}
+  1030→
