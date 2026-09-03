@@ -47,9 +47,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!/^#[0-9a-fA-F]{6}$/.test(color)) return fail("Warna harus format hex #RRGGBB");
     data.color = color;
   }
-  if (body.logoEmoji !== undefined) {
-    data.logoEmoji = String(body.logoEmoji).trim() || "◆";
-  }
   if (body.description !== undefined) data.description = String(body.description).trim() || null;
   if (body.website !== undefined) data.website = String(body.website).trim() || null;
   if (body.primaryCurrency !== undefined) {
@@ -148,7 +145,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   // Ringkasan singkat perubahan utk audit: "Ubah brand Unimasi (slaHours 4→6)".
   const prev: Record<string, unknown> = {
-    name: brand.name, slug: brand.slug, color: brand.color, logoEmoji: brand.logoEmoji,
+    name: brand.name, slug: brand.slug, color: brand.color,
     description: brand.description, website: brand.website, primaryCurrency: brand.primaryCurrency,
     invoicePrefix: brand.invoicePrefix, quotePrefix: brand.quotePrefix, slaHours: brand.slaHours,
     portalDomain: brand.portalDomain, active: brand.active,

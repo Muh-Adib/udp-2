@@ -43,7 +43,7 @@ export async function seedDatabase(force = false) {
   // Logo asli diunduh dari situs resmi (tanpa generate) → public/brands/.
   const [unimasi, segia, erfo, unicam] = await Promise.all([
     db.brand.create({ data: {
-      name: "Unimasi", slug: "unimasi", color: "#eab308", logoEmoji: "🎬",
+      name: "Unimasi", slug: "unimasi", color: "#eab308",
       description: "Penyedia jasa video animasi profesional: company profile, pembelajaran, marketing, dan infografis.",
       website: "https://www.unimasi.com",
       logoUrl: "/brands/logo-unimasi.png",
@@ -58,7 +58,7 @@ export async function seedDatabase(force = false) {
       invoicePrefix: "UMS", slaHours: 4,
     } }),
     db.brand.create({ data: {
-      name: "Segia Tech", slug: "segia_tech", color: "#059669", logoEmoji: "💻",
+      name: "Segia Tech", slug: "segia_tech", color: "#059669",
       description: "Jasa pembuatan website dengan desain responsif, SEO teroptimasi, dan solusi UI/UX yang intuitif.",
       website: "https://www.segiatech.com",
       logoUrl: "/brands/logo-segia.png",
@@ -72,7 +72,7 @@ export async function seedDatabase(force = false) {
       invoicePrefix: "SGT", slaHours: 2,
     } }),
     db.brand.create({ data: {
-      name: "Erfo Multimedia", slug: "erfo_multimedia", color: "#e11d48", logoEmoji: "📹",
+      name: "Erfo Multimedia", slug: "erfo_multimedia", color: "#e11d48",
       description: "Jasa video profesional: dokumentasi, live streaming, video shooting, serta video 360 di Yogyakarta dan sekitarnya.",
       website: "https://www.erfomultimedia.com",
       logoUrl: "/brands/logo-erfo.png",
@@ -86,7 +86,7 @@ export async function seedDatabase(force = false) {
       invoicePrefix: "EFM", slaHours: 6,
     } }),
     db.brand.create({ data: {
-      name: "Unicam Studio", slug: "unicam_studio", color: "#be123c", logoEmoji: "✨",
+      name: "Unicam Studio", slug: "unicam_studio", color: "#be123c",
       description: "Production house: corporate video, 3D animation, AI video, virtual tour & immersive experience.",
       website: "https://www.unicamstudio.com",
       logoUrl: "/brands/logo-unicam.png",
@@ -106,8 +106,9 @@ export async function seedDatabase(force = false) {
   const seedCatalog = async (
     brandId: string,
     categories: Array<{ name: string; description?: string; services: Array<{
-      name: string; unit?: string; basePrice?: number;
+      name: string; unit?: string; basePrice?: number; targetMarginPct?: number;
       workflow?: Array<{ phase: string; name: string; isMilestone?: boolean }>;
+      cost?: Array<{ name: string; amount: number; note?: string }>;
     }> }>
   ) => {
     for (const [ci, cat] of categories.entries()) {
@@ -119,6 +120,8 @@ export async function seedDatabase(force = false) {
           data: {
             brandId, categoryId: created.id, name: svc.name,
             unit: svc.unit ?? null, basePrice: svc.basePrice ?? null, order: si,
+            costItems: svc.cost?.length ? JSON.stringify(svc.cost) : null,
+            targetMarginPct: svc.targetMarginPct ?? 30,
           },
         });
         if (svc.workflow?.length) {
@@ -138,12 +141,12 @@ export async function seedDatabase(force = false) {
     {
       name: "Animasi 3D", description: "Animasi 3D untuk pembelajaran, produk, dan promosi.",
       services: [
-        { name: "Pembuatan Video Pembelajaran Anak Anak 3D", unit: "episode", basePrice: 35000000, workflow: [
+        { name: "Pembuatan Video Pembelajaran Anak Anak 3D", unit: "episode", basePrice: 35000000, cost: [ { name: "Creative Concept & Storyboard", amount: 4500000, note: "2 putaran revisi" }, { name: "Modeling 3D & Rigging", amount: 8500000 }, { name: "Animasi & Rendering", amount: 11000000 }, { name: "Sound Design & Musik", amount: 2500000 }, { name: "Manajemen Proyek", amount: 1500000 } ], workflow: [
           { phase: "Pra Production", name: "Creative Concept & Story Board" },
           { phase: "Production", name: "Modeling, Rigging & Animasi 3D", isMilestone: true },
           { phase: "Post Production", name: "Rendering, Compositing & Final Delivery", isMilestone: true },
         ] },
-        { name: "Animasi 3D Company Profile", unit: "video", basePrice: 45000000, workflow: [
+        { name: "Animasi 3D Company Profile", unit: "video", basePrice: 45000000, cost: [ { name: "Konsep & Naskah", amount: 5000000 }, { name: "Modeling & Material", amount: 12000000 }, { name: "Animasi 3D", amount: 13000000 }, { name: "Rendering & Compositing", amount: 6500000 }, { name: "Manajemen Proyek", amount: 2000000 } ], workflow: [
           { phase: "Pra Production", name: "Konsep & Naskah" },
           { phase: "Production", name: "Produksi Animasi 3D", isMilestone: true },
           { phase: "Post Production", name: "Editing & Final Render", isMilestone: true },
@@ -153,7 +156,7 @@ export async function seedDatabase(force = false) {
     {
       name: "Ilustrasi 3D",
       services: [
-        { name: "Ilustrasi 3D Produk", unit: "asset", basePrice: 12000000, workflow: [
+        { name: "Ilustrasi 3D Produk", unit: "asset", basePrice: 12000000, cost: [ { name: "Referensi & Sketch", amount: 1500000 }, { name: "Modeling & Material", amount: 4500000 }, { name: "Lighting & Render Final", amount: 2500000 } ], workflow: [
           { phase: "Pra Production", name: "Referensi & Sketch" },
           { phase: "Production", name: "Modeling & Material", isMilestone: true },
           { phase: "Post Production", name: "Lighting & Render Final", isMilestone: true },
@@ -163,13 +166,13 @@ export async function seedDatabase(force = false) {
     {
       name: "Animasi 2D",
       services: [
-        { name: "Animasi Video Sosialisasi", unit: "video", basePrice: 25000000, workflow: [
+        { name: "Animasi Video Sosialisasi", unit: "video", basePrice: 25000000, cost: [ { name: "Naskah & Storyboard", amount: 3000000 }, { name: "Produksi Animasi 2D", amount: 10500000 }, { name: "Sound Design & Delivery", amount: 3000000 } ], workflow: [
           { phase: "Pra Production", name: "Naskah & Storyboard" },
           { phase: "Production", name: "Produksi Animasi 2D", isMilestone: true },
           { phase: "Post Production", name: "Sound Design & Delivery", isMilestone: true },
         ] },
-        { name: "Animasi Video Infografis", unit: "video", basePrice: 20000000 },
-        { name: "Animasi Video Marketing/Iklan", unit: "video", basePrice: 30000000 },
+        { name: "Animasi Video Infografis", unit: "video", basePrice: 20000000, cost: [ { name: "Naskah & Storyboard", amount: 2500000 }, { name: "Animasi Infografis", amount: 8500000 }, { name: "Sound Design", amount: 2000000 } ] },
+        { name: "Animasi Video Marketing/Iklan", unit: "video", basePrice: 30000000, cost: [ { name: "Konsep Kreatif & Naskah", amount: 4000000 }, { name: "Produksi Animasi", amount: 13000000 }, { name: "Sound & Final Delivery", amount: 3500000 } ] },
       ],
     },
   ]);
@@ -178,20 +181,20 @@ export async function seedDatabase(force = false) {
     {
       name: "Website", description: "Pembuatan website responsif & SEO teroptimasi.",
       services: [
-        { name: "Website Company Profile", unit: "proyek", basePrice: 8500000, workflow: [
+        { name: "Website Company Profile", unit: "proyek", basePrice: 8500000, cost: [ { name: "UI/UX Design", amount: 2000000 }, { name: "Development Frontend & CMS", amount: 3000000 }, { name: "Hosting & Domain (tahun 1)", amount: 800000 }, { name: "QA & SEO Setup", amount: 700000 } ], workflow: [
           { phase: "Discovery", name: "Analisis Kebutuhan & Sitemap" },
           { phase: "Design", name: "UI/UX Design", isMilestone: true },
           { phase: "Development", name: "Development & QA", isMilestone: true },
           { phase: "Launch", name: "Deploy & SEO Setup", isMilestone: true },
         ] },
-        { name: "Web Application", unit: "proyek", basePrice: 35000000 },
-        { name: "Website E-Commerce", unit: "proyek", basePrice: 28000000 },
+        { name: "Web Application", unit: "proyek", basePrice: 35000000, cost: [ { name: "Analisis & Arsitektur Sistem", amount: 4500000 }, { name: "Development Backend & Frontend", amount: 16000000 }, { name: "Testing & QA", amount: 2500000 }, { name: "Deployment & Dokumentasi", amount: 2000000 } ] },
+        { name: "Website E-Commerce", unit: "proyek", basePrice: 28000000, cost: [ { name: "UI/UX + Katalog Produk", amount: 4500000 }, { name: "Development Payment Gateway", amount: 13000000 }, { name: "QA & Launch", amount: 2000000 } ] },
       ],
     },
     {
       name: "AI Apps", description: "Pengembangan aplikasi berbasis AI.",
       services: [
-        { name: "AI Apps Production", unit: "proyek", basePrice: 60000000, workflow: [
+        { name: "AI Apps Production", unit: "proyek", basePrice: 60000000, cost: [ { name: "Use Case & Data Audit", amount: 6000000 }, { name: "Prototipe AI & Prompt Engineering", amount: 22000000 }, { name: "Integrasi & Testing", amount: 9000000 }, { name: "Infrastruktur & Monitoring", amount: 3500000 } ], workflow: [
           { phase: "Discovery", name: "Use Case & Data Audit" },
           { phase: "Build", name: "Prototipe AI", isMilestone: true },
           { phase: "Build", name: "Integrasi & Testing", isMilestone: true },
@@ -202,7 +205,7 @@ export async function seedDatabase(force = false) {
     {
       name: "Digital Marketing",
       services: [
-        { name: "SEO Optimization", unit: "bulan", basePrice: 5000000 },
+        { name: "SEO Optimization", unit: "bulan", basePrice: 5000000, targetMarginPct: 55, cost: [ { name: "Audit & Riset Keyword", amount: 750000 }, { name: "Optimasi On-Page", amount: 1250000 }, { name: "Konten & Backlink", amount: 1000000 } ] },
       ],
     },
   ]);
@@ -211,18 +214,18 @@ export async function seedDatabase(force = false) {
     {
       name: "Dokumentasi", description: "Foto & video dokumentasi profesional.",
       services: [
-        { name: "Dokumentasi Foto/Video", unit: "hari", basePrice: 15000000, workflow: [
+        { name: "Dokumentasi Foto/Video", unit: "hari", basePrice: 15000000, cost: [ { name: "Kru & Kamera (per hari)", amount: 6000000 }, { name: "Transport & Konsumsi Kru", amount: 1500000 }, { name: "Editing & Color Grading", amount: 2500000 }, { name: "Perangkat (drone/stabilizer)", amount: 1500000 } ], workflow: [
           { phase: "Pra Produksi", name: "Rundown & Scaling Ekspisi" },
           { phase: "Produksi", name: "Shooting di Lokasi", isMilestone: true },
           { phase: "Pasca Produksi", name: "Editing & Color Grading", isMilestone: true },
         ] },
-        { name: "Shooting Iklan", unit: "proyek", basePrice: 80000000 },
+        { name: "Shooting Iklan", unit: "proyek", basePrice: 80000000, cost: [ { name: "Talent & Kru Profesional", amount: 22000000 }, { name: "Set & Properti", amount: 12000000 }, { name: "Perangkat Kamera & Lighting", amount: 10000000 }, { name: "Pasca Produksi (edit, grading, VFX)", amount: 14000000 } ] },
       ],
     },
     {
       name: "Live Streaming",
       services: [
-        { name: "Live Streaming Event", unit: "hari", basePrice: 25000000, workflow: [
+        { name: "Live Streaming Event", unit: "hari", basePrice: 25000000, cost: [ { name: "Multi-Kamera & Operator", amount: 7000000 }, { name: "Encoder & Internet Dedicated", amount: 3500000 }, { name: "Kru Switcher & Audio", amount: 4000000 } ], workflow: [
           { phase: "Pra Produksi", name: "Survey Lokasi & Setup Plan" },
           { phase: "Produksi", name: "Live Run Multi-Kamera", isMilestone: true },
           { phase: "Pasca Produksi", name: "Highlight & Arsip", isMilestone: true },
@@ -232,7 +235,7 @@ export async function seedDatabase(force = false) {
     {
       name: "Video 360",
       services: [
-        { name: "Video 360 / Virtual Tour 360", unit: "lokasi", basePrice: 18000000, workflow: [
+        { name: "Video 360 / Virtual Tour 360", unit: "lokasi", basePrice: 18000000, cost: [ { name: "Capture Kamera 360", amount: 4500000 }, { name: "Stitching & Retouch Panorama", amount: 3500000 }, { name: "Publikasi Hosting Tour", amount: 1200000 } ], workflow: [
           { phase: "Pra Produksi", name: "Mapping Titik Panorama" },
           { phase: "Produksi", name: "Capture 360", isMilestone: true },
           { phase: "Pasca Produksi", name: "Stitching & Publikasi Tour", isMilestone: true },
@@ -245,34 +248,34 @@ export async function seedDatabase(force = false) {
     {
       name: "Video Production",
       services: [
-        { name: "Corporate Video", unit: "video", basePrice: 65000000, workflow: [
+        { name: "Corporate Video", unit: "video", basePrice: 65000000, cost: [ { name: "Concept & Script", amount: 7000000 }, { name: "Shooting (kru, kamera, talent)", amount: 22000000 }, { name: "Editing & Motion Graphics", amount: 11000000 }, { name: "Voice Over & Musik Lisensi", amount: 4500000 } ], workflow: [
           { phase: "Pre Production", name: "Concept & Script" },
           { phase: "Production", name: "Shooting", isMilestone: true },
           { phase: "Post Production", name: "Editing & Motion Graphics", isMilestone: true },
         ] },
-        { name: "3D Advertising Video", unit: "video", basePrice: 95000000 },
+        { name: "3D Advertising Video", unit: "video", basePrice: 95000000, cost: [ { name: "Concept & 3D Storyboard", amount: 9000000 }, { name: "3D Modeling & Animation", amount: 32000000 }, { name: "Rendering Farm & Compositing", amount: 18000000 }, { name: "Sound Design & Mixing", amount: 5000000 } ] },
       ],
     },
     {
       name: "AI Video",
       services: [
-        { name: "AI Video Production", unit: "video", basePrice: 38000000, workflow: [
+        { name: "AI Video Production", unit: "video", basePrice: 38000000, cost: [ { name: "Prompt Design & Asset Prep", amount: 5500000 }, { name: "AI Generation & Curation", amount: 12000000 }, { name: "Final Assembly & QC", amount: 4500000 } ], workflow: [
           { phase: "Pre Production", name: "Prompt Design & Asset Prep" },
           { phase: "Production", name: "AI Generation & Curation", isMilestone: true },
           { phase: "Post Production", name: "Final Assembly", isMilestone: true },
         ] },
-        { name: "AI Short Film Production", unit: "film", basePrice: 120000000 },
+        { name: "AI Short Film Production", unit: "film", basePrice: 120000000, cost: [ { name: "Screenplay & Storyboard", amount: 10000000 }, { name: "AI Generation Pipeline", amount: 45000000 }, { name: "Editing & Sound", amount: 15000000 } ] },
       ],
     },
     {
       name: "Immersive",
       services: [
-        { name: "Virtual Tour", unit: "lokasi", basePrice: 45000000, workflow: [
+        { name: "Virtual Tour", unit: "lokasi", basePrice: 45000000, cost: [ { name: "Survey & Scene Plan", amount: 4000000 }, { name: "Capture & Interactive Build", amount: 16000000 }, { name: "Publish & QA Device", amount: 5000000 } ], workflow: [
           { phase: "Pre Production", name: "Survey & Scene Plan" },
           { phase: "Production", name: "Capture & Interactive Build", isMilestone: true },
           { phase: "Post Production", name: "Publish & QA Device", isMilestone: true },
         ] },
-        { name: "Projection Mapping", unit: "event", basePrice: 150000000 },
+        { name: "Projection Mapping", unit: "event", basePrice: 150000000, cost: [ { name: "Konsep & Visual Mapping", amount: 18000000 }, { name: "Konten Proyeksi (animasi)", amount: 45000000 }, { name: "Perangkat Projector & Instalasi", amount: 30000000 } ] },
       ],
     },
   ]);

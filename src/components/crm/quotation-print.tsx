@@ -29,7 +29,7 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
       {/* Kop surat — Ronde 29-b: pakai gambar kop milik brand bila ada, fallback logo asli */}
       {brand?.letterheadHeader ? (
         <div className="mb-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+          { }
           <img src={brand.letterheadHeader} alt={`Kop surat ${brand.name}`} className="h-24 w-full object-contain object-top sm:h-28" />
         </div>
       ) : null}
@@ -37,9 +37,13 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             {brand?.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
+               
               <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
-            ) : brand?.logoEmoji ? <span className="text-3xl leading-none">{brand.logoEmoji}</span> : null}
+            ) : brand ? (
+              <span className="flex h-12 w-12 items-center justify-center rounded-lg border text-2xl font-bold leading-none" style={{ color: brandColor }} aria-hidden>
+                {brand.name.charAt(0).toUpperCase()}
+              </span>
+            ) : null}
             <div>
               <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
                 {brand?.name ?? "Grup Agensi Kreatif"}
@@ -180,7 +184,7 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
       {/* Footer surat — Ronde 29-b: gambar kaki surat brand / catatan footer */}
       {brand?.letterheadFooter ? (
         <div className="mt-8">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+          { }
           <img src={brand.letterheadFooter} alt={`Kaki surat ${brand.name}`} className="h-16 w-full object-contain object-bottom" />
         </div>
       ) : (

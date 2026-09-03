@@ -14,7 +14,6 @@ model Brand {
   name            String
   slug            String   @unique
   color           String   @default("#f97316") // hex accent
-  logoEmoji       String   @default("◆")
   description     String?
   website         String?
   primaryCurrency String   @default("IDR")
@@ -620,6 +619,8 @@ model Service {
   description String?
   unit        String? // satuan penjualan (video, episode, proyek, bulan)
   basePrice   Float? // harga acuan (opsional)
+  costItems   String? // JSON rincian biaya [{name, amount, note?}] — template harga marketing
+  targetMarginPct Float? // margin target % untuk saran harga (fallback 30)
   order       Int             @default(0)
   active      Boolean         @default(true)
   createdAt   DateTime        @default(now())

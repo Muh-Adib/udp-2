@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
       connectedAt: new Date(),
       lastTestedAt: new Date(),
     },
-    include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+    include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
   });
 
   await logAudit({

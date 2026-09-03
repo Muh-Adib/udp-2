@@ -43,7 +43,7 @@ function maskCredentials(raw: string): Record<string, string> {
 async function load(id: string) {
   return db.channelConfig.findUnique({
     where: { id },
-    include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+    include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
   });
 }
 
@@ -120,7 +120,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         statusNote: action === "disconnect" ? "Diputuskan oleh pengguna" : "Disambungkan kembali oleh pengguna",
         ...(action === "reconnect" ? { connectedAt: new Date() } : {}),
       },
-      include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+      include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
     });
     await logAudit({
       actorName, actorRole,
@@ -144,7 +144,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           statusNote: "Koneksi demo — kredensial buatan, verifikasi nyata dilewati",
           lastTestedAt: new Date(),
         },
-        include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+        include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
       });
       await logAudit({
         actorName, actorRole,
@@ -168,7 +168,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         statusNote: result.note,
         lastTestedAt: new Date(),
       },
-      include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+      include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
     });
     await logAudit({
       actorName, actorRole,
@@ -215,7 +215,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const updated = await db.channelConfig.update({
     where: { id },
     data,
-    include: { brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } } },
+    include: { brand: { select: { id: true, name: true, slug: true, color: true } } },
   });
   await logAudit({
     actorName, actorRole,

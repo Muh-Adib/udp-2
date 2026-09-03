@@ -5,7 +5,6 @@ export interface Brand {
   name: string;
   slug: string;
   color: string;
-  logoEmoji: string;
   description?: string | null;
   website?: string | null;
   primaryCurrency: string;
@@ -668,7 +667,7 @@ export interface ClientBriefDTO {
   code: string;
   opportunityId: string;
   brandId: string;
-  brand?: { id: string; name: string; slug: string; color: string; logoEmoji: string };
+  brand?: { id: string; name: string; slug: string; color: string };
   title: string;
   serviceTypes: string[];
   objectives?: string | null;
@@ -702,7 +701,7 @@ export interface ChannelConfigDTO {
   id: string;
   channel: string;
   brandId?: string | null;
-  brand?: { id: string; name: string; slug: string; color: string; logoEmoji: string } | null;
+  brand?: { id: string; name: string; slug: string; color: string } | null;
   displayName: string;
   accountRef?: string | null;
   credentials: MaskedCredentials;
@@ -803,6 +802,13 @@ export interface WorkflowStageDTO {
   order: number;
 }
 
+/** Satu butir rincian biaya template harga layanan (Ronde 29-b). */
+export interface ServiceCostItem {
+  name: string;
+  amount: number;
+  note?: string | null;
+}
+
 export interface ServiceDTO {
   id: string;
   categoryId?: string | null;
@@ -810,6 +816,10 @@ export interface ServiceDTO {
   description?: string | null;
   unit?: string | null;
   basePrice?: number | null;
+  costItems?: ServiceCostItem[] | null;
+  costTotal?: number | null;
+  suggestedPrice?: number | null;
+  targetMarginPct?: number | null;
   order: number;
   active: boolean;
   workflow: WorkflowStageDTO[];
@@ -828,4 +838,57 @@ export interface BrandServiceCatalog {
   brand: { id: string; name: string; slug: string };
   categories: ServiceCategoryDTO[];
   services: ServiceDTO[];
+}
+
+// ============ Ronde 29-b — Peta layanan × brand & cross-selling (owner) ============
+
+/** Baris layanan utk matriks brand (peta layanan). */
+export interface ServiceMapRow {
+  id: string;
+  name: string;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  brandId: string;
+  brandName: string;
+  brandColor: string;
+  unit?: string | null;
+  basePrice?: number | null;
+  costTotal?: number | null;
+  suggestedPrice?: number | null;
+  active: boolean;
+}
+
+/** Riwayat belanja 1 perusahaan pada 1 brand. */
+export interface CrossSellPurchase {
+  brandId: string;
+  brandName: string;
+  brandColor: string;
+  serviceCount: number;
+  totalValue: number;
+  services: string[];
+}
+
+/** Peluang cross-sell 1 perusahaan ke brand lain. */
+export interface CrossSellSuggestion {
+  brandId: string;
+  brandName: string;
+  brandColor: string;
+  topService?: string | null;
+  basePrice?: number | null;
+}
+
+export interface CrossSellCompany {
+  companyId: string;
+  companyName: string;
+  purchases: CrossSellPurchase[];
+  totalValue: number;
+  suggestions: CrossSellSuggestion[];
+}
+
+/** Payload GET /api/service-map. */
+export interface ServiceMapData {
+  brands: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; tagline?: string | null }[];
+  rows: ServiceMapRow[];
+  crossSell: CrossSellCompany[];
+  stats: { companies: number; coveredAll: number; avgBrandsPerCompany: number; activeServices: number };
 }

@@ -6,17 +6,18 @@
  * 4 tab:
  *  1. Identitas     — logo asli (preview/upload) + tagline + alamat + kontak resmi
  *  2. Layanan       — kategori & layanan khas brand + workflow produksi custom
- *                     (fase → langkah, sebagian ditandai milestone)
+ *                     (fase → langkah) + RINCIAN BIAYA per layanan (template harga
+ *                     marketing: butir biaya → total, margin target, saran harga)
  *  3. Surat         — kop/kaki surat (upload gambar) + gaya template surat
- *  4. Integrasi     — kanal milik brand sendiri (WhatsApp/IG/Threads/Email),
+ *  4. Integrasi     — SEMUA tipe kanal (WhatsApp/IG/Threads/Email) + status koneksi
+ *                     per kanal (Terhubung/Error/Terputus/Belum terhubung),
  *                     hubungkan demo 1-klik atau buka modul Kanal untuk setup nyata
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AtSign, BadgeCheck, Building2, ChevronDown, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, Loader2, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Save, Send,
-  Sparkles, Trash2, TriangleAlert, X,
+  AtSign, BadgeCheck, Building2, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
+  Layers, Link2, Loader2, Mail, MessageCircle, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -35,8 +36,9 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api, channelsApi } from "@/lib/crm/api-client";
+import { CHANNEL_TYPES, CHANNEL_TYPE_KEYS } from "@/lib/crm/channels";
 import type {
-  Brand, BrandServiceCatalog, ChannelConfigDTO, ServiceCategoryDTO, ServiceDTO,
+  Brand, BrandServiceCatalog, ChannelConfigDTO, ServiceCategoryDTO, ServiceCostItem, ServiceDTO,
 } from "@/lib/crm/types";
 
 // ============ Util ============
@@ -66,6 +68,23 @@ function readImageFile(file: File, maxChars = 1_500_000): Promise<string> {
   });
 }
 
+// ============ Util format ============
+
+const IDR_FMT = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+
+/** Format uang rupiah tanpa desimal (mis. Rp28.000.000). */
+function fmtIDR(value: number): string {
+  return IDR_FMT.format(value);
+}
+
+/** Tanggal-waktu ringkas id-ID (mis. 02 Sep, 13.01) — "" bila tidak valid. */
+function fmtWhen(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(d);
+}
+
 export const CHANNEL_ICON: Record<string, LucideIcon> = {
   whatsapp: MessageCircle,
   instagram: Instagram,
@@ -73,12 +92,10 @@ export const CHANNEL_ICON: Record<string, LucideIcon> = {
   email: Mail,
 };
 
-const CHANNEL_LABEL: Record<string, string> = {
-  whatsapp: "WhatsApp Business",
-  instagram: "Instagram Direct",
-  threads: "Threads",
-  email: "Email Bisnis",
-};
+/** Label kanal dari katalog tipe kanal (fallback: key). */
+function channelLabel(key: string): string {
+  return CHANNEL_TYPES[key]?.label ?? key;
+}
 
 const CHANNEL_COLOR: Record<string, string> = {
   whatsapp: "#25D366",
@@ -165,6 +182,7 @@ export default function BrandSettingsDialog({
   // Integrasi
   const [channels, setChannels] = useState<ChannelConfigDTO[] | null>(null);
   const [connectingKey, setConnectingKey] = useState<string | null>(null);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
   // Reset state saat brand berganti / dialog dibuka
   useEffect(() => {
@@ -352,22 +370,40 @@ export default function BrandSettingsDialog({
     return okDone;
   }
 
-  // ---------- Aksi: integrasi ----------
-  const brandChannels = useMemo(() => {
-    if (!channels) return [];
-    return channels.filter((c) => c.brandId === activeBrand.id);
-  }, [channels, activeBrand.id]);
+  // Ronde 29-b — simpan rincian biaya (template harga) satu layanan
+  async function saveServiceCost(serviceId: string, items: ServiceCostItem[], marginPct: number | null): Promise<boolean> {
+    try {
+      await api.brandServiceMutate(
+        activeBrand.id,
+        { kind: "service", id: serviceId, costItems: items, targetMarginPct: marginPct },
+        "PATCH"
+      );
+      await loadCatalog();
+      toast.success("Rincian biaya layanan tersimpan");
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan rincian biaya");
+      return false;
+    }
+  }
 
-  const missingChannels = useMemo(() => {
-    const present = new Set(brandChannels.map((c) => c.channel));
-    return ["whatsapp", "instagram", "threads", "email"].filter((ch) => !present.has(ch));
-  }, [brandChannels]);
+  // ---------- Aksi: integrasi ----------
+  /** Koneksi milik brand ini per tipe kanal (config pertama per channel). */
+  const cfgByChannel = new Map<string, ChannelConfigDTO>();
+  if (channels) {
+    for (const c of channels) {
+      if (c.brandId === activeBrand.id && !cfgByChannel.has(c.channel)) cfgByChannel.set(c.channel, c);
+    }
+  }
+
+  const connectedCount = CHANNEL_TYPE_KEYS.filter((key) => cfgByChannel.get(key)?.status === "connected").length;
+  const connectedPct = CHANNEL_TYPE_KEYS.length > 0 ? Math.round((connectedCount / CHANNEL_TYPE_KEYS.length) * 100) : 0;
 
   async function connectDemo(channel: string) {
     setConnectingKey(channel);
     try {
       await channelsApi.demoConnect({ channel, brandId: activeBrand.id });
-      toast.success(`Kanal ${CHANNEL_LABEL[channel] ?? channel} terhubung (demo) untuk ${activeBrand.name}`);
+      toast.success(`Kanal ${channelLabel(channel)} terhubung (demo) untuk ${activeBrand.name}`);
       await loadChannels();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menghubungkan kanal demo");
@@ -376,7 +412,21 @@ export default function BrandSettingsDialog({
     }
   }
 
+  async function reconnectChannel(id: string, label: string) {
+    setReconnectingId(id);
+    try {
+      await channelsApi.update(id, { action: "reconnect" });
+      toast.success(`Kanal ${label} disambungkan ulang`);
+      await loadChannels();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyambungkan ulang kanal");
+    } finally {
+      setReconnectingId(null);
+    }
+  }
+
   async function disconnectChannel(id: string, label: string) {
+    if (!brand) return;
     if (!window.confirm(`Putuskan kanal "${label}" untuk ${brand.name}?`)) return;
     try {
       await channelsApi.remove(id);
@@ -420,10 +470,9 @@ export default function BrandSettingsDialog({
             <div className="mb-5 flex items-center gap-4 rounded-xl border bg-zinc-50/60 p-4">
               <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white">
                 {effectiveLogo ? (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <img src={effectiveLogo} alt={`Logo ${brand.name}`} className="max-h-full max-w-full object-contain p-1.5" />
                 ) : (
-                  <span className="text-3xl" aria-hidden>{brand.logoEmoji}</span>
+                  <span className="text-3xl font-bold" style={{ color: brand.color }} aria-hidden>{brand.name.charAt(0).toUpperCase()}</span>
                 )}
               </div>
               <div className="min-w-0 flex-1 space-y-2">
@@ -534,6 +583,7 @@ export default function BrandSettingsDialog({
                 onAddStage={addStage}
                 onToggleMilestone={toggleMilestone}
                 onRemove={removeCatalog}
+                onSaveCost={saveServiceCost}
               />
             ) : (
               <p className="text-sm text-zinc-500">Katalog belum termuat.</p>
@@ -552,7 +602,6 @@ export default function BrandSettingsDialog({
                     </p>
                     <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg border bg-zinc-50">
                       {headerImg ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={headerImg} alt={`Kop surat ${brand.name}`} className="max-h-full max-w-full object-contain" />
                       ) : (
                         <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar kop — dipakai logo + alamat brand</p>
@@ -580,7 +629,6 @@ export default function BrandSettingsDialog({
                     </p>
                     <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg border bg-zinc-50">
                       {footerImg ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={footerImg} alt={`Kaki surat ${brand.name}`} className="max-h-full max-w-full object-contain" />
                       ) : (
                         <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar footer</p>
@@ -651,12 +699,11 @@ export default function BrandSettingsDialog({
                 <div className="overflow-hidden rounded-xl border">
                   <div className="border-b-2 px-4 py-3" style={{ borderColor: letter.accentColor }}>
                     {headerImg && letter.headerStyle === "letterhead-image" ? (
-                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={headerImg} alt="" className="h-10 object-contain" />
                     ) : (
                       <div className={`flex items-center gap-3 ${letter.headerStyle === "logo-center" ? "justify-center text-center" : ""}`}>
                         {letter.showLogo && effectiveLogo ? (
-                          // eslint-disable-next-line @next/next/no-img-element
+                           
                           <img src={effectiveLogo} alt="" className="h-8 object-contain" />
                         ) : null}
                         <div>
@@ -702,64 +749,117 @@ export default function BrandSettingsDialog({
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memuat kanal…
               </div>
             ) : (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  {brandChannels.length === 0 ? (
-                    <p className="text-sm text-zinc-500">Belum ada kanal terhubung untuk brand ini.</p>
-                  ) : (
-                    brandChannels.map((c) => {
-                      const Icon = CHANNEL_ICON[c.channel] ?? Link2;
-                      const color = CHANNEL_COLOR[c.channel] ?? "#52525b";
-                      return (
-                        <div key={c.id} className="flex items-center gap-3 rounded-xl border bg-white p-3.5">
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${color}1a` }} aria-hidden>
-                            <Icon className="h-4.5 w-4.5" style={{ color }} />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-zinc-900">
-                              {c.displayName} {c.isDemo ? <Badge variant="outline" className="ml-1 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Demo</Badge> : null}
-                            </p>
-                            <p className="truncate font-mono text-xs text-zinc-500">{c.accountRef}</p>
-                          </div>
-                          <Badge variant="outline" className={`shrink-0 border-transparent ${c.status === "connected" ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-600"}`}>
-                            <BadgeCheck className="h-3 w-3" aria-hidden /> {c.status === "connected" ? "Terhubung" : c.status}
-                          </Badge>
-                          <Button
-                            type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
-                            aria-label={`Putuskan kanal ${c.displayName}`}
-                            onClick={() => void disconnectChannel(c.id, c.displayName)}
-                          >
-                            <Trash2 className="h-4 w-4" aria-hidden />
-                          </Button>
-                        </div>
-                      );
-                    })
-                  )}
+              <div className="space-y-3">
+                {/* Ringkasan koneksi */}
+                <div className="rounded-xl border bg-white p-3.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="min-w-0 flex-1 text-sm font-semibold text-zinc-900">
+                      {connectedCount} dari {CHANNEL_TYPE_KEYS.length} kanal terhubung
+                    </p>
+                    {connectedCount === CHANNEL_TYPE_KEYS.length ? (
+                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                        <BadgeCheck className="h-3 w-3" aria-hidden /> Semua kanal utama terhubung
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div
+                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100"
+                    role="progressbar"
+                    aria-label="Kanal terhubung"
+                    aria-valuemin={0}
+                    aria-valuemax={CHANNEL_TYPE_KEYS.length}
+                    aria-valuenow={connectedCount}
+                  >
+                    <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${connectedPct}%` }} />
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-zinc-500">
+                    Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, gunakan Setup berpandu di modul Kanal.
+                  </p>
                 </div>
 
-                {missingChannels.length > 0 ? (
-                  <div className="rounded-xl border border-dashed p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Hubungkan kanal berikut</p>
-                    <p className="mb-3 mt-1 text-xs text-zinc-500">Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, gunakan Setup berpandu di modul Kanal.</p>
-                    <div className="flex flex-wrap gap-2">
-                      {missingChannels.map((ch) => {
-                        const Icon = CHANNEL_ICON[ch] ?? Link2;
-                        const color = CHANNEL_COLOR[ch] ?? "#52525b";
-                        return (
-                          <Button key={ch} type="button" size="sm" variant="outline" className="h-9 gap-1.5" disabled={connectingKey !== null}
-                            onClick={() => void connectDemo(ch)}>
-                            {connectingKey === ch ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
-                            {CHANNEL_LABEL[ch] ?? ch}
-                          </Button>
-                        );
-                      })}
+                {/* Semua tipe kanal + status koneksi */}
+                {CHANNEL_TYPE_KEYS.map((key) => {
+                  const meta = CHANNEL_TYPES[key];
+                  const Icon = CHANNEL_ICON[key] ?? Link2;
+                  const color = CHANNEL_COLOR[key] ?? "#52525b";
+                  const label = channelLabel(key);
+                  const cfg = cfgByChannel.get(key);
+                  return (
+                    <div key={key} className="rounded-xl border bg-white p-3.5">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${color}1a` }} aria-hidden>
+                          <Icon className="h-4.5 w-4.5" style={{ color }} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-center gap-1.5 truncate text-sm font-medium text-zinc-900">
+                            <span className="truncate">{label}</span>
+                            {cfg?.isDemo ? <Badge variant="outline" className="shrink-0 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Demo</Badge> : null}
+                          </p>
+                          <p className="truncate font-mono text-xs text-zinc-500">
+                            {cfg?.accountRef ?? (meta?.accountRefPlaceholder ? `mis. ${meta.accountRefPlaceholder}` : "—")}
+                          </p>
+                          {cfg?.status === "error" && cfg.statusNote ? (
+                            <p className="truncate text-[11px] text-amber-700">{cfg.statusNote}</p>
+                          ) : null}
+                          {cfg ? (
+                            <p className="truncate text-[11px] text-zinc-400">
+                              {cfg.lastTestedAt ? `Diuji ${fmtWhen(cfg.lastTestedAt)}` : cfg.connectedAt ? `Terhubung sejak ${fmtWhen(cfg.connectedAt)}` : "—"}
+                            </p>
+                          ) : null}
+                        </div>
+                        {cfg ? (
+                          cfg.status === "connected" ? (
+                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-50 text-emerald-700">
+                              <BadgeCheck className="h-3 w-3" aria-hidden /> Terhubung
+                            </Badge>
+                          ) : cfg.status === "error" ? (
+                            <Badge variant="outline" className="shrink-0 border-transparent bg-amber-50 text-amber-700">
+                              <TriangleAlert className="h-3 w-3" aria-hidden /> Error
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="shrink-0 border-transparent bg-zinc-100 text-zinc-600">Terputus</Badge>
+                          )
+                        ) : (
+                          <Badge variant="outline" className="shrink-0 border-zinc-200 bg-zinc-50 text-zinc-500">Belum terhubung</Badge>
+                        )}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {cfg ? (
+                            <>
+                              {cfg.status !== "connected" ? (
+                                <Button
+                                  type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+                                  disabled={reconnectingId !== null || connectingKey !== null}
+                                  onClick={() => void reconnectChannel(cfg.id, label)}
+                                >
+                                  {reconnectingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+                                  Sambungkan ulang
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button" size="sm" variant="ghost" className="h-9 text-zinc-500 hover:text-rose-600"
+                                onClick={() => void disconnectChannel(cfg.id, cfg.displayName)}
+                              >
+                                Putuskan
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+                              disabled={connectingKey !== null || reconnectingId !== null}
+                              onClick={() => void connectDemo(key)}
+                            >
+                              {connectingKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
+                              Hubungkan (Demo)
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      {!cfg ? (
+                        <p className="mt-2 border-t pt-2 text-[11px] text-zinc-400">Setup kredensial nyata via modul Kanal.</p>
+                      ) : null}
                     </div>
-                  </div>
-                ) : (
-                  <p className="flex items-center gap-1.5 text-xs text-emerald-700">
-                    <BadgeCheck className="h-4 w-4" aria-hidden /> Semua kanal utama sudah terhubung untuk brand ini.
-                  </p>
-                )}
+                  );
+                })}
               </div>
             )}
           </TabsContent>
@@ -770,16 +870,15 @@ export default function BrandSettingsDialog({
 }
 
 // ============ BrandLogo (dipakai lintas modul) ============
-
-export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "logoEmoji">; size?: "sm" | "md" | "lg" }) {
-  const dim = size === "sm" ? "h-8 w-8 text-lg" : size === "lg" ? "h-14 w-14 text-3xl" : "h-10 w-10 text-2xl";
+export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "color">; size?: "sm" | "md" | "lg" }) {
+  const dim = size === "sm" ? "h-8 w-8 text-sm" : size === "lg" ? "h-14 w-14 text-2xl" : "h-10 w-10 text-lg";
   return (
     <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-white`} aria-hidden>
       {brand.logoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
+         
         <img src={brand.logoUrl} alt="" className="max-h-full max-w-full object-contain p-1" />
       ) : (
-        <span>{brand.logoEmoji}</span>
+        <span className="font-bold" style={{ color: brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
       )}
     </span>
   );
@@ -788,7 +887,7 @@ export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | 
 // ============ Editor katalog layanan & workflow ============
 
 function CatalogEditor({
-  catalog, busyKey, onAddCategory, onAddService, onAddStage, onToggleMilestone, onRemove,
+  catalog, busyKey, onAddCategory, onAddService, onAddStage, onToggleMilestone, onRemove, onSaveCost,
 }: {
   catalog: BrandServiceCatalog;
   busyKey: string | null;
@@ -797,6 +896,7 @@ function CatalogEditor({
   onAddStage: (serviceId: string, phase: string, name: string, isMilestone: boolean) => Promise<boolean>;
   onToggleMilestone: (stage: { id: string; isMilestone: boolean; name: string }, serviceId: string) => Promise<boolean>;
   onRemove: (kind: "category" | "service" | "stage", id: string, label: string) => Promise<boolean>;
+  onSaveCost: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
 }) {
   const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
   const [openSvc, setOpenSvc] = useState<Record<string, boolean>>({});
@@ -854,7 +954,7 @@ function CatalogEditor({
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
                             <p className="text-xs text-zinc-500">
-                              {[svc.unit, svc.basePrice ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
+                              {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
                             </p>
                           </div>
                         </button>
@@ -863,6 +963,9 @@ function CatalogEditor({
                           <Trash2 className="h-3.5 w-3.5" aria-hidden />
                         </Button>
                       </div>
+
+                      {/* Rincian biaya (template harga) — Ronde 29-b */}
+                      <ServiceCostEditor service={svc} onSave={onSaveCost} />
 
                       {svcOpen ? (
                         <div className="mt-3 space-y-2.5 pl-6">
@@ -1004,9 +1107,216 @@ function ServiceAddForm({
         <Input className="h-8 text-xs" value={form.price} placeholder="35000000" inputMode="numeric"
           onChange={(e) => onChange({ ...form, price: e.target.value })} />
       </div>
-      <Button type="button" size="sm" variant="outline" className="h-8" disabled={busy || !form.name.trim()} onClick={() => void onSubmit()}>
+      <Button type="button" size="sm" variant="outline" className="h-8" disabled={busy || !form.name.trim()} onClick={() => void onSubmit(form)}>
         <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah
       </Button>
+    </div>
+  );
+}
+
+// ============ Rincian biaya per layanan (template harga marketing) — Ronde 29-b ============
+
+interface CostDraftItem {
+  name: string;
+  /** String agar input bebas mengetik angka (separator diabaikan saat parse). */
+  amount: string;
+  note?: string | null;
+}
+
+function costDraftFromService(svc: ServiceDTO): CostDraftItem[] {
+  return (svc.costItems ?? []).map((it) => ({ name: it.name, amount: String(it.amount ?? 0), note: it.note ?? null }));
+}
+
+/** Parse nominal "28.000.000" / "28000000" → number (≥0); kosong/non-angka → 0. */
+function parseAmount(raw: string): number {
+  const digits = raw.replace(/[^\d]/g, "");
+  return digits === "" ? 0 : Number(digits);
+}
+
+/** Saran harga = total biaya × (1 + margin%) dibulatkan ke 100 ribu terdekat. */
+function suggestedPriceOf(total: number, marginPct: number): number {
+  return Math.round((total * (1 + marginPct / 100)) / 100_000) * 100_000;
+}
+
+/**
+ * Blok "Rincian Biaya" per layanan — expand/collapse dgn state LOKAL
+ * (mengetik di sini tidak me-render ulang seluruh dialog).
+ */
+function ServiceCostEditor({
+  service,
+  onSave,
+}: {
+  service: ServiceDTO;
+  onSave: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<CostDraftItem[]>(() => costDraftFromService(service));
+  const [margin, setMargin] = useState<string>(() => (service.targetMarginPct != null ? String(service.targetMarginPct) : "30"));
+  const [saving, setSaving] = useState(false);
+
+  // Sinkronkan draf saat data server berubah (setelah simpan / katalog dimuat ulang)
+  useEffect(() => {
+    setItems(costDraftFromService(service));
+    setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
+  }, [service]);
+
+  const hasItems = (service.costItems ?? []).length > 0;
+  const serverTotal = service.costTotal ?? (service.costItems ?? []).reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  const serverSaran = service.suggestedPrice ?? suggestedPriceOf(serverTotal, service.targetMarginPct ?? 30);
+
+  const parsed = useMemo(
+    () => items.map((it) => ({ name: it.name.trim(), amount: parseAmount(it.amount), note: it.note ?? null })),
+    [items]
+  );
+  const invalid = parsed.some((it) => it.name === "" || !Number.isFinite(it.amount) || it.amount < 0);
+  const total = parsed.reduce((sum, it) => sum + it.amount, 0);
+  const marginNum = margin.trim() === "" ? 30 : Number(margin.replace(",", "."));
+  const marginPct = Number.isFinite(marginNum) ? Math.min(95, Math.max(0, marginNum)) : 30;
+  const saran = suggestedPriceOf(total, marginPct);
+  const basePrice = service.basePrice ?? null;
+
+  function addItem() {
+    setItems((m) => [...m, { name: "", amount: "", note: null }]);
+  }
+
+  function resetDraft() {
+    setItems(costDraftFromService(service));
+    setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
+  }
+
+  async function save() {
+    if (invalid || saving) return;
+    setSaving(true);
+    try {
+      const payload: ServiceCostItem[] = parsed.map((it) => ({ name: it.name, amount: it.amount, note: it.note }));
+      await onSave(service.id, payload, margin.trim() === "" ? null : marginPct);
+      // Sukses → katalog dimuat ulang, draf direset otomatis via useEffect [service]
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50/60">
+      <div className="flex items-center gap-1.5 px-2.5 py-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          aria-label={`Rincian biaya ${service.name}`}
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? (
+            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+          )}
+          <span className="shrink-0 text-xs font-semibold text-zinc-700">Rincian Biaya</span>
+          {!open ? (
+            hasItems ? (
+              <span className="min-w-0 truncate text-[11px] text-zinc-500">
+                {service.costItems?.length} butir · Total biaya {fmtIDR(serverTotal)} · Saran harga {fmtIDR(serverSaran)}
+              </span>
+            ) : (
+              <span className="text-[11px] italic text-zinc-400">Belum ada rincian biaya</span>
+            )
+          ) : null}
+        </button>
+        {!open && !hasItems ? (
+          <Button
+            type="button" variant="outline" className="h-7 shrink-0 px-2 text-[11px]"
+            onClick={() => { setOpen(true); if (items.length === 0) addItem(); }}
+          >
+            <Plus className="h-3 w-3" aria-hidden /> Mulai isi
+          </Button>
+        ) : null}
+      </div>
+
+      {open ? (
+        <div className="space-y-2.5 border-t px-3 py-3">
+          {items.length > 0 ? (
+            <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+              {items.map((it, idx) => (
+                <div key={idx}>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      aria-label={`Nama butir biaya ${idx + 1}`}
+                      className="h-8 min-w-0 flex-1 text-xs"
+                      placeholder="mis. Talenta / Sewa alat"
+                      value={it.name}
+                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, name: e.target.value } : row)))}
+                    />
+                    <Input
+                      aria-label={`Nominal butir biaya ${idx + 1} (rupiah)`}
+                      className="h-8 w-32 shrink-0 text-right font-mono text-xs"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={it.amount}
+                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, amount: e.target.value } : row)))}
+                    />
+                    <Button
+                      type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
+                      aria-label={`Hapus butir ${it.name.trim() || idx + 1}`}
+                      onClick={() => setItems((m) => m.filter((_, i) => i !== idx))}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                    </Button>
+                  </div>
+                  {it.note ? <p className="pl-1 text-[11px] italic text-zinc-400">{it.note}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs italic text-zinc-400">Belum ada rincian biaya — tambahkan butir komponen biaya (talenta, sewa alat, transport, dsb.).</p>
+          )}
+
+          <Button type="button" variant="outline" className="h-8" onClick={addItem}>
+            <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah butir
+          </Button>
+
+          <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg border border-dashed bg-white px-3 py-2.5">
+            <div>
+              <p className="text-[11px] text-zinc-500">Total biaya</p>
+              <p className="text-sm font-bold text-zinc-900">{fmtIDR(total)}</p>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`cost-margin-${service.id}`} className="text-[11px]">Margin target %</Label>
+              <Input
+                id={`cost-margin-${service.id}`}
+                className="h-8 w-20 text-xs"
+                inputMode="decimal"
+                placeholder="30"
+                value={margin}
+                onChange={(e) => setMargin(e.target.value)}
+              />
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] text-zinc-500">Saran harga</p>
+              <p className="text-sm font-bold text-orange-600">{fmtIDR(saran)}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {basePrice != null ? (
+              basePrice < saran ? (
+                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">Harga acuan di bawah saran</Badge>
+              ) : (
+                <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">Sesuai saran</Badge>
+              )
+            ) : null}
+            {basePrice != null ? <span className="text-[11px] text-zinc-500">Harga acuan: {fmtIDR(basePrice)}</span> : null}
+            <div className="flex-1" />
+            {invalid ? <p className="text-[11px] text-rose-600">Nama butir wajib diisi &amp; nominal ≥ 0.</p> : null}
+            <Button type="button" variant="ghost" className="h-8" disabled={saving} onClick={resetDraft}>
+              Batal
+            </Button>
+            <Button type="button" className="h-8" disabled={saving || invalid} onClick={() => void save()}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Save className="h-3.5 w-3.5" aria-hidden />}
+              Simpan rincian
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

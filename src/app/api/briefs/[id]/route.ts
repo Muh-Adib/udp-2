@@ -34,7 +34,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 
 /** Include bersama agar tipe row konsisten antara load & update. */
 const briefInclude = {
-  brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } },
+  brand: { select: { id: true, name: true, slug: true, color: true } },
   opportunity: { select: { id: true, title: true, stage: true } },
 } satisfies Prisma.ClientBriefInclude;
 

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AtSign, BellRing, CheckCircle2, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
-  Link2, Loader2, Mail, MapPin, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
+  AtSign, BellRing, Building2, CheckCircle2, ChevronDown, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
+  Link2, Loader2, Mail, Map as MapIcon, MapPin, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -25,7 +25,7 @@ import { api } from "@/lib/crm/api-client";
 import BrandSettingsDialog, { BrandLogo } from "@/components/crm/brand-settings-dialog";
 import { BRAND_SERVICES, PIPELINE_STAGES, stageLabel } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { Brand, FollowUpTemplateDTO } from "@/lib/crm/types";
+import type { Brand, CrossSellCompany, FollowUpTemplateDTO, ServiceMapData, ServiceMapRow } from "@/lib/crm/types";
 
 // ============ Meta ============
 
@@ -53,7 +53,6 @@ interface BrandDraft {
   name: string;
   slug: string;
   color: string;
-  logoEmoji: string;
   description: string;
   website: string;
   primaryCurrency: string;
@@ -86,8 +85,14 @@ function quotePrefixFrom(prefix: string): string {
   return clean ? `Q${clean}` : "";
 }
 
+function fmtIDR(value: number): string {
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
+}
+
+const SERVICE_MAP_VISIBLE_COMPANIES = 8;
+
 const EMPTY_DRAFT: BrandDraft = {
-  name: "", slug: "", color: "#ea580c", logoEmoji: "✨",
+  name: "", slug: "", color: "#ea580c",
   description: "", website: "", primaryCurrency: "IDR",
   invoicePrefix: "", quotePrefix: "", slaHours: "24", portalDomain: "", active: true,
 };
@@ -114,7 +119,7 @@ function previewTemplateBody(body: string): string {
 
 // ============ Sub-komponen kecil ============
 
-function BrandCard({ brand, onEdit, onSettings }: { brand: Brand; onEdit: (brand: Brand) => void; onSettings: (brand: Brand) => void }) {
+function BrandCard({ brand, onSettings }: { brand: Brand; onSettings: (brand: Brand) => void }) {
   const services = BRAND_SERVICES[brand.slug] ?? [];
   const contactChips: Array<{ key: string; value: string | null | undefined; label: string }> = [
     { key: "wa", value: brand.whatsappNumber, label: "WhatsApp" },
@@ -147,20 +152,10 @@ function BrandCard({ brand, onEdit, onSettings }: { brand: Brand; onEdit: (brand
             size="icon"
             className="h-8 w-8 text-zinc-400 hover:text-zinc-800"
             onClick={() => onSettings(brand)}
-            aria-label={`Kelola brand ${brand.name}`}
+            aria-label={`Pengaturan ${brand.name}`}
             title="Kelola: identitas, layanan & workflow, surat, integrasi"
           >
             <Settings2 className="h-4 w-4" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-zinc-400 hover:text-zinc-800"
-            onClick={() => onEdit(brand)}
-            aria-label={`Edit dasar brand ${brand.name}`}
-            title="Edit dasar (nama, warna, SLA, prefix)"
-          >
-            <Pencil className="h-4 w-4" aria-hidden />
           </Button>
         </div>
       </div>
@@ -375,6 +370,309 @@ function TemplatesSkeleton() {
   );
 }
 
+// ============ Ronde 29-b — Peta Layanan & Cross-Selling (super_admin + director) ============
+
+function ServiceMapSection() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<ServiceMapData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"matrix" | "crosssell">("matrix");
+  const [showAll, setShowAll] = useState(false);
+
+  const loadMap = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.serviceMap();
+      setData(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memuat peta layanan");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Lazy: fetch pertama kali hanya saat section dibuka.
+  function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next && data === null && !loading) void loadMap();
+  }
+
+  const rowsByBrand = useMemo(() => {
+    const map = new Map<string, ServiceMapRow[]>();
+    (data?.rows ?? []).forEach((row) => {
+      const list = map.get(row.brandId);
+      if (list) list.push(row);
+      else map.set(row.brandId, [row]);
+    });
+    return map;
+  }, [data]);
+
+  const companies: CrossSellCompany[] = data?.crossSell ?? [];
+  const visibleCompanies = showAll ? companies : companies.slice(0, SERVICE_MAP_VISIBLE_COMPANIES);
+  const avgBrands = data
+    ? Number.isInteger(data.stats.avgBrandsPerCompany)
+      ? String(data.stats.avgBrandsPerCompany)
+      : data.stats.avgBrandsPerCompany.toFixed(1)
+    : "0";
+
+  return (
+    <section aria-label="Peta Layanan & Cross-Selling" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <button type="button" onClick={toggleOpen} aria-expanded={open} className="flex min-w-0 flex-1 items-start gap-3 rounded-lg text-left">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600" aria-hidden>
+            <MapIcon className="h-5 w-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-zinc-900">Peta Layanan &amp; Cross-Selling</span>
+            <span className="mt-0.5 block text-xs text-zinc-500">
+              Panduan strategi cross-selling antar brand &amp; acuan harga layanan (template rincian biaya)
+            </span>
+          </span>
+          <ChevronDown className={`mt-1.5 h-4 w-4 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+        </button>
+        {open ? (
+          <Button variant="outline" size="sm" onClick={() => void loadMap()} disabled={loading} aria-label="Muat ulang peta layanan">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+          </Button>
+        ) : null}
+      </div>
+
+      {open ? (
+        <div className="mt-4">
+          {loading && data === null ? (
+            <div className="space-y-4" aria-hidden>
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-6 w-44 rounded-full" />)}
+              </div>
+              <Skeleton className="h-8 w-72 rounded-lg" />
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-48 rounded-xl" />)}
+              </div>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+              <span>{error}</span>
+              <Button variant="outline" size="sm" onClick={() => void loadMap()} aria-label="Coba lagi memuat peta layanan">
+                <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+              </Button>
+            </div>
+          ) : data ? (
+            <>
+              {/* Stat chips */}
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                  <span className="font-bold text-zinc-900">{data.stats.companies}</span> perusahaan aktif
+                </span>
+                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                  rata-rata <span className="font-bold text-zinc-900">{avgBrands}</span> brand per perusahaan
+                </span>
+                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                  <span className="font-bold text-emerald-700">{data.stats.coveredAll}</span> pakai semua brand
+                </span>
+                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                  <span className="font-bold text-zinc-900">{data.stats.activeServices}</span> layanan aktif
+                </span>
+              </div>
+
+              {/* Sub-tab internal */}
+              <div className="mt-4 inline-flex rounded-lg border bg-zinc-50 p-0.5" role="tablist" aria-label="Mode tampilan peta layanan">
+                <button
+                  type="button" role="tab" aria-selected={tab === "matrix"}
+                  onClick={() => setTab("matrix")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${tab === "matrix" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+                >
+                  Matriks Layanan
+                </button>
+                <button
+                  type="button" role="tab" aria-selected={tab === "crosssell"}
+                  onClick={() => setTab("crosssell")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${tab === "crosssell" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+                >
+                  Peluang Cross-Selling
+                </button>
+              </div>
+
+              {tab === "matrix" ? (
+                /* ===== MATRIKS LAYANAN — kartu per brand, digroup per kategori ===== */
+                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  {data.brands.map((b) => {
+                    const rows = rowsByBrand.get(b.id) ?? [];
+                    const categories = new Map<string, ServiceMapRow[]>();
+                    rows.forEach((row) => {
+                      const key = row.categoryName ?? "Lainnya";
+                      const list = categories.get(key);
+                      if (list) list.push(row);
+                      else categories.set(key, [row]);
+                    });
+                    return (
+                      <div key={b.id} className="overflow-hidden rounded-xl border bg-white shadow-sm">
+                        <div className="flex items-center gap-2.5 border-b border-zinc-100 bg-zinc-50/60 px-4 py-3">
+                          <BrandLogo brand={b} size="sm" />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-zinc-900">{b.name}</p>
+                            {b.tagline ? <p className="truncate text-[11px] italic text-zinc-500">{b.tagline}</p> : null}
+                          </div>
+                          <span className="shrink-0 rounded-full border bg-white px-2 py-0.5 text-[11px] text-zinc-500">{rows.length} layanan</span>
+                        </div>
+                        <div className="space-y-3 p-4">
+                          {rows.length === 0 ? (
+                            <p className="text-xs text-zinc-400">Belum ada layanan terdaftar untuk brand ini.</p>
+                          ) : (
+                            Array.from(categories.entries()).map(([catName, list]) => (
+                              <div key={catName}>
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">{catName}</p>
+                                <ul className="mt-1.5 space-y-1.5">
+                                  {list.map((row) => {
+                                    const badge =
+                                      row.costTotal == null || row.suggestedPrice == null || row.basePrice == null || row.suggestedPrice <= 0
+                                        ? null
+                                        : row.basePrice < row.suggestedPrice
+                                          ? (
+                                            <Badge variant="outline" className="border-transparent bg-amber-50 px-1.5 text-[10px] text-amber-700">
+                                              Di bawah saran
+                                            </Badge>
+                                          )
+                                          : (
+                                            <Badge variant="outline" className="border-transparent bg-emerald-50 px-1.5 text-[10px] text-emerald-700">
+                                              OK
+                                            </Badge>
+                                          );
+                                    return (
+                                      <li key={row.id} className="flex items-start justify-between gap-3 rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-2">
+                                        <div className="min-w-0">
+                                          <p className="truncate text-sm font-medium text-zinc-800">{row.name}</p>
+                                          <p className="text-xs text-zinc-500">{row.unit ?? "paket"}</p>
+                                          {row.costTotal != null ? (
+                                            <p className="mt-0.5 text-xs text-zinc-500">
+                                              Biaya: <span className="font-medium">{fmtIDR(row.costTotal)}</span>
+                                              {" · Saran: "}
+                                              <span className="font-medium">{fmtIDR(row.suggestedPrice ?? 0)}</span>
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                        <div className="flex shrink-0 flex-col items-end gap-1">
+                                          <span className="text-sm font-semibold text-zinc-900">{fmtIDR(row.basePrice ?? 0)}</span>
+                                          <div className="flex gap-1">
+                                            {!row.active ? (
+                                              <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-[10px] text-zinc-500">Nonaktif</Badge>
+                                            ) : null}
+                                            {badge}
+                                          </div>
+                                        </div>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* ===== PELUANG CROSS-SELLING — kartu per perusahaan ===== */
+                <div className="mt-4">
+                  {companies.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+                      <Building2 className="h-8 w-8 text-zinc-300" aria-hidden />
+                      <p className="text-sm font-semibold text-zinc-700">Belum ada data perusahaan</p>
+                      <p className="max-w-sm text-xs text-zinc-500">
+                        Ringkasan cross-selling muncul setelah perusahaan memiliki opportunity atau invoice pada brand.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="crm-scroll max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+                        {visibleCompanies.map((c) => (
+                          <div key={c.companyId} className="rounded-xl border bg-white p-4 shadow-sm">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-center gap-2.5">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600" aria-hidden>
+                                  <Building2 className="h-4 w-4" />
+                                </span>
+                                <p className="truncate text-sm font-semibold text-zinc-900">{c.companyName}</p>
+                              </div>
+                              <span className="shrink-0 text-sm font-bold text-zinc-900" title="Total nilai belanja semua brand">
+                                {fmtIDR(c.totalValue)}
+                              </span>
+                            </div>
+
+                            {c.purchases.length > 0 ? (
+                              <div className="mt-3 space-y-1.5">
+                                {c.purchases.map((p) => (
+                                  <div key={p.brandId} className="rounded-lg bg-zinc-50 px-2.5 py-1.5 text-xs">
+                                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                      <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-800">
+                                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.brandColor }} aria-hidden />
+                                        {p.brandName}
+                                      </span>
+                                      <span className="text-zinc-500">{p.serviceCount} layanan · {fmtIDR(p.totalValue)}</span>
+                                    </span>
+                                    {p.services.length > 0 ? (
+                                      <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={p.services.join(", ")}>
+                                        {p.services.join(" · ")}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-xs text-zinc-400">Belum ada pembelian tercatat.</p>
+                            )}
+
+                            <div className="mt-3 border-t border-zinc-100 pt-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Peluang cross-sell →</p>
+                              {c.suggestions.length === 0 ? (
+                                <Badge variant="outline" className="mt-1.5 border-transparent bg-emerald-50 text-emerald-700">
+                                  <CheckCircle2 className="h-3 w-3" aria-hidden /> Semua brand sudah digarap
+                                </Badge>
+                              ) : (
+                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                  {c.suggestions.map((s) => (
+                                    <span
+                                      key={s.brandId}
+                                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-dashed border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-600"
+                                      title={s.topService ?? `Brand ${s.brandName}`}
+                                    >
+                                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.brandColor }} aria-hidden />
+                                      <span className="font-semibold text-zinc-800">{s.brandName}</span>
+                                      {s.topService ? <span className="truncate text-zinc-500">· {s.topService}</span> : null}
+                                      {s.basePrice != null ? <span className="shrink-0 text-zinc-500">dari {fmtIDR(s.basePrice)}</span> : null}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {companies.length > SERVICE_MAP_VISIBLE_COMPANIES ? (
+                        <Button
+                          variant="ghost" size="sm" className="mt-2 text-zinc-500 hover:text-zinc-800"
+                          onClick={() => setShowAll((v) => !v)}
+                          aria-label={showAll ? "Tampilkan 8 perusahaan teratas saja" : `Tampilkan semua ${companies.length} perusahaan`}
+                        >
+                          {showAll ? "Tampilkan lebih sedikit" : `Tampilkan semua (${companies.length})`}
+                          <ChevronDown className={`h-3.5 w-3.5 ${showAll ? "rotate-180" : ""}`} aria-hidden />
+                        </Button>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 // ============ Module utama ============
 
 export default function BrandsModule() {
@@ -547,25 +845,6 @@ export default function BrandsModule() {
     setCreateOpen(true);
   }
 
-  function openBrandEdit(brand: Brand) {
-    setEditingBrand(brand);
-    setDraft({
-      name: brand.name,
-      slug: brand.slug,
-      color: brand.color,
-      logoEmoji: brand.logoEmoji,
-      description: brand.description ?? "",
-      website: brand.website ?? "",
-      primaryCurrency: brand.primaryCurrency,
-      invoicePrefix: brand.invoicePrefix,
-      quotePrefix: brand.quotePrefix,
-      slaHours: String(brand.slaHours),
-      portalDomain: brand.portalDomain ?? "",
-      active: brand.active,
-    });
-    setCreateOpen(true);
-  }
-
   function handleNameChange(name: string) {
     // Mode edit: slug tidak ikut berubah otomatis (bisa diatur manual).
     setDraft((d) => (editingBrand ? { ...d, name } : { ...d, name, slug: slugify(name) }));
@@ -593,7 +872,6 @@ export default function BrandsModule() {
         name: draft.name.trim(),
         slug: draft.slug.trim(),
         color: draft.color,
-        logoEmoji: draft.logoEmoji.trim() || "✨",
         description: draft.description.trim(),
         website: draft.website.trim(),
         primaryCurrency: draft.primaryCurrency,
@@ -668,7 +946,7 @@ export default function BrandsModule() {
 
       {/* Grid brand */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onEdit={openBrandEdit} onSettings={(brand) => { setSettingsBrand(brand); setSettingsOpen(true); }} />)}
+        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onSettings={(brand) => { setSettingsBrand(brand); setSettingsOpen(true); }} />)}
 
         {/* Kartu tambah */}
         <button
@@ -682,6 +960,9 @@ export default function BrandsModule() {
           <span className="max-w-[220px] text-center text-xs">Definisikan brand, warna, SLA, dan prefix invoice</span>
         </button>
       </div>
+
+      {/* Peta Layanan & Cross-Selling (Ronde 29-b — lazy fetch saat dibuka) */}
+      <ServiceMapSection />
 
       {/* Konfigurasi pipeline standar */}
       <section aria-label="Konfigurasi pipeline standar" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
@@ -795,31 +1076,21 @@ export default function BrandsModule() {
                 <p className="text-[11px] text-zinc-400">Unik, dipakai di URL/invoice prefix</p>
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="brand-color" className="items-center gap-2">
-                  <Palette className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Warna Brand
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="brand-color" type="color" className="h-10 w-14 cursor-pointer p-1"
-                    value={draft.color}
-                    onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))}
-                    aria-label="Pilih warna brand"
-                  />
-                  <span className="flex items-center gap-1.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs font-mono text-zinc-600">
-                    <span className="h-3 w-3 rounded-full border border-zinc-200" style={{ backgroundColor: draft.color }} aria-hidden />
-                    {draft.color}
-                  </span>
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="brand-emoji">Logo Emoji</Label>
+            <div className="grid gap-2">
+              <Label htmlFor="brand-color" className="items-center gap-2">
+                <Palette className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Warna Brand
+              </Label>
+              <div className="flex items-center gap-2">
                 <Input
-                  id="brand-emoji" value={draft.logoEmoji} maxLength={4}
-                  onChange={(e) => setDraft((d) => ({ ...d, logoEmoji: e.target.value }))}
-                  placeholder="✨"
+                  id="brand-color" type="color" className="h-10 w-14 cursor-pointer p-1"
+                  value={draft.color}
+                  onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))}
+                  aria-label="Pilih warna brand"
                 />
+                <span className="flex items-center gap-1.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs font-mono text-zinc-600">
+                  <span className="h-3 w-3 rounded-full border border-zinc-200" style={{ backgroundColor: draft.color }} aria-hidden />
+                  {draft.color}
+                </span>
               </div>
             </div>
             <div className="grid gap-2">

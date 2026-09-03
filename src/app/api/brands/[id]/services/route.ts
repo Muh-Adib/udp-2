@@ -22,6 +22,57 @@ function parseKind(raw: unknown): Kind | null {
   return raw === "category" || raw === "service" || raw === "stage" ? raw : null;
 }
 
+/** Ronde 29-b — validasi rincian biaya template harga layanan. */
+interface CostItemIn { name: string; amount: number; note?: string | null }
+
+function parseCostItems(raw: unknown): { err?: string; items?: CostItemIn[] | null } {
+  if (raw === undefined) return {};
+  if (raw === null || raw === "") return { items: null };
+  let arr: unknown = raw;
+  if (typeof arr === "string") {
+    try { arr = JSON.parse(arr); } catch { return { err: "Rincian biaya bukan JSON yang valid" }; }
+  }
+  if (!Array.isArray(arr)) return { err: "Rincian biaya harus berupa array" };
+  const items: CostItemIn[] = [];
+  for (const it of arr) {
+    if (!it || typeof it !== "object") return { err: "Butir rincian biaya tidak valid" };
+    const obj = it as Record<string, unknown>;
+    const name = String(obj.name ?? "").trim();
+    const amount = Number(obj.amount);
+    if (!name) return { err: "Nama butir biaya wajib diisi" };
+    if (!Number.isFinite(amount) || amount < 0) return { err: `Nominal biaya "${name}" tidak valid` };
+    items.push({ name, amount, note: obj.note ? String(obj.note).trim() : null });
+  }
+  return { items };
+}
+
+function parseMargin(raw: unknown): { err?: string; pct?: number | null } {
+  if (raw === undefined) return {};
+  if (raw === null || raw === "") return { pct: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 95) return { err: "Margin target harus 0–95" };
+  return { pct: n };
+}
+
+/** Saran harga = total biaya × (1 + margin) dibulatkan ke 100 ribu terdekat. */
+function computePricing(costItemsJson: string | null, targetMarginPct: number | null, _basePrice: number | null) {
+  let costTotal: number | null = null;
+  if (costItemsJson) {
+    try {
+      const arr = JSON.parse(costItemsJson) as CostItemIn[];
+      if (Array.isArray(arr) && arr.length) costTotal = arr.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+    } catch { /* biarkan null */ }
+  }
+  if (costTotal === null) return { costTotal: null, suggestedPrice: null };
+  const margin = targetMarginPct ?? 30;
+  return { costTotal, suggestedPrice: Math.round((costTotal * (1 + margin / 100)) / 100_000) * 100_000 };
+}
+
+function parseCostItemsForOutput(json: string | null): CostItemIn[] | null {
+  if (!json) return null;
+  try { return JSON.parse(json) as CostItemIn[]; } catch { return null; }
+}
+
 async function loadTree(brandId: string) {
   const [brand, categories, services] = await Promise.all([
     db.brand.findUnique({ where: { id: brandId }, select: { id: true, name: true, slug: true } }),
@@ -40,14 +91,20 @@ async function loadTree(brandId: string) {
     categories: categories.map((c) => ({
       id: c.id, name: c.name, description: c.description, order: c.order, active: c.active,
     })),
-    services: services.map((s) => ({
-      id: s.id, categoryId: s.categoryId, name: s.name, description: s.description,
-      unit: s.unit, basePrice: s.basePrice, order: s.order, active: s.active,
-      workflow: s.workflowStages.map((w) => ({
-        id: w.id, phase: w.phase, name: w.name, description: w.description,
-        isMilestone: w.isMilestone, order: w.order,
-      })),
-    })),
+    services: services.map((s) => {
+      const { costTotal, suggestedPrice } = computePricing(s.costItems, s.targetMarginPct, s.basePrice);
+      return {
+        id: s.id, categoryId: s.categoryId, name: s.name, description: s.description,
+        unit: s.unit, basePrice: s.basePrice, order: s.order, active: s.active,
+        costItems: parseCostItemsForOutput(s.costItems),
+        targetMarginPct: s.targetMarginPct,
+        costTotal, suggestedPrice,
+        workflow: s.workflowStages.map((w) => ({
+          id: w.id, phase: w.phase, name: w.name, description: w.description,
+          isMilestone: w.isMilestone, order: w.order,
+        })),
+      };
+    }),
   };
 }
 
@@ -111,6 +168,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         order: typeof body.order === "number" ? body.order : (last?.order ?? -1) + 1,
       },
     });
+    // Rincian biaya + margin target (opsional, dikirim bersamaan) — Ronde 29-b
+    if (body.costItems !== undefined || body.targetMarginPct !== undefined) {
+      const ci = parseCostItems(body.costItems);
+      if (ci.err) return fail(ci.err);
+      const mg = parseMargin(body.targetMarginPct);
+      if (mg.err) return fail(mg.err);
+      await db.service.update({
+        where: { id: svc.id },
+        data: {
+          costItems: ci.items === undefined ? undefined : ci.items ? JSON.stringify(ci.items) : null,
+          targetMarginPct: mg.pct,
+        },
+      });
+    }
     await logAudit({
       actorName: actor.name, actorRole: actor.role, action: "create",
       entity: "service", entityId: svc.id, entityLabel: `${brand.name} · ${svc.name}`, req,
@@ -201,6 +272,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (!cat || cat.brandId !== brandId) return fail("Kategori layanan tidak ditemukan di brand ini", 404);
       }
       data.categoryId = cid;
+    }
+    if (body.costItems !== undefined) {
+      const ci = parseCostItems(body.costItems);
+      if (ci.err) return fail(ci.err);
+      data.costItems = ci.items === undefined ? undefined : ci.items ? JSON.stringify(ci.items) : null;
+    }
+    if (body.targetMarginPct !== undefined) {
+      const mg = parseMargin(body.targetMarginPct);
+      if (mg.err) return fail(mg.err);
+      data.targetMarginPct = mg.pct;
     }
     if (body.order !== undefined && typeof body.order === "number") data.order = body.order;
     if (body.active !== undefined) data.active = Boolean(body.active);

@@ -128,6 +128,9 @@ export const api = {
         : `/api/brands/${id}/services`,
       method === "DELETE" ? { method } : { method, body: JSON.stringify(payload) }
     ),
+  // Ronde 29-b — peta layanan × brand & peluang cross-selling (owner view)
+  serviceMap: () =>
+    request<import("@/lib/crm/types").ServiceMapData>("/api/service-map"),
   createTemplate: (payload: Record<string, unknown>) =>
     request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>("/api/followup-templates", {
       method: "POST",

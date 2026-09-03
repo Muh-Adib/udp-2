@@ -31,7 +31,6 @@ export async function POST(req: NextRequest) {
       name,
       slug,
       color: body.color ? String(body.color) : "#f97316",
-      logoEmoji: body.logoEmoji ? String(body.logoEmoji) : "◆",
       description: body.description ? String(body.description) : null,
       website: body.website ? String(body.website) : null,
       primaryCurrency: body.primaryCurrency ? String(body.primaryCurrency) : "IDR",

@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
   const rows = await db.clientBrief.findMany({
     where,
     include: {
-      brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } },
+      brand: { select: { id: true, name: true, slug: true, color: true } },
       opportunity: { select: { id: true, title: true, stage: true } },
     },
     orderBy: { updatedAt: "desc" },
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
       createdBy: actor.name,
     },
     include: {
-      brand: { select: { id: true, name: true, slug: true, color: true, logoEmoji: true } },
+      brand: { select: { id: true, name: true, slug: true, color: true } },
     },
   });
 
