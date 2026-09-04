@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
 
   let created = 0;
   let skipped = 0;
+  let linked = 0; // Ronde 32 — pesan yang langsung tertaut ke opportunity terbuka
   let scanned = 0;
 
   try {
@@ -153,7 +154,7 @@ export async function POST(req: NextRequest) {
         const fromAddr = msg.envelope?.from?.[0];
         const sender = fromAddr ? (fromAddr.name ? `${fromAddr.name} <${fromAddr.address ?? ""}>` : fromAddr.address ?? "tidak diketahui") : "tidak diketahui";
 
-        await db.interaction.create({
+        const row = await db.interaction.create({
           data: {
             channel: "email",
             direction: "inbound",
@@ -166,6 +167,39 @@ export async function POST(req: NextRequest) {
             deliveryStatus: null,
           },
         });
+
+        // Ronde 32 — AUTO-LINK balasan pelanggan aktif: bila pengirim sudah jadi
+        // contact dan punya opportunity TERBUKA (bukan won/lost), pesan langsung
+        // tertaut ke opportunity tsb — lanjutan negosiasi TIDAK muncul lagi sbg
+        // lead baru di inbox (mencegah opportunity duplikat) dan tetap tampil
+        // di thread inbox (view=all) + Timeline opportunity.
+        try {
+          const email = (fromAddr?.address ?? "").trim().toLowerCase();
+          if (email && email.includes("@")) {
+            const contact = await db.contact.findFirst({
+              // SQLite: filter `mode: "insensitive"` tidak tersedia — email disimpan lowercase
+              // saat konversi/sinkron, dan alamat IMAP dibersihkan ke lowercase di atas.
+              where: { email },
+              select: { id: true, companyId: true },
+            });
+            if (contact) {
+              const openOpp = await db.opportunity.findFirst({
+                where: { contactId: contact.id, stage: { notIn: ["won", "lost"] } },
+                orderBy: { updatedAt: "desc" },
+                select: { id: true },
+              });
+              if (openOpp) {
+                await db.interaction.update({
+                  where: { id: row.id },
+                  data: { contactId: contact.id, companyId: contact.companyId, opportunityId: openOpp.id },
+                });
+                linked += 1;
+              }
+            }
+          }
+        } catch {
+          // auto-link gagal → pesan tetap jadi lead biasa (tidak fatal)
+        }
         created += 1;
       }
     } finally {
@@ -196,7 +230,7 @@ export async function POST(req: NextRequest) {
     action: "email_sync",
     entity: "channel", entityId: config.id,
     entityLabel: `sinkron IMAP ${config.displayName} — ${created} email baru, ${skipped} duplikat`,
-    newValue: { ok: true, created, skipped, scanned },
+    newValue: { ok: true, created, skipped, scanned, linkedToOpportunity: linked },
     req,
   });
 

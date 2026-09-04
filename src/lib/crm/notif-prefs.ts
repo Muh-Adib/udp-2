@@ -30,6 +30,7 @@ export interface NotifPrefs {
 
 export const NOTIF_TYPES: { key: NotificationType; label: string; hint: string }[] = [
   { key: "sla", label: "SLA Lead", hint: "Lead melewati batas waktu respons" },
+  { key: "message", label: "Pesan Baru", hint: "Balasan/lead baru masuk ke Inbox (Ronde 32)" },
   { key: "approval", label: "Approval", hint: "Pengajuan estimasi & diskon" },
   { key: "cr", label: "Change Request", hint: "CR menunggu persetujuan klien" },
   { key: "task", label: "Task Overdue", hint: "Task follow-up lewat tenggat" },

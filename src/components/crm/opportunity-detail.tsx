@@ -1479,6 +1479,9 @@ function QuotationTab({
 
 export default function OpportunityDetail({ opportunityId, open, onOpenChange, onChanged }: OpportunityDetailProps) {
   const { user, brands } = useCrmStore();
+  // Ronde 32 — tombol "Buka Percakapan di Inbox" dari drawer opportunity
+  const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
 
   const [activeId, setActiveId] = useState<string | null>(opportunityId);
   const [data, setData] = useState<DetailData | null>(null);
@@ -1899,6 +1902,26 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                   {data.company?.name ?? "Tanpa perusahaan"} · {data.contact?.fullName ?? "Tanpa contact"}
                   {data.serviceName ? ` · ${data.serviceName}` : ""}
                 </SheetDescription>
+                {/* Ronde 32 — pintasan bolak-balik Pipeline → Inbox: buka thread chat
+                    opportunity ini di Lead Inbox (tab Semua Percakapan). */}
+                {data.interactions.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-8 w-fit gap-1.5 border-emerald-300 bg-white text-xs text-emerald-700 hover:bg-emerald-50"
+                    onClick={() => {
+                      setPendingFocus({ module: "inbox", id: data.id });
+                      setActiveModule("inbox");
+                      onOpenChange(false);
+                    }}
+                    aria-label={`Buka percakapan opportunity ${data.title} di Lead Inbox`}
+                  >
+                    <MessageSquare className="size-3.5" aria-hidden="true" />
+                    Buka Percakapan di Inbox
+                    <span className="font-normal opacity-70">({data.interactions.length} pesan)</span>
+                  </Button>
+                ) : null}
               </SheetHeader>
 
               <div className="flex-1 overflow-y-auto p-4 crm-scroll">

@@ -5,13 +5,13 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
-  Fingerprint, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
+  Fingerprint, FolderKanban, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
   MessagesSquare, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, channelsApi } from "@/lib/crm/api-client";
 import { canAccess, useCrmStore } from "@/lib/crm/store";
-import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES } from "@/lib/crm/constants";
+import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES, stageLabel } from "@/lib/crm/constants";
 import { CHANNEL_TYPES } from "@/lib/crm/channels";
 import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
 import type {
@@ -436,6 +436,10 @@ interface ThreadGroup {
   worstRemaining: number | null;
   maxCandidates: number;
   allResponded: boolean;
+  /** Ronde 32 — SEMUA anggota thread sudah dikonversi ke opportunity. */
+  converted: boolean;
+  /** Ronde 32 — ringkasan opportunity thread terkonversi (dari anggota mana pun). */
+  opportunity: { id: string; title: string; stage: string } | null;
 }
 
 function ThreadCard({ group, selected, onSelect }: {
@@ -449,6 +453,8 @@ function ThreadCard({ group, selected, onSelect }: {
   const lastMsg = lastThreadMessage(thread);
   const preview = (lastMsg?.content ?? newest.content).trim();
   const avatarMeta = channelMeta(dominantChannelOf(thread, newest.channel));
+  // Ronde 32 — thread terkonversi: badge opportunity menggantikan SLA (bukan lagi "lead menunggu")
+  const opp = group.opportunity;
   return (
     <div
       role="button"
@@ -463,7 +469,7 @@ function ThreadCard({ group, selected, onSelect }: {
       aria-label={`Buka percakapan dengan ${name}`}
       className={cn(
         "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
-        breached ? "border-l-4 border-l-rose-500" : group.allResponded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
+        breached ? "border-l-4 border-l-rose-500" : group.converted ? "border-l-4 border-l-emerald-500" : group.allResponded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
         selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
         selected && breached && "ring-1 ring-rose-500"
       )}
@@ -509,7 +515,20 @@ function ThreadCard({ group, selected, onSelect }: {
           </div>
           <p className="mt-1.5 line-clamp-1 text-sm leading-relaxed text-zinc-600">{preview}</p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {group.allResponded ? (
+            {/* Ronde 32 — badge opportunity utk thread terkonversi (bisa coexist dgn SLA
+                pada grup campuran: pesan lama terkonversi + pesan baru belum). */}
+            {opp ? (
+              <Badge
+                variant="outline"
+                className="border-emerald-300 bg-emerald-50 text-emerald-700"
+                aria-label="Thread sudah dikonversi menjadi opportunity"
+                title={opp.title}
+              >
+                <FolderKanban aria-hidden="true" />
+                {`Opportunity · ${stageLabel(opp.stage)}`}
+              </Badge>
+            ) : null}
+            {group.converted ? null : group.allResponded ? (
               <Badge
                 variant="outline"
                 className="border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -1654,6 +1673,11 @@ export default function InboxModule() {
   const brands = useCrmStore((s) => s.brands);
   const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
   const setActiveBrandFilter = useCrmStore((s) => s.setActiveBrandFilter);
+  // Ronde 32 — navigasi lintas modul (pendingFocus dari global search & tombol "Buka Percakapan")
+  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
+  const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
 
   const [leads, setLeads] = useState<InboxLead[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1666,6 +1690,12 @@ export default function InboxModule() {
   const [linkedContactId, setLinkedContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactFormState>(EMPTY_CONTACT_FORM);
   const [oppForm, setOppForm] = useState<OpportunityFormState>(EMPTY_OPP_FORM);
+
+  // Ronde 32 — tab percakapan: "open" = perlu tindakan (belum dikonversi),
+  // "all" = termasuk thread terkonversi (chat lanjutan dgn klien aktif).
+  const [view, setView] = useState<"open" | "all">("open");
+  // Ronde 32 — setelah konversi: pilih otomatis thread yang kini tertaut opportunity ini.
+  const [pendingSelectOppId, setPendingSelectOppId] = useState<string | null>(null);
 
   // Ronde 29 — full chat: tools jadi modal compact (satu pintu di header chat) + composer
   const [showIdentity, setShowIdentity] = useState(false);
@@ -1704,7 +1734,9 @@ export default function InboxModule() {
     if (!silent) setLoading(true);
     try {
       // sweep:1 → picu SLA auto-sweep server (throttle 5 menit di API)
-      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, sweep: true });
+      // Ronde 32 — selalu muat view=all lalu filter klien: hitungan kedua tab
+      // selalu akurat dgn SATU request (open = yang belum tertaut opportunity).
+      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, sweep: true, view: "all" });
       setLeads(res.leads);
       setError(null);
       if (res.autoEscalated && res.autoEscalated > 0) {
@@ -1747,6 +1779,9 @@ export default function InboxModule() {
 
   const stats = useMemo(() => {
     const list = leads ?? [];
+    // Ronde 32 — metrik "perlu tindakan" hanya dihitung dari lead BELUM terkonversi:
+    // thread terkonversi bukan lagi beban SLA (statusnya dipantau di Pipeline).
+    const open = list.filter((l) => !l.opportunityId);
     // Jumlah thread unik + total pesan (thread.messageCount sama utk seluruh anggota thread)
     const perThread = new Map<string, number>();
     for (const l of list) {
@@ -1755,23 +1790,29 @@ export default function InboxModule() {
     }
     return {
       total: list.length,
-      late: list.filter((l) => !isResponded(l) && (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
-      duplicate: list.filter((l) => l.candidates.length > 0).length,
-      responded: list.filter((l) => isResponded(l)).length,
+      openTotal: open.length,
+      convertedTotal: list.length - open.length,
+      late: open.filter((l) => !isResponded(l) && (l.brand?.slaHours ?? 24) - l.slaHours <= 0).length,
+      duplicate: open.filter((l) => l.candidates.length > 0).length,
+      responded: open.filter((l) => isResponded(l)).length,
       conversations: perThread.size,
       threadMessages: [...perThread.values()].reduce((acc, n) => acc + n, 0),
     };
   }, [leads]);
 
   const sortedLeads = useMemo(() => {
-    const list = [...(leads ?? [])];
+    // Ronde 32 — tampilan "Perlu Tindakan" = hanya lead belum tertaut opportunity;
+    // "Semua Percakapan" = seluruh pesan masuk (termasuk terkonversi).
+    const all = [...(leads ?? [])];
+    const scoped = view === "open" ? all.filter((l) => !l.opportunityId) : all;
+    const list = scoped;
     if (sortBy === "late") {
       list.sort((a, b) => b.slaHours - a.slaHours);
     } else {
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
     return list;
-  }, [leads, sortBy]);
+  }, [leads, sortBy, view]);
 
   // Grouping leads by threadKey → ThreadGroup, diurut sesuai sortBy
   const threadGroups = useMemo<ThreadGroup[]>(() => {
@@ -1806,10 +1847,15 @@ export default function InboxModule() {
         worstRemaining,
         maxCandidates: byNewest.reduce((acc, l) => Math.max(acc, l.candidates.length), 0),
         allResponded: pending.length === 0,
+        // Ronde 32 — thread terkonversi bila SEMUA anggota sudah tertaut opportunity.
+        converted: byNewest.length > 0 && byNewest.every((l) => Boolean(l.opportunityId)),
+        opportunity: newest.opportunity ?? byNewest.find((l) => l.opportunity)?.opportunity ?? null,
       });
     }
     if (sortBy === "late") {
+      // Ronde 32 — thread terkonversi selalu di bawah (bukan lagi beban SLA)
       groups.sort((a, b) => {
+        if (a.converted !== b.converted) return a.converted ? 1 : -1;
         const ra = a.worstRemaining ?? Number.POSITIVE_INFINITY;
         const rb = b.worstRemaining ?? Number.POSITIVE_INFINITY;
         if (ra !== rb) return ra - rb;
@@ -1864,6 +1910,32 @@ export default function InboxModule() {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [selectedId, threadMessageCount]);
+
+  // Ronde 32 — setelah konversi + reload view=all, pilih thread yg tertaut opportunity target.
+  useEffect(() => {
+    if (!pendingSelectOppId || !leads) return;
+    const target = leads.find((l) => l.opportunityId === pendingSelectOppId);
+    if (target) {
+      setSelectedId(target.id);
+      setPendingSelectOppId(null);
+    }
+  }, [leads, pendingSelectOppId]);
+
+  // Ronde 32 — fokus lintas modul: global search (lead inbox) & tombol "Buka Percakapan"
+  // di detail opportunity. Cari by interaction id ATAU opportunityId; thread terkonversi
+  // otomatis ditampilkan di tab "Semua Percakapan" agar kartu list & chat konsisten.
+  useEffect(() => {
+    if (!pendingFocus || pendingFocus.module !== "inbox" || !leads) return;
+    const id = pendingFocus.id;
+    const target = leads.find((l) => l.id === id || l.opportunityId === id);
+    if (target) {
+      if (target.opportunityId && view === "open") setView("all");
+      handleSelectLead(target);
+      clearPendingFocus();
+    } else {
+      clearPendingFocus(); // tak ditemukan (di luar filter kanal/brand) — lepas agar tidak loop
+    }
+  }, [pendingFocus, leads, view, clearPendingFocus]);
 
   function handleSelectLead(lead: InboxLead) {
     setSelectedId(lead.id);
@@ -2051,8 +2123,17 @@ export default function InboxModule() {
       setShowConvert(false);
       setShowNewContact(false);
       setLinkedContactId(null);
-      setSelectedId(null);
-      await loadLeads();
+      // Ronde 32 — percakapan TIDAK hilang setelah konversi: pindah ke tab
+      // "Semua Percakapan" dan tetap pilih thread yang kini tertaut opportunity
+      // (dulu thread menghilang total — sumber kebingungan alur).
+      if (res.opportunity?.id) setPendingSelectOppId(res.opportunity.id);
+      setView("all");
+      setSelectedId(null); // sementara — effect pendingSelectOppId memilih ulang
+      await loadLeads(true); // refresh list: thread kini membawa opportunity
+      toast.info("Percakapan pindah ke tab Semua Percakapan", {
+        description: "Lead kini menjadi opportunity — chat tetap berlanjut di sini, dan progres deal terpantau di Sales Pipeline.",
+        duration: 7000,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal mengonversi lead.");
     } finally {
@@ -2149,6 +2230,9 @@ export default function InboxModule() {
 
   const selMeta = selectedLead ? channelMeta(selectedLead.channel) : null;
   const SelChannelIcon = selMeta?.icon;
+  // Ronde 32 — thread terkonversi: sembunyikan tool konversi/eskalasi, tampilkan
+  // identitas opportunity + pintasan ke Pipeline.
+  const selectedOpp = selectedLead?.opportunity ?? null;
 
   return (
     <div className="space-y-4">
@@ -2172,6 +2256,36 @@ export default function InboxModule() {
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />Segera Jatuh Tempo</span>
               <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-500" aria-hidden="true" />Terlambat</span>
               <span className="inline-flex items-center gap-1.5"><Reply className="size-3 text-emerald-600" aria-hidden="true" />Sudah Direspons</span>
+            </div>
+            {/* Ronde 32 — tab tampilan: "Perlu Tindakan" (belum dikonversi) vs "Semua Percakapan"
+                (termasuk thread terkonversi — chat dengan klien aktif tetap bisa dilanjutkan). */}
+            <div className="mt-3 inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="tablist" aria-label="Tampilan percakapan">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "open"}
+                onClick={() => { if (view !== "open") { setView("open"); setSelectedId(null); } }}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors",
+                  view === "open" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Inbox className="size-3.5" aria-hidden="true" />
+                Perlu Tindakan{leads ? ` (${stats.openTotal})` : ""}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "all"}
+                onClick={() => { if (view !== "all") { setView("all"); setSelectedId(null); } }}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors",
+                  view === "all" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <MessagesSquare className="size-3.5" aria-hidden="true" />
+                Semua Percakapan{leads ? ` (${stats.total})` : ""}
+              </button>
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:justify-end">
@@ -2297,8 +2411,17 @@ export default function InboxModule() {
               <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
                 <Inbox className="size-6 text-zinc-400" />
               </span>
-              <p className="text-sm font-medium text-zinc-700">Tidak ada lead baru — semua sudah ditangani</p>
-              <p className="text-xs text-zinc-400">Lead baru dari semua kanal akan muncul di sini.</p>
+              {view === "open" ? (
+                <>
+                  <p className="text-sm font-medium text-zinc-700">Tidak ada lead baru — semua sudah ditangani</p>
+                  <p className="text-xs text-zinc-400">Lead baru dari semua kanal akan muncul di sini.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-zinc-700">Belum ada percakapan</p>
+                  <p className="text-xs text-zinc-400">Semua pesan masuk (termasuk yang sudah dikonversi) tampil di sini.</p>
+                </>
+              )}
             </div>
           ) : leads ? (
             <div className="crm-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
@@ -2390,18 +2513,21 @@ export default function InboxModule() {
                         onClick={() => setShowIdentify(true)}
                         badge={selectedLead.candidates.length}
                       />
-                      <ToolIconButton
-                        icon={UserPlus}
-                        label="Konversi jadi Opportunity"
-                        onClick={() => setShowConvert(true)}
-                      />
+                      {/* Ronde 32 — tool konversi disembunyikan untuk thread terkonversi */}
+                      {!selectedOpp ? (
+                        <ToolIconButton
+                          icon={UserPlus}
+                          label="Konversi jadi Opportunity"
+                          onClick={() => setShowConvert(true)}
+                        />
+                      ) : null}
                       <ToolIconButton
                         icon={Copy}
                         label="Salin pesan identifikasi"
                         onClick={() => void handleCopyIdentity()}
                         disabled={identity.complete}
                       />
-                      {!isResponded(selectedLead) ? (
+                      {!isResponded(selectedLead) && !selectedOpp ? (
                         <ToolIconButton
                           icon={ShieldAlert}
                           label="Eskalasi ke Direktur"
@@ -2430,11 +2556,41 @@ export default function InboxModule() {
                     {selectedLead.brand ? (
                       <BrandChip name={selectedLead.brand.name} color={selectedLead.brand.color} />
                     ) : null}
-                    <SlaBadge
-                      brandSlaHours={selectedLead.brand?.slaHours ?? 24}
-                      waitHours={selectedLead.slaHours}
-                      respondedAt={selectedLead.respondedAt}
-                    />
+                    {/* Ronde 32 — identitas opportunity + pintasan Pipeline utk thread terkonversi */}
+                    {selectedOpp ? (
+                      <Badge
+                        variant="outline"
+                        className="max-w-[240px] border-emerald-300 bg-emerald-50 text-emerald-700"
+                        title={selectedOpp.title}
+                      >
+                        <FolderKanban className="size-3 shrink-0" aria-hidden="true" />
+                        <span className="min-w-0 truncate">{selectedOpp.title}</span>
+                        <span className="shrink-0 opacity-70">· {stageLabel(selectedOpp.stage)}</span>
+                      </Badge>
+                    ) : null}
+                    {!selectedOpp ? (
+                      <SlaBadge
+                        brandSlaHours={selectedLead.brand?.slaHours ?? 24}
+                        waitHours={selectedLead.slaHours}
+                        respondedAt={selectedLead.respondedAt}
+                      />
+                    ) : null}
+                    {selectedOpp ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1.5 border-emerald-300 bg-white px-2.5 text-xs text-emerald-700 hover:bg-emerald-50"
+                        onClick={() => {
+                          setPendingFocus({ module: "pipeline", id: selectedOpp.id });
+                          setActiveModule("pipeline");
+                        }}
+                        aria-label="Buka opportunity ini di Sales Pipeline"
+                      >
+                        <FolderKanban className="size-3.5" aria-hidden="true" />
+                        Buka di Pipeline
+                      </Button>
+                    ) : null}
                     {selectedLead.thread.messageCount > 1 ? (
                       <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">
                         {`${selectedLead.thread.messageCount} pesan`}

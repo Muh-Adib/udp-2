@@ -12,6 +12,12 @@ import { computeReplyChannels, inferBrandIdFromSource, senderTokens, threadKeyFo
  * Ronde 25:
  * - `replyChannels` per lead — balasan hanya lewat kanal yang benar-benar punya alamat tujuan.
  * - sweep=1 memicu auto-unify (skor ≥80 → tautkan ke contact) + inferensi brand dari akun sumber.
+ *
+ * Ronde 32 — FIX alur konversi:
+ * - `view=open` (default): hanya lead BELUM dikonversi (perilaku lama).
+ * - `view=all`: juga menyertakan pesan inbound yang SUDAH tertaut opportunity
+ *   (beserta ringkasan opportunity) — percakapan TIDAK hilang setelah lead
+ *   dikonversi; marketing bisa melanjutkan chat dengan klien aktif dari inbox.
  */
 
 /** Ronde 24 — pesan ringkas dalam thread (tanpa field internal berat). */
@@ -108,6 +114,8 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const channelId = sp.get("channel");
   const brandId = sp.get("brandId");
+  // Ronde 32 — view=all menyertakan pesan inbound yang sudah tertaut opportunity.
+  const view = sp.get("view") === "all" ? "all" : "open";
 
   // Sweep berjalan ketika modul inbox dibuka (throttle 5 menit di lib).
   let autoEscalated = 0;
@@ -122,11 +130,17 @@ export async function GET(req: NextRequest) {
   const leads = await db.interaction.findMany({
     where: {
       direction: "inbound",
-      opportunityId: null,
+      // Ronde 32: view=open → hanya belum dikonversi; view=all → termasuk terkonversi.
+      ...(view === "open" ? { opportunityId: null } : {}),
       ...(channelId && channelId !== "all" ? { channel: channelId } : {}),
       ...(brandId && brandId !== "all" ? { brandId } : {}),
     },
-    include: { contact: { include: { company: true } }, brand: true },
+    include: {
+      contact: { include: { company: true } },
+      brand: true,
+      // Ronde 32 — ringkasan opportunity utk thread terkonversi (badge di kartu + header chat).
+      opportunity: { select: { id: true, title: true, stage: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: 100,
   });

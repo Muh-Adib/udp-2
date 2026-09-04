@@ -9,6 +9,11 @@ import { resolveActor } from "@/lib/crm/auth";
  * Fase 3 — Respons & catat lead inbox:
  * buat interaction outbound sebagai jawaban lead inbound, lalu tandai lead
  * `respondedBy/respondedAt` (memenuhi SLA & menghentikan countdown).
+ *
+ * Ronde 32 — FIX alur konversi: thread yang SUDAH dikonversi ke opportunity
+ * TETAP bisa dibalas dari inbox (chat lanjutan dgn klien aktif). Balasan
+ * outbound otomatis tertaut ke opportunity (opportunityId) sehingga muncul
+ * juga di Timeline opportunity di Sales Pipeline.
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
@@ -25,8 +30,10 @@ export async function POST(req: NextRequest) {
     include: { contact: { include: { company: true } }, brand: true },
   });
   if (!lead) return fail("Lead tidak ditemukan", 404);
-  if (lead.direction !== "inbound" || lead.opportunityId) {
-    return fail("Lead sudah diproses atau dikonversi", 400);
+  // Ronde 32: balasan pada thread terkonversi DIBOLEHKAN (dulu diblok total —
+  // percakapan jadi mati setelah konversi). Hanya arah pesan yang tetap divalidasi.
+  if (lead.direction !== "inbound") {
+    return fail("Hanya pesan inbound yang bisa dibalas", 400);
   }
 
   const actorName = actor.name;
@@ -82,7 +89,9 @@ export async function POST(req: NextRequest) {
       content,
       deliveryStatus,
       deliveryNote,
-      opportunityId: null,
+      // Ronde 32: balasan pada thread terkonversi ikut tertaut ke opportunity —
+      // muncul di Timeline opportunity (Pipeline) DAN di thread inbox (view=all).
+      opportunityId: lead.opportunityId ?? null,
       contactId,
       companyId,
       externalId: `inbox-reply:${lead.id}`,

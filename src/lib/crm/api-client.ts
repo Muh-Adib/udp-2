@@ -179,11 +179,13 @@ export const api = {
     request<{ candidates: MatchCandidateDTO[] }>("/api/identify", { method: "POST", body: JSON.stringify(identity) }),
 
   // Inbox
-  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean }) => {
+  // Ronde 32 — view: "open" (default, belum dikonversi) | "all" (termasuk terkonversi)
+  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all" }) => {
     const sp = new URLSearchParams();
     if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     if (params?.sweep) sp.set("sweep", "1");
+    if (params?.view === "all") sp.set("view", "all");
     return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>

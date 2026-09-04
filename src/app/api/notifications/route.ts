@@ -89,6 +89,50 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // 1b. Ronde 32 — PESAN BARU dari lead (inbound belum direspons ≤24 jam):
+  //     memastikan marketing TAHU saat lead/klien membalas, bahkan saat tidak
+  //     sedang membuka Lead Inbox. Mencakup DUA kasus:
+  //     (a) lead belum dikonversi — jalur prospek baru;
+  //     (b) balasan dari klien yang SUDAH terkonversi opportunity (thread lanjutan).
+  //     SLA (di atas) mengambil alih saat tunggu >slaHours (severity danger) —
+  //     section ini menutup celah "jam-jam pertama".
+  if (MARKETING_ROLES.has(role)) {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const fresh = await db.interaction.findMany({
+      where: {
+        direction: "inbound",
+        respondedAt: null,
+        createdAt: { gte: dayAgo },
+        ...(brandWhere ? { brand: brandWhere } : {}),
+      },
+      include: {
+        brand: true,
+        contact: true,
+        opportunity: { select: { id: true, title: true, stage: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+    });
+    for (const msg of fresh) {
+      const sender = msg.contact?.fullName ?? msg.senderName ?? "Lead baru";
+      push({
+        key: `msg:${msg.id}`,
+        type: "message",
+        severity: "info",
+        title: msg.opportunity
+          ? `Balasan dari ${sender} — ${msg.opportunity.title}`
+          : `Pesan baru dari ${sender}`,
+        description: `${msg.channel}${msg.brand ? ` · ${msg.brand.name}` : ""} · "${msg.content.slice(0, 90)}${msg.content.length > 90 ? "…" : ""}"`,
+        module: "inbox",
+        brandName: msg.brand?.name ?? null,
+        brandColor: msg.brand?.color ?? null,
+        entityLabel: null,
+        at: msg.createdAt.toISOString(),
+        ageHours: ageHours(msg.createdAt),
+      });
+    }
+  }
+
   // 2. Approval pending — estimasi/diskon menunggu keputusan
   if (FINANCE_ROLES.has(role)) {
     const approvals = await db.approvalRequest.findMany({

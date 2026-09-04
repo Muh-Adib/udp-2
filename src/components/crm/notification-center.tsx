@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { io } from "socket.io-client";
 import {
   Bell, BellOff, CheckCheck, X, Timer, FileCheck2, GitPullRequestArrow,
-  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal,
+  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal, MessageSquare,
 } from "lucide-react";
 
 /** Event global untuk membuka pusat notifikasi dari widget dashboard. */
@@ -30,6 +30,7 @@ import { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
 
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
   sla: Timer,
+  message: MessageSquare, // Ronde 32 — pesan baru dari lead
   approval: FileCheck2,
   cr: GitPullRequestArrow,
   task: ListChecks,
