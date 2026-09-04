@@ -1348,13 +1348,14 @@ function IdentifyModal({
           </div>
         )}
 
-        <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
-          <Button variant="outline" onClick={onClose}>Tutup</Button>
-          {/* Ronde 33 — aksi gabung murni: tautkan identitas tanpa opportunity.
-              Sebelumnya hilang — satu-satunya jalan setelah memilih kandidat adalah konversi. */}
+        {/* Ronde 33 — footer SELALU vertikal: 3 tombol nowrap (~500px) melebihi max-w-md
+            (448px) bila sebaris — dulu menyebabkan modal melebar/overflow. Perlu sm:flex-col
+            eksplisit utk menimpa sm:flex-row bawaan DialogFooter. Urutan = urutan keputusan:
+            gabung identitas dulu, konversi bila siap, tutup terakhir. */}
+        <DialogFooter className="flex-col gap-2 sm:flex-col">
           <Button
             variant="outline"
-            className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+            className="w-full border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
             disabled={!selectedContactId || linking}
             onClick={onLink}
             aria-label="Gabungkan log percakapan ke contact terpilih tanpa membuat opportunity"
@@ -1365,10 +1366,11 @@ function IdentifyModal({
               <><GitMerge className="size-4" aria-hidden="true" /> Gabungkan ke Contact</>
             )}
           </Button>
-          <Button onClick={onConvert} disabled={linking}>
+          <Button className="w-full" onClick={onConvert} disabled={linking}>
             <UserPlus className="size-4" aria-hidden="true" />
             Konversi jadi Opportunity
           </Button>
+          <Button variant="ghost" className="w-full" onClick={onClose}>Tutup</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -2015,7 +2017,7 @@ export default function InboxModule() {
       setShowIdentify(false);
       setLinkedContactId(null);
       toast.success("Identitas digabungkan", {
-        description: `Log percakapan lead ini kini menyatu dengan ${res.contactName ?? "contact terpilih"} — thread lintas kanal & kanal balasan mengikuti contact.`,
+        description: `Log percakapan lead ini kini menyatu dengan ${res.contactName ?? "contact terpilih"} — thread lintas kanal & kanal balasan mengikuti contact. Selanjutnya: balas pesannya, atau konversi ke opportunity saat sudah siap.`,
       });
       if (res.unifiedCount > 0) {
         toast.info(`${res.unifiedCount} pesan lain dari identitas sama ikut tertaut ke contact ini.`, {
@@ -2557,12 +2559,17 @@ export default function InboxModule() {
                         )}
                         {`${identity.count}/${identity.total}`}
                       </button>
-                      <ToolIconButton
-                        icon={Fingerprint}
-                        label="Identifikasi identitas"
-                        onClick={() => setShowIdentify(true)}
-                        badge={selectedLead.candidates.length}
-                      />
+                      {/* Ronde 33 — tool Identifikasi disembunyikan bila identitas sudah
+                          tergabung ke contact (kandidat = kosong, tidak ada yg perlu diputuskan).
+                          Edit data identitas tetap bisa lewat chip kelengkapan. */}
+                      {!selectedLead.contact ? (
+                        <ToolIconButton
+                          icon={Fingerprint}
+                          label="Identifikasi identitas"
+                          onClick={() => setShowIdentify(true)}
+                          badge={selectedLead.candidates.length}
+                        />
+                      ) : null}
                       {/* Ronde 32 — tool konversi disembunyikan untuk thread terkonversi */}
                       {!selectedOpp ? (
                         <ToolIconButton

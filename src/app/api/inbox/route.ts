@@ -152,18 +152,26 @@ export async function GET(req: NextRequest) {
   // Untuk setiap lead, cari kandidat identitas + hitung SLA
   const enriched = await Promise.all(
     leads.map(async (lead) => {
-      // FIX r22: handle IG bukan email — hanya email valid (x@y.tld) yang dipakai utk pencocokan.
-      const candidates = await findMatchCandidates({
-        email: extractEmailFromText(lead.senderName),
-        whatsapp: lead.senderName && /^\+?[\d][\d\s\-()+]{5,}$/.test(lead.senderName.trim()) ? lead.senderName : null,
-        fullName: lead.contact?.fullName ?? null,
-        companyName: lead.contact?.company?.name ?? null,
-      }, contactPool);
+      // Ronde 33 — lead yang SUDAH tertaut contact tidak perlu kandidat lagi:
+      // identitasnya selesai (warning "Duplikat? n kandidat" otomatis hilang),
+      // dan pencocokan pool kontak (500 kontak) dihemat untuk lead ini.
+      const candidates = lead.contactId
+        ? []
+        : // FIX r22: handle IG bukan email — hanya email valid (x@y.tld) yang dipakai utk pencocokan.
+          (
+            await findMatchCandidates({
+              email: extractEmailFromText(lead.senderName),
+              whatsapp:
+                lead.senderName && /^\+?[\d][\d\s\-()+]{5,}$/.test(lead.senderName.trim()) ? lead.senderName : null,
+              fullName: lead.contact?.fullName ?? null,
+              companyName: lead.contact?.company?.name ?? null,
+            }, contactPool)
+          ).filter((c) => c.score >= 40);
       const waitHours = Math.floor((Date.now() - lead.createdAt.getTime()) / (60 * 60 * 1000));
       return {
         ...lead,
         slaHours: waitHours,
-        candidates: candidates.filter((c) => c.score >= 40),
+        candidates,
       };
     })
   );

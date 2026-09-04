@@ -1426,3 +1426,22 @@ Stage Summary:
 - AKSI YANG HILANG SUDAH ADA: setelah memilih kandidat identitas, marketing kini punya 2 pilihan jelas — "Gabungkan ke Contact" (satukan log percakapan lintas kanal TANPA membuat opportunity; lead tetap di Perlu Tindakan dan bisa dikonversi kapan saja) atau "Konversi jadi Opportunity" (gabung + masuk pipeline). Kebingungan "lalu apa?" terjawab langsung di UI lewat deskripsi modal dan 3 tombol footer.
 - Backend baru /api/inbox/link dengan guard lengkap (sesi, inbound-only, anti re-convert, validasi contact) + sibling unify anti-duplikat + audit trail.
 - Backlog tetap: SMTP verify berkala/IMAP pull utk WA-IG (simulasi), dashboard groupBy, letter template editor lanjutan, notif web-push.
+---
+Task ID: 33-b-main
+Agent: main (Z.ai Code)
+Task: Ronde 33-b — lanjutan laporan user: "lalu? mengapa warning masih ada? dan modalnya melebar" setelah aksi Gabungkan ke Contact
+
+Work Log:
+- LAPORAN USER (2 temuan): (1) setelah merge sukses (toast "menyatu dengan Ratna Sari"), warning "Duplikat? 2 kandidat" MASIH tampil di kartu thread; (2) modal Identifikasi MELEBAR.
+- DIAGNOSIS 1 (warning): GET /api/inbox menghitung findMatchCandidates untuk SEMUA lead — termasuk yang SUDAH tertaut contact. Lead tertaut tetap dicocokkan ke pool kontak lewat sender tokens-nya → kandidat tak pernah kosong → badge "Duplikat? n kandidat" (dari group.maxCandidates) permanen walaupun identitas sudah tergabung. Stat header "WARNING DUPLIKAT" juga ikut salah (menghitung lead tergabung).
+- FIX 1 (src/app/api/inbox/route.ts): lead dgn contactId → candidates=[] (skip findMatchCandidates). Bukti: identitas selesai = tidak ada keputusan lagi. Efek samping positif: hemat pencocokan pool 500 kontak per lead tertaut. autoUnifyLeads aman (sudah skip lead tertaut), thread building aman (contactIdToKey sudah diisi dari lead.contactId).
+- DIAGNOSIS 2 (modal melebar): footer IdentifyModal 3 tombol nowrap (~500px total: Tutup+Gabungkan+Konversi) > lebar dialog max-w-md (448px). Footer awalnya "flex-col gap-2 sm:flex-row" → di sm+ jadi SEBARIS → overflow horizontal keluar batas dialog (terverifikasi browser: footerMaxRight 963 > dlgRight 864). Tambahan akar: base DialogFooter shadcn = "sm:flex-row" — override flex-col TANPA prefix sm: kalah di breakpoint sm+ (tailwind-merge tidak menghapus sm:flex-row bila kelas pengganti juga tanpa prefix).
+- FIX 2 (inbox-module IdentifyModal): footer "flex-col gap-2 sm:flex-col" (sm:flex-col eksplisit menimpa sm:flex-row bawaan) + urutan DOM diganti = urutan keputusan: Gabungkan ke Contact (emerald, w-full) → Konversi jadi Opportunity (w-full) → Tutup (ghost, w-full). Dialog kini TETAP 448px, 3 tombol vertikal full-width 398px.
+- FIX 3 (UX kejelasan "lalu apa?"): toast sukses gabung diperluas — "…Selanjutnya: balas pesannya, atau konversi ke opportunity saat sudah siap."; tool Fingerprint "Identifikasi identitas" DISSEMBUNYIKAN di header chat bila lead sudah punya contact (tidak ada keputusan identitas tersisa — edit data tetap bisa lewat chip kelengkapan 5/5).
+- VERIFIKASI API (Dewi/Marketing): view=all → 16 lead tertaut SEMUA candidates=0 ✓; 4 unlinked tak berubah. Browser QA (Dewi, 1280×800): badge "Duplikat?" HILANG dari semua kartu (0 badge); thread Ratna → tool Identifikasi hilang, sisa Konversi+Eskalasi, chip 5/5; modal lead unlinked → dialog 448px, overflow:false, footer vertikal (Gabungkan→Konversi→Tutup @y 437/481/525, w 398); window.__errs=0; lint 0; tsc 0; dev.log bersih. Screenshot: qa33b-ratna-tools.png, qa33b-modal-stacked-fixed.png.
+
+Stage Summary:
+- Dua temuan lanjutan user Ronde 33 tuntas: (1) warning "Duplikat? n kandidat" kini OTOMATIS hilang begitu identitas digabungkan — dihitung hanya untuk lead yang belum tertaut contact (juga memperbaiki stat header WARNING DUPLIKAT); (2) modal Identifikasi tidak melebar lagi — dialog terkunci 448px dgn footer vertikal 3 tombol full-width, urutan keputusan jelas (gabung → konversi → tutup).
+- Alur pasca-gabung kini eksplisit lewat toast: balas pesan → konversi saat siap; tool Identifikasi hilang untuk lead yang sudah tergabung (tugasnya selesai).
+- Pelajaran teknis: override utility Tailwind pada komponen shadcn yang punya varian sm: HARUS memakai prefix sm: yang sama (sm:flex-col) — flex-col tanpa prefix kalah di breakpoint sm+.
+- Catatan: badge amber "Terlambat Xj" pada kartu Ratna adalah peringatan SLA RESPONS (belum dibalas) — memang benar masih tampil dan hilang setelah direspons; beda dgn warning duplikat yang kini hilang saat identitas tergabung.
