@@ -190,6 +190,10 @@ export const api = {
   },
   convertLead: (payload: Record<string, unknown>) =>
     request<{ opportunity: OpportunityDTO; unifiedCount?: number }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
+  // Ronde 33 — gabungkan identitas lead ke contact existing TANPA membuat opportunity
+  // (aksi yang hilang di modal Identifikasi: dulu satu-satunya jalan adalah konversi).
+  linkLead: (payload: { interactionId: string; contactId: string }) =>
+    request<{ contactId: string; contactName: string | null; unifiedCount: number }>("/api/inbox/link", { method: "POST", body: JSON.stringify(payload) }),
   /** Respons & catat lead inbox (Fase 3): outbound reply + tandai respondedAt. */
   inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string }) =>
     request<{ reply: InteractionDTO; lead: InteractionDTO & { slaHours?: number } }>("/api/inbox/respond", { method: "POST", body: JSON.stringify(payload) }),

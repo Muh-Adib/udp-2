@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
-  Fingerprint, FolderKanban, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
+  Fingerprint, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
   MessagesSquare, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -1299,13 +1299,16 @@ function IdentityModal({
 // ============ Ronde 29 — modal identifikasi identitas (kandidat merge lintas kanal) ============
 
 function IdentifyModal({
-  lead, selectedContactId, onToggle, onClose, onConvert,
+  lead, selectedContactId, onToggle, onClose, onConvert, onLink, linking,
 }: {
   lead: InboxLead | null;
   selectedContactId: string | null;
   onToggle: (contactId: string) => void;
   onClose: () => void;
   onConvert: () => void;
+  /** Ronde 33 — gabungkan identitas ke contact TANPA konversi (aksi yang hilang). */
+  onLink: () => void;
+  linking: boolean;
 }) {
   const count = lead?.candidates.length ?? 0;
   return (
@@ -1320,7 +1323,7 @@ function IdentifyModal({
           </DialogTitle>
           <DialogDescription>
             {selectedContactId
-              ? "Kandidat dipilih — log percakapan dari semua kanal akan tergabung ke contact ini."
+              ? "Kandidat dipilih — 'Gabungkan ke Contact' menyatukan log percakapan lintas kanal ke contact ini TANPA membuat opportunity. Bila sudah siap masuk pipeline, pakai 'Konversi jadi Opportunity'."
               : "Cocokkan lead dgn contact yang sudah ada supaya log percakapan lintas kanal tergabung."}
           </DialogDescription>
         </DialogHeader>
@@ -1345,9 +1348,24 @@ function IdentifyModal({
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
           <Button variant="outline" onClick={onClose}>Tutup</Button>
-          <Button onClick={onConvert}>
+          {/* Ronde 33 — aksi gabung murni: tautkan identitas tanpa opportunity.
+              Sebelumnya hilang — satu-satunya jalan setelah memilih kandidat adalah konversi. */}
+          <Button
+            variant="outline"
+            className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+            disabled={!selectedContactId || linking}
+            onClick={onLink}
+            aria-label="Gabungkan log percakapan ke contact terpilih tanpa membuat opportunity"
+          >
+            {linking ? (
+              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Menggabungkan…</>
+            ) : (
+              <><GitMerge className="size-4" aria-hidden="true" /> Gabungkan ke Contact</>
+            )}
+          </Button>
+          <Button onClick={onConvert} disabled={linking}>
             <UserPlus className="size-4" aria-hidden="true" />
             Konversi jadi Opportunity
           </Button>
@@ -1701,6 +1719,8 @@ export default function InboxModule() {
   const [showIdentity, setShowIdentity] = useState(false);
   const [showIdentify, setShowIdentify] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
+  // Ronde 33 — proses aksi "Gabungkan ke Contact" (identitas saja, tanpa konversi)
+  const [linking, setLinking] = useState(false);
   const [chatChannel, setChatChannel] = useState("");
   const [chatBody, setChatBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -1979,6 +1999,36 @@ export default function InboxModule() {
   function handleToggleCandidate(contactId: string) {
     setShowNewContact(false);
     setLinkedContactId((prev) => (prev === contactId ? null : contactId));
+  }
+
+  // Ronde 33 — AKSI YANG SEBELUMNYA HILANG: gabungkan identitas lead ke contact
+  // existing TANPA membuat opportunity. Setelah memilih kandidat di modal Identifikasi,
+  // dulu satu-satunya jalan adalah "Konversi jadi Opportunity" — marketing yang hanya
+  // ingin menyatukan log percakapan lintas kanal tidak punya pintu lain.
+  // Setelah berhasil: thread menyatu ke contact, lead TETAP di "Perlu Tindakan"
+  // (belum opportunity), konversi bisa menyusul kapan saja lewat tool Konversi.
+  async function handleLinkOnly() {
+    if (!selectedLead || !user || !linkedContactId || linking) return;
+    setLinking(true);
+    try {
+      const res = await api.linkLead({ interactionId: selectedLead.id, contactId: linkedContactId });
+      setShowIdentify(false);
+      setLinkedContactId(null);
+      toast.success("Identitas digabungkan", {
+        description: `Log percakapan lead ini kini menyatu dengan ${res.contactName ?? "contact terpilih"} — thread lintas kanal & kanal balasan mengikuti contact.`,
+      });
+      if (res.unifiedCount > 0) {
+        toast.info(`${res.unifiedCount} pesan lain dari identitas sama ikut tertaut ke contact ini.`, {
+          description: "Lead tetap di Perlu Tindakan — konversi ke opportunity bisa dilakukan kapan saja lewat tombol Konversi di header chat.",
+          duration: 7000,
+        });
+      }
+      await loadLeads(true); // reload — thread, replyChannels & identitas kini berbasis contact
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menggabungkan identitas.");
+    } finally {
+      setLinking(false);
+    }
   }
 
   function handleToggleNewContact() {
@@ -2732,6 +2782,8 @@ export default function InboxModule() {
         onToggle={handleToggleCandidate}
         onClose={() => setShowIdentify(false)}
         onConvert={() => { setShowIdentify(false); setShowConvert(true); }}
+        onLink={() => void handleLinkOnly()}
+        linking={linking}
       />
       <ConvertModal
         lead={showConvert ? selectedLead : null}
