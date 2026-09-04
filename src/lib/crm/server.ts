@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { workflowFor } from "@/lib/crm/constants";
+import { achievementFor, workflowFor } from "@/lib/crm/constants";
 import { normalizeEmail, normalizePhone, extractDomain } from "@/lib/crm/utils";
 
 export function ok(data: unknown, init?: number) {
@@ -82,9 +82,35 @@ export async function logAudit(entry: {
   });
 }
 
+/** Ronde 35 — sumber nilai kontrak terbaik (precedence):
+ * 1. Quotation berstatus accepted (nilai yang benar-benar disetujui klien)
+ * 2. Estimasi approved (grandTotal incl. pajak) — estimasi detail yang disetujui Direktur
+ * 3. estimatedValue (angka awal saat konversi lead)
+ * Mengembalikan { value, source } agar alur bisa diaudit. */
+async function resolveContractValue(oppId: string, fallback: number | null) {
+  const acceptedQuote = await db.quotation.findFirst({
+    where: { opportunityId: oppId, status: "accepted" },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (acceptedQuote && acceptedQuote.total > 0) {
+    return { value: acceptedQuote.total, source: `Quotation ${acceptedQuote.number} (accepted)` };
+  }
+  const est = await db.estimation.findUnique({ where: { opportunityId: oppId } });
+  if (est && est.status === "approved" && est.grandTotal > 0) {
+    return { value: est.grandTotal, source: "Estimasi approved (grand total)" };
+  }
+  if (fallback && fallback > 0) {
+    return { value: fallback, source: "Estimasi nilai awal" };
+  }
+  return { value: 0, source: "Belum ada nilai" };
+}
+
 /** Buat project + milestone + invoice DP ketika opportunity menjadi Won.
  * Ronde 26: seluruh penulisan dalam SATU transaksi — gagal di tengah tidak
- * menyisakan project tanpa milestone atau invoice yatim. */
+ * menyisakan project tanpa milestone atau invoice yatim.
+ * Ronde 35: nilai kontrak mengikuti sumber terbaik (quotation accepted →
+ * estimasi approved → estimatedValue) & setiap milestone membawa deskripsi
+ * capaian (apa yang dicapai/diserahkan di tahap itu). */
 export async function handleWonTransition(oppId: string) {
   const opp = await db.opportunity.findUnique({
     where: { id: oppId },
@@ -98,6 +124,9 @@ export async function handleWonTransition(oppId: string) {
     // Cek ulang DI DALAM transaksi (tutup race dua konversi Won bersamaan).
     const existing = await tx.project.findUnique({ where: { opportunityId: opp.id } });
     if (existing) return existing;
+
+    // Ronde 35 — nilai kontrak dari sumber terbaik (dihitung sebelum tx, read-only).
+    const { value: contractValue, source: valueSource } = await resolveContractValue(opp.id, opp.estimatedValue);
 
     const year = new Date().getFullYear();
     const count = await tx.project.count();
@@ -117,8 +146,8 @@ export async function handleWonTransition(oppId: string) {
         pmName: "Budi Hartono",
         startDate: new Date(),
         dueDate: opp.targetDeadline ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
-        contractValue: opp.estimatedValue ?? 0,
-        budgetInternal: Math.round((opp.estimatedValue ?? 0) * 0.62),
+        contractValue,
+        budgetInternal: Math.round(contractValue * 0.62),
       },
     });
 
@@ -131,13 +160,14 @@ export async function handleWonTransition(oppId: string) {
         order: i,
         status: i === 0 ? "in_progress" : "pending",
         dueDate: new Date((project.startDate?.getTime() ?? Date.now()) + ((i + 1) * span) / flow.length),
+        achievement: achievementFor(name),
       })),
     });
 
-    // Draft invoice DP 50%
+    // Draft invoice DP 50% — dari nilai kontrak sumber terbaik
     const invCount = await tx.invoice.count();
     const number = `${opp.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
-    const amount = Math.round((opp.estimatedValue ?? 0) * 0.5);
+    const amount = Math.round(contractValue * 0.5);
     if (amount > 0) {
       await tx.invoice.create({
         data: {
@@ -146,7 +176,7 @@ export async function handleWonTransition(oppId: string) {
           companyId,
           projectId: project.id,
           opportunityId: opp.id,
-          description: `DP 50% - ${opp.title}`,
+          description: `DP 50% - ${opp.title}${valueSource !== "Belum ada nilai" ? ` (nilai: ${valueSource})` : ""}`,
           amount,
           taxRate: 11,
           taxAmount: Math.round(amount * 0.11),

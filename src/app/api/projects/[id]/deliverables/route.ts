@@ -68,9 +68,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const note = body.note ? String(body.note).trim() : null;
   const createdBy = actor.name;
 
+  // Ronde 35 — deliverable opsional ditautkan ke milestone (timeline produksi):
+  // jelas tahap mana yang membutuhkan file/tautan ini.
+  let milestoneId: string | null = null;
+  if (body.milestoneId) {
+    const msId = String(body.milestoneId).trim();
+    const ms = await db.milestone.findFirst({ where: { id: msId, projectId: id }, select: { id: true, name: true } });
+    if (!ms) return fail("Milestone tidak ditemukan di project ini", 400);
+    milestoneId = ms.id;
+  }
+
   const deliverable = await db.projectDeliverable.create({
     data: {
       projectId: id,
+      milestoneId,
       name,
       kind,
       url,

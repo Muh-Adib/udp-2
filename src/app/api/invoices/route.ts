@@ -127,5 +127,55 @@ export async function POST(req: NextRequest) {
     });
     return ok({ invoice: updated });
   }
+  // Ronde 35 — terbitkan invoice manual dari project (termin/milestone).
+  // Menyatukan alur Produksi → Keuangan: tahap milestone selesai → finance menagih.
+  if (body.action === "create_invoice") {
+    const projectId = String(body.projectId ?? "").trim();
+    if (!projectId) return ok({ error: "Project wajib dipilih" }, 400);
+    const amount = numOrNull(body.amount);
+    if (amount === null || amount <= 0) {
+      return ok({ error: "Nominal invoice harus angka lebih besar dari 0" }, 400);
+    }
+    const project = await db.project.findUnique({
+      where: { id: projectId },
+      include: { brand: true, opportunity: true },
+    });
+    if (!project) return ok({ error: "Project tidak ditemukan" }, 404);
+
+    const description = String(body.description ?? "").trim() || `Invoice project ${project.name}`;
+    const taxRate = numOrNull(body.taxRate) ?? 11;
+    const taxAmount = Math.round((amount * taxRate) / 100);
+    const dueDate = body.dueDate ? new Date(String(body.dueDate)) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+    const year = new Date().getFullYear();
+    const invCount = await db.invoice.count();
+    const number = `${project.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
+
+    const invoice = await db.invoice.create({
+      data: {
+        number,
+        brandId: project.brandId,
+        companyId: project.companyId,
+        projectId: project.id,
+        opportunityId: project.opportunityId,
+        description,
+        amount,
+        taxRate,
+        taxAmount,
+        total: amount + taxAmount,
+        currency: project.brand.primaryCurrency ?? "IDR",
+        status: "draft",
+        dueDate,
+      },
+      include: { payments: true },
+    });
+    await logAudit({
+      actorName: actor.name, actorRole: actor.role,
+      action: "create", entity: "invoice", entityId: invoice.id, entityLabel: invoice.number,
+      newValue: `Invoice ${description} · ${amount}${taxRate ? ` + PPN ${taxRate}%` : ""} untuk project ${project.code}`,
+      req,
+    });
+    return ok({ invoice }, 201);
+  }
   return ok({ error: "Unknown action" }, 400);
 }

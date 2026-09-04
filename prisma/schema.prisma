@@ -310,6 +310,8 @@ model ProjectDeliverable {
   id            String   @id @default(cuid())
   projectId     String
   project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestoneId   String? // Ronde 35 — opsional: deliverable ini untuk milestone mana (timeline produksi)
+  milestone     Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   name          String
   kind          String   @default("link") // link | file
   url           String? // untuk kind=link
@@ -328,14 +330,17 @@ model ProjectDeliverable {
 }
 
 model Milestone {
-  id        String    @id @default(cuid())
-  projectId String
-  project   Project   @relation(fields: [projectId], references: [id])
-  name      String
-  order     Int       @default(0)
-  status    String    @default("pending") // pending, in_progress, done
-  dueDate   DateTime?
-  createdAt DateTime  @default(now())
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id])
+  name        String
+  order       Int       @default(0)
+  status      String    @default("pending") // pending, in_progress, done
+  dueDate     DateTime?
+  achievement String? // Ronde 35 — apa yang dicapai/diserahkan pada milestone ini
+  createdAt   DateTime  @default(now())
+
+  deliverables ProjectDeliverable[]
 }
 
 model ChangeRequest {

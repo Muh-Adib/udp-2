@@ -24,6 +24,7 @@ import {
   Inbox,
   KanbanSquare,
   Loader2,
+  Plus,
   Search,
   Table2,
   Upload,
@@ -58,6 +59,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import OpportunityDetail from "@/components/crm/opportunity-detail";
+import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import { api } from "@/lib/crm/api-client";
 import { LOST_REASONS, OPEN_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { scoreTier } from "@/lib/crm/scoring";
@@ -1056,6 +1058,8 @@ export default function PipelineModule() {
   const [pendingLost, setPendingLost] = useState<OpportunityDTO | null>(null);
   const [savingStage, setSavingStage] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Ronde 35 — tombol "Peluang Baru" dengan form opportunity bersama
+  const [newOpen, setNewOpen] = useState(false);
 
   const oppsRef = useRef<OpportunityDTO[]>([]);
   const draggedRecentlyRef = useRef(false);
@@ -1322,6 +1326,15 @@ export default function PipelineModule() {
             {filtered.length} opportunity
           </Badge>
           <Button
+            size="sm"
+            aria-label="Buat opportunity baru"
+            title="Buat opportunity baru"
+            onClick={() => setNewOpen(true)}
+          >
+            <Plus className="size-4" aria-hidden="true" />
+            <span className="hidden sm:inline">Peluang Baru</span>
+          </Button>
+          <Button
             variant="outline"
             size="sm"
             aria-label="Impor opportunity dari CSV"
@@ -1483,6 +1496,13 @@ export default function PipelineModule() {
         open={importOpen}
         onOpenChange={setImportOpen}
         onImported={() => void load({ silent: true })}
+      />
+
+      {/* Ronde 35 — buat opportunity baru (form bersama, konsisten dgn form konversi Inbox) */}
+      <OpportunityFormDialog
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onSaved={() => void load({ silent: true })}
       />
     </div>
   );

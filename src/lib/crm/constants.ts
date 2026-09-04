@@ -113,6 +113,47 @@ export const PROJECT_WORKFLOWS: Record<string, string[]> = {
   immersive: ["Survey Lokasi", "Technical Plan", "Production", "Setup & Install", "Event / Go-Live", "Archive"],
 };
 
+/** Ronde 35 — capaian default per milestone template (apa yang dicapai/diserahkan
+ * saat milestone selesai). Dipakai saat project dibuat otomatis dari deal Won,
+ * sehingga timeline produksi langsung menjelaskan deliverable tiap tahap. */
+export const PROJECT_WORKFLOW_ACHIEVEMENTS: Record<string, string> = {
+  // website
+  "Discovery": "Brief final, riset kompetitor & sitemap disetujui klien",
+  "Sitemap & Wireframe": "Wireframe seluruh halaman disetujui — konten & struktur final",
+  "UI/UX Design": "Desain visual (hi-fi) disetujui — siap dipindah ke development",
+  "Development": "Build selesai di staging — semua fitur berfungsi sesuai scope",
+  "QA & Testing": "Uji lintas browser/perangkat lulus — bug kritis nihil",
+  "Launch": "Website live di domain produksi + serah terima akses & dokumentasi",
+  // video
+  "Pre-Production": "Naskah, storyboard & jadwal produksi disetujui klien",
+  "Shooting": "Seluruh footage terkumpul sesuai shotlist — backup aman",
+  "Editing": "Draft edit (rough cut) dikirim untuk ditinjau klien",
+  "Revision": "Revisi selesai sesuai catatan review — versi final siap",
+  // animation
+  "Script": "Naskah final disetujui — voice over bisa direkam",
+  "Storyboard": "Storyboard lengkap disetujui — produksi aset dimulai",
+  "Asset Production": "Seluruh aset (karakter, background, properti) selesai",
+  "Animation": "Animasi penuh (full anim) dikirim untuk review",
+  "Sound Design": "Musik, SFX & mixing selesai — audio final",
+  "Final Render": "Master render final (resolusi & format lengkap) diserahkan",
+  // immersive
+  "Survey Lokasi": "Data survei lokasi & kebutuhan teknis terdokumentasi",
+  "Technical Plan": "Rencana teknis & 3D mockup setup disetujui klien",
+  "Production": "Konten immersive (render/video interaktif) selesai diproduksi",
+  "Setup & Install": "Instalasi perangkat & konten di lokasi teruji",
+  "Event / Go-Live": "Event/go-live berjalan — sistem beroperasi penuh",
+  "Archive": "Dokumentasi, backup konten & serah terima aset selesai",
+};
+
+/** Ronde 35 — capaian bawaan untuk nama milestone yang tidak ada di template
+ * (mis. milestone manual buatan user): tetap dapat deskripsi bermakna. */
+export function achievementFor(milestoneName: string): string {
+  return (
+    PROJECT_WORKFLOW_ACHIEVEMENTS[milestoneName] ??
+    `Hasil kerja "${milestoneName}" selesai & disetujui — siap dikirim ke tahap berikutnya`
+  );
+}
+
 export function workflowFor(category?: string | null): string[] {
   if (!category) return PROJECT_WORKFLOWS.video;
   const c = category.toLowerCase();

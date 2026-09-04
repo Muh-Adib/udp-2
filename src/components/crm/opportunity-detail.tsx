@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
@@ -976,6 +976,8 @@ function QuotationFormDialog({
   editing,
   actorName,
   actorRole,
+  estimation,
+  serviceName,
   onSaved,
 }: {
   open: boolean;
@@ -985,6 +987,9 @@ function QuotationFormDialog({
   editing: QuotationDTO | null;
   actorName: string;
   actorRole: string;
+  /** Ronde 35 — estimasi detail sebagai sumber prefill item quotation. */
+  estimation?: EstimationDTO | null;
+  serviceName?: string | null;
   onSaved: () => void;
 }) {
   const currency = editing?.currency ?? defaultCurrency;
@@ -994,11 +999,14 @@ function QuotationFormDialog({
   const [notes, setNotes] = useState("");
   const [validUntil, setValidUntil] = useState(defaultValidUntil());
   const [saving, setSaving] = useState(false);
+  /** Ronde 35 — true bila item terisi otomatis dari estimasi detail. */
+  const prefilledFromEstimation = useRef(false);
 
   // Prefill setiap kali dialog dibuka (mode buat / edit draft).
   useEffect(() => {
     if (!open) return;
     if (editing) {
+      prefilledFromEstimation.current = false;
       const items = parseQuotationItems(editing.items);
       setRows(
         items.length > 0
@@ -1010,13 +1018,27 @@ function QuotationFormDialog({
       setNotes(editing.notes ?? "");
       setValidUntil(editing.validUntil ? editing.validUntil.slice(0, 10) : defaultValidUntil());
     } else {
-      setRows([{ description: "", qty: "1", unitPrice: "" }]);
-      setDiscountPct("0");
-      setTaxPct("11");
+      // Ronde 35 — estimasi detail (approved/pending) dengan revenue > 0 →
+      // item quotation terisi otomatis: sales tidak mengetik ulang angka estimasi.
+      const estRevenue = Number(estimation?.revenue ?? 0);
+      if (estRevenue > 0) {
+        const label = serviceName?.trim()
+          ? `Layanan ${serviceName.trim()} — sesuai estimasi detail`
+          : "Layanan utama — sesuai estimasi detail";
+        setRows([{ description: label, qty: "1", unitPrice: String(estRevenue) }]);
+        setDiscountPct(String(estimation?.discountPct ?? 0));
+        setTaxPct(String(estimation?.taxPct ?? 11));
+        prefilledFromEstimation.current = true;
+      } else {
+        prefilledFromEstimation.current = false;
+        setRows([{ description: "", qty: "1", unitPrice: "" }]);
+        setDiscountPct("0");
+        setTaxPct("11");
+      }
       setNotes("");
       setValidUntil(defaultValidUntil());
     }
-  }, [open, editing]);
+  }, [open, editing, estimation, serviceName]);
 
   const totals = useMemo(() => {
     const items = rows.map((r) => {
@@ -1087,6 +1109,15 @@ function QuotationFormDialog({
         </DialogHeader>
 
         <div className="crm-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+          {prefilledFromEstimation ? (
+            <p className="flex items-start gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-800" role="status">
+              <Sparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              <span>
+                Item diisi otomatis dari <strong>estimasi detail</strong> (revenue{" "}
+                {formatCurrencyFull(Number(estimation?.revenue ?? 0), currency)}). Sesuaikan item bila penawaran dibagi per komponen.
+              </span>
+            </p>
+          ) : null}
           <div className="space-y-2">
             <div className="hidden gap-2 px-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400 sm:grid sm:grid-cols-[minmax(0,1fr)_72px_130px_110px_36px]">
               <span>Deskripsi</span>
@@ -1392,6 +1423,8 @@ function QuotationTab({
   defaultCurrency,
   actorName,
   actorRole,
+  estimation,
+  serviceName,
   onPrint,
   onChanged,
 }: {
@@ -1401,6 +1434,9 @@ function QuotationTab({
   defaultCurrency: string;
   actorName: string;
   actorRole: string;
+  /** Ronde 35 — estimasi detail utk prefill item quotation. */
+  estimation: EstimationDTO | null;
+  serviceName?: string | null;
   onPrint: (q: QuotationDTO) => void;
   onChanged: () => void;
 }) {
@@ -1480,6 +1516,8 @@ function QuotationTab({
         editing={editing}
         actorName={actorName}
         actorRole={actorRole}
+        estimation={estimation}
+        serviceName={serviceName}
         onSaved={onChanged}
       />
     </div>
@@ -2245,6 +2283,8 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       defaultCurrency={data.currency}
                       actorName={actorMeta.actorName}
                       actorRole={actorMeta.actorRole}
+                      estimation={data.estimation ?? null}
+                      serviceName={data.serviceName}
                       onPrint={setPrintTarget}
                       onChanged={handleQuotationChanged}
                     />

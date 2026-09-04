@@ -931,9 +931,11 @@ function CalendarView({ projects, onOpenDetail, onRescheduleMilestone, onOpenRes
 // ============ Deliverable & Review (Task 22-4) ============
 
 /** Satu baris deliverable: ikon jenis, meta, status, aksi review (manajemen/produksi) & hapus. */
-function DeliverableRow({ d, user, onChanged }: {
+function DeliverableRow({ d, user, milestoneName, onChanged }: {
   d: DeliverableRowData;
   user: { name: string; role: string } | null;
+  /** Ronde 35 — nama milestone terkait (bila deliverable ditautkan). */
+  milestoneName?: string | null;
   onChanged: () => Promise<void>;
 }) {
   const meta = dlvMeta(d.status);
@@ -999,6 +1001,12 @@ function DeliverableRow({ d, user, onChanged }: {
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-zinc-900">{d.name}</p>
+            {milestoneName ? (
+              <span className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600" title={`Deliverable untuk milestone ${milestoneName}`}>
+                <Route className="h-2.5 w-2.5 shrink-0 text-zinc-400" aria-hidden />
+                <span className="truncate">Milestone: {milestoneName}</span>
+              </span>
+            ) : null}
             <p className="truncate text-[11px] text-zinc-500">
               {d.kind === "file"
                 ? [d.fileName, d.sizeBytes ? formatSizeKb(d.sizeBytes) : null].filter(Boolean).join(" · ")
@@ -1205,6 +1213,22 @@ export default function ProjectsModule() {
   const [dfSizeBytes, setDfSizeBytes] = useState<number | null>(null);
   const [dfNote, setDfNote] = useState("");
   const [dfSaving, setDfSaving] = useState(false);
+  // Ronde 35 — deliverable opsional terkait milestone (timeline produksi)
+  const [dfMilestoneId, setDfMilestoneId] = useState("");
+
+  // Ronde 35 — tambah/edit milestone (nama + capaian + due date)
+  const [msOpen, setMsOpen] = useState(false);
+  const [msEditing, setMsEditing] = useState<MilestoneDTO | null>(null);
+  const [msName, setMsName] = useState("");
+  const [msAchievement, setMsAchievement] = useState("");
+  const [msDueDate, setMsDueDate] = useState("");
+  const [msSaving, setMsSaving] = useState(false);
+
+  // Ronde 35 — tagih milestone (invoice termin): alur Produksi → Keuangan
+  const [invTarget, setInvTarget] = useState<{ project: ProjectDTO; milestone: MilestoneDTO } | null>(null);
+  const [invDesc, setInvDesc] = useState("");
+  const [invAmount, setInvAmount] = useState("");
+  const [invSaving, setInvSaving] = useState(false);
 
   // Task 22-4 — dialog Proyek Baru (pembuatan manual, tanpa opportunity Won)
   const [npOpen, setNpOpen] = useState(false);
@@ -1223,6 +1247,8 @@ export default function ProjectsModule() {
   const [npSaving, setNpSaving] = useState(false);
 
   const canDecideCr = user?.role === "director" || user?.role === "super_admin";
+  // Ronde 35 — hanya finance/direktur yang bisa menerbitkan invoice milestone
+  const canInvoice = user?.role === "finance" || user?.role === "director" || user?.role === "super_admin";
   const detailCrs = detail?.changeRequests ?? [];
   const approvedCrSum = detailCrs
     .filter((c) => c.status === "approved")
@@ -1361,6 +1387,101 @@ export default function ProjectsModule() {
     setDfMimeType("");
     setDfSizeBytes(null);
     setDfNote("");
+    setDfMilestoneId("");
+  }
+
+  /** Ronde 35 — buka form deliverable dari milestone tertentu (pra-pilih milestone). */
+  function openDfForMilestone(m: MilestoneDTO) {
+    resetDf();
+    setDfMilestoneId(m.id);
+    setDfOpen(true);
+  }
+
+  /** Ronde 35 — dialog tambah (m=null) / edit (m!=null) milestone. */
+  function openMilestoneDialog(m?: MilestoneDTO) {
+    setMsEditing(m ?? null);
+    setMsName(m?.name ?? "");
+    setMsAchievement(m?.achievement ?? "");
+    setMsDueDate(m?.dueDate ? toDateInputValue(new Date(m.dueDate)) : "");
+    setMsOpen(true);
+  }
+
+  async function submitMilestoneDialog() {
+    if (!detail || !user) return;
+    const name = msName.trim();
+    if (!name) { toast.error("Nama milestone wajib diisi"); return; }
+    setMsSaving(true);
+    try {
+      if (msEditing) {
+        await api.updateMilestone({
+          milestoneId: msEditing.id,
+          name,
+          achievement: msAchievement.trim() || null,
+          dueDate: msDueDate || null,
+          actorName: user.name,
+          actorRole: user.role,
+        });
+        toast.success("Milestone diperbarui", { description: `${name} — capaian tersimpan` });
+      } else {
+        await api.createMilestone({
+          projectId: detail.id,
+          name,
+          achievement: msAchievement.trim() || undefined,
+          dueDate: msDueDate || null,
+          actorName: user.name,
+          actorRole: user.role,
+        });
+        toast.success("Milestone ditambahkan", { description: `${name} masuk timeline produksi` });
+      }
+      setMsOpen(false);
+      await refreshDetail();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan milestone");
+    } finally {
+      setMsSaving(false);
+    }
+  }
+
+  /** Ronde 35 — buka dialog tagih milestone: nominal default = kontrak dibagi rata milestone. */
+  function openInvoiceForMilestone(project: ProjectDTO, m: MilestoneDTO) {
+    const total = project.milestones?.length ?? 0;
+    const suggested = total > 0 ? Math.round((project.contractValue ?? 0) / total) : (project.contractValue ?? 0);
+    setInvTarget({ project, milestone: m });
+    setInvDesc(`Milestone ${m.name} — ${project.name}`);
+    setInvAmount(suggested > 0 ? String(suggested) : "");
+  }
+
+  async function submitMilestoneInvoice() {
+    if (!invTarget || !user) return;
+    const amount = Number(invAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Nominal invoice harus angka lebih besar dari 0");
+      return;
+    }
+    setInvSaving(true);
+    try {
+      const res = await api.createProjectInvoice({
+        projectId: invTarget.project.id,
+        description: invDesc.trim() || `Milestone ${invTarget.milestone.name} — ${invTarget.project.name}`,
+        amount,
+        milestoneName: invTarget.milestone.name,
+        actorName: user.name,
+        actorRole: user.role,
+      });
+      toast.success(`Invoice ${res.invoice.number} dibuat (draft)`, {
+        description: "Dikirim dari modul Finance setelah diperiksa.",
+      });
+      setInvTarget(null);
+      // refresh invoice project utk record tahap Penagihan
+      const proj = invTarget.project;
+      api.invoices({ companyId: proj.companyId })
+        .then((r) => setDetailInvoices(r.invoices.filter((i) => i.projectId === proj.id)))
+        .catch(() => undefined);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat invoice");
+    } finally {
+      setInvSaving(false);
+    }
   }
 
   function confirmMilestone(project: ProjectDTO, m: MilestoneDTO) {
@@ -1713,6 +1834,8 @@ export default function ProjectsModule() {
           ? { url: dfUrl.trim() }
           : { fileName: dfFileName, fileData: dfFileData, mimeType: dfMimeType, sizeBytes: dfSizeBytes ?? undefined }),
         note: dfNote.trim() || undefined,
+        // Ronde 35 — tautkan ke milestone bila dipilih (opsional)
+        ...(dfMilestoneId ? { milestoneId: dfMilestoneId } : {}),
         createdBy: user.name,
       });
       toast.success("Deliverable terkirim — menunggu review klien/manajemen");
@@ -2007,44 +2130,158 @@ export default function ProjectsModule() {
                   </div>
                 </div>
 
-                {/* Milestones */}
+                {/* Ronde 35 — Timeline Milestone: urutan tahap, capaian per tahap,
+                    deliverable terkait, dan aksi (selesaikan / kirim deliverable / tagih). */}
                 <div>
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                    Milestone ({(detail.milestones ?? []).filter((m) => m.status === "done").length}/{(detail.milestones ?? []).length} selesai)
-                  </p>
-                  <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
-                    {(detail.milestones ?? []).map((m) => {
-                      const meta = msMeta(m.status);
-                      const Icon = meta.icon;
-                      return (
-                        <div key={m.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white p-3">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <Icon className={`h-4 w-4 shrink-0 ${m.status === "done" ? "text-emerald-600" : m.status === "in_progress" ? "text-amber-600" : "text-zinc-400"}`} aria-hidden />
-                            <div className="min-w-0">
-                              <p className={`truncate text-sm font-medium ${m.status === "done" ? "text-emerald-700 line-through decoration-emerald-500" : "text-zinc-800"}`}>
-                                {m.name}
-                              </p>
-                              <p className="text-[11px] text-zinc-400">
-                                #{m.order} {m.dueDate ? `· due ${formatDate(m.dueDate)}` : ""}
-                              </p>
-                            </div>
-                          </div>
-                          {m.status !== "done" ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => confirmMilestone(detail, m)}
-                              aria-label={`Tandai milestone ${m.name} selesai`}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Selesaikan
-                            </Button>
-                          ) : (
-                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-100 text-emerald-700">Selesai</Badge>
-                          )}
-                        </div>
-                      );
-                    })}
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Timeline Milestone ({(detail.milestones ?? []).filter((m) => m.status === "done").length}/{(detail.milestones ?? []).length} selesai)
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openMilestoneDialog()}
+                      aria-label="Tambah milestone baru"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Milestone
+                    </Button>
                   </div>
+                  {(detail.milestones ?? []).length === 0 ? (
+                    <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+                      Belum ada milestone — tambahkan rencana kerja per tahap.
+                    </div>
+                  ) : (
+                    <ol className="crm-scroll max-h-[26rem] overflow-y-auto pr-1" aria-label="Timeline milestone project">
+                      {(detail.milestones ?? []).map((m, idx) => {
+                        const meta = msMeta(m.status);
+                        const Icon = meta.icon;
+                        const isDone = m.status === "done";
+                        const isCurrent = m.status === "in_progress";
+                        const isLast = idx === (detail.milestones ?? []).length - 1;
+                        const msDlv = (deliverables ?? []).filter((d) => d.milestoneId === m.id);
+                        const overdue = !isDone && m.dueDate ? new Date(m.dueDate).getTime() < Date.now() : false;
+                        return (
+                          <li key={m.id} className="relative flex gap-3 pb-4 last:pb-0">
+                            {/* Rail + dot */}
+                            <div className="flex flex-col items-center" aria-hidden="true">
+                              <span
+                                className={cn(
+                                  "flex size-6 shrink-0 items-center justify-center rounded-full border-2 bg-white",
+                                  isDone ? "border-emerald-500 bg-emerald-500 text-white"
+                                    : isCurrent ? "border-amber-500 text-amber-600"
+                                    : "border-zinc-200 text-zinc-400",
+                                )}
+                              >
+                                {isDone ? <Check className="h-3.5 w-3.5" /> : <Icon className="h-3 w-3" />}
+                              </span>
+                              {!isLast ? (
+                                <span className={cn("mt-1 w-px flex-1", isDone ? "bg-emerald-300" : "bg-zinc-200")} />
+                              ) : null}
+                            </div>
+
+                            {/* Kartu tahap */}
+                            <div
+                              className={cn(
+                                "min-w-0 flex-1 rounded-lg border bg-white p-3",
+                                isCurrent ? "border-amber-200 shadow-[0_0_0_1px_rgba(245,158,11,0.12)]" : "",
+                              )}
+                              aria-current={isCurrent ? "step" : undefined}
+                            >
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <span className="font-mono text-[10px] text-zinc-400">#{m.order + 1}</span>
+                                <p className={cn("min-w-0 flex-1 truncate text-sm font-medium", isDone ? "text-emerald-700" : "text-zinc-800")}>
+                                  {m.name}
+                                </p>
+                                {overdue ? (
+                                  <Badge variant="outline" className="border-transparent bg-rose-100 px-1.5 text-[10px] text-rose-700">
+                                    Lewat due
+                                  </Badge>
+                                ) : null}
+                                <span className={cn("text-[11px]", overdue ? "font-medium text-rose-600" : "text-zinc-400")}>
+                                  {m.dueDate ? `due ${formatDate(m.dueDate)}` : "tanpa due date"}
+                                </span>
+                              </div>
+
+                              {/* Capaian — apa yang dicapai/diserahkan di tahap ini */}
+                              {m.achievement ? (
+                                <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-snug text-zinc-500">
+                                  <FileCheck className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+                                  <span>{m.achievement}</span>
+                                </p>
+                              ) : null}
+
+                              {/* Deliverable terkait milestone ini (opsional) */}
+                              {msDlv.length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5" aria-label={`Deliverable untuk ${m.name}`}>
+                                  {msDlv.map((d) => (
+                                    <span
+                                      key={d.id}
+                                      className={cn(
+                                        "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                                        d.status === "approved" ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                          : d.status === "revision" ? "border-rose-200 bg-rose-50 text-rose-700"
+                                          : "border-amber-200 bg-amber-50 text-amber-700",
+                                      )}
+                                      title={d.status === "approved" ? "Disetujui" : d.status === "revision" ? "Diminta revisi" : "Menunggu review"}
+                                    >
+                                      {d.kind === "link" ? <Link2 className="h-3 w-3 shrink-0" aria-hidden /> : <Paperclip className="h-3 w-3 shrink-0" aria-hidden />}
+                                      <span className="truncate">{d.name}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+
+                              {/* Aksi per tahap */}
+                              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                                {!isDone ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 border-emerald-200 px-2 text-xs text-emerald-700 hover:bg-emerald-50"
+                                    onClick={() => confirmMilestone(detail, m)}
+                                    aria-label={`Tandai milestone ${m.name} selesai`}
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Selesaikan
+                                  </Button>
+                                ) : (
+                                  <Badge variant="outline" className="border-transparent bg-emerald-100 text-[11px] text-emerald-700">Selesai</Badge>
+                                )}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => openDfForMilestone(m)}
+                                  aria-label={`Kirim deliverable untuk milestone ${m.name}`}
+                                >
+                                  <Paperclip className="h-3.5 w-3.5" aria-hidden /> Kirim Deliverable
+                                </Button>
+                                {canInvoice ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs"
+                                    onClick={() => openInvoiceForMilestone(detail, m)}
+                                    aria-label={`Tagih milestone ${m.name}`}
+                                  >
+                                    <ReceiptText className="h-3.5 w-3.5" aria-hidden /> Tagih
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs text-zinc-500"
+                                  onClick={() => openMilestoneDialog(m)}
+                                  aria-label={`Edit milestone ${m.name}`}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
+                                </Button>
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
                 </div>
 
                 {/* Change Request (Fase 2 — Produksi) */}
@@ -2194,6 +2431,26 @@ export default function ProjectsModule() {
                           aria-label="Nama deliverable"
                         />
                       </div>
+                      {/* Ronde 35 — kaitkan deliverable ke milestone (opsional) */}
+                      {(detail.milestones ?? []).length > 0 ? (
+                        <div className="grid gap-1.5">
+                          <Label htmlFor="dlv-milestone">Milestone terkait (opsional)</Label>
+                          <Select value={dfMilestoneId || "none"} onValueChange={(v) => setDfMilestoneId(v === "none" ? "" : v)}>
+                            <SelectTrigger id="dlv-milestone" className="w-full bg-white" aria-label="Milestone terkait deliverable">
+                              <SelectValue placeholder="Pilih milestone" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Tanpa milestone</SelectItem>
+                              {(detail.milestones ?? []).map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  #{m.order + 1} · {m.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[11px] text-zinc-400">Deliverable muncul di timeline milestone terkait.</p>
+                        </div>
+                      ) : null}
                       <div className="grid gap-1.5">
                         <Label>Jenis</Label>
                         <div className="flex w-fit items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5" role="group" aria-label="Jenis deliverable">
@@ -2286,7 +2543,13 @@ export default function ProjectsModule() {
                   ) : (
                     <div className="max-h-96 space-y-2 overflow-y-auto crm-scroll">
                       {deliverables.map((d) => (
-                        <DeliverableRow key={d.id} d={d} user={user} onChanged={reloadDeliverables} />
+                        <DeliverableRow
+                          key={d.id}
+                          d={d}
+                          user={user}
+                          milestoneName={d.milestoneId ? (detail.milestones ?? []).find((m) => m.id === d.milestoneId)?.name ?? null : null}
+                          onChanged={reloadDeliverables}
+                        />
                       ))}
                     </div>
                   )}
@@ -2725,6 +2988,116 @@ export default function ProjectsModule() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ronde 35 — dialog tambah/edit milestone */}
+      <Dialog open={msOpen} onOpenChange={(v) => { if (!v) { setMsOpen(false); setMsEditing(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <form
+            onSubmit={(e) => { e.preventDefault(); void submitMilestoneDialog(); }}
+            className="space-y-4"
+          >
+            <DialogHeader>
+              <DialogTitle>{msEditing ? "Edit Milestone" : "Tambah Milestone"}</DialogTitle>
+              <DialogDescription>
+                {msEditing
+                  ? "Perbarui nama, capaian, atau tenggat tahap kerja ini."
+                  : "Tambahkan tahap kerja baru ke timeline produksi. Isi capaian agar tim tahu apa yang harus selesai di tahap ini."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="ms-name">Nama milestone *</Label>
+                <Input
+                  id="ms-name"
+                  value={msName}
+                  onChange={(e) => setMsName(e.target.value)}
+                  placeholder="Contoh: Approval Storyboard"
+                  aria-label="Nama milestone"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="ms-achievement">Capaian / apa yang diserahkan (opsional)</Label>
+                <Textarea
+                  id="ms-achievement"
+                  rows={2}
+                  value={msAchievement}
+                  onChange={(e) => setMsAchievement(e.target.value)}
+                  placeholder="Contoh: Storyboard lengkap disetujui klien — produksi aset bisa dimulai"
+                  aria-label="Capaian milestone"
+                />
+                <p className="text-[11px] text-zinc-400">Ditampilkan di timeline produksi sebagai target tahap ini.</p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="ms-due">Tenggat (opsional)</Label>
+                <Input id="ms-due" type="date" value={msDueDate} onChange={(e) => setMsDueDate(e.target.value)} aria-label="Tenggat milestone" />
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" onClick={() => { setMsOpen(false); setMsEditing(null); }} disabled={msSaving}>
+                Batal
+              </Button>
+              <Button type="submit" disabled={msSaving || !msName.trim()}>
+                {msSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {msSaving ? "Menyimpan…" : msEditing ? "Simpan Perubahan" : "Tambah Milestone"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ronde 35 — dialog tagih milestone (invoice termin): Produksi → Keuangan */}
+      <Dialog open={!!invTarget} onOpenChange={(v) => { if (!v) setInvTarget(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ReceiptText className="h-4 w-4 text-zinc-500" aria-hidden /> Tagih Milestone
+            </DialogTitle>
+            <DialogDescription>
+              Terbitkan invoice termin (draft) untuk tahap{" "}
+              <span className="font-medium text-zinc-700">{invTarget?.milestone.name}</span> di project{" "}
+              <span className="font-medium text-zinc-700">{invTarget?.project.code}</span>. Invoice masuk ke modul Finance untuk dikirim ke klien.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="inv-desc">Deskripsi invoice</Label>
+              <Input
+                id="inv-desc"
+                value={invDesc}
+                onChange={(e) => setInvDesc(e.target.value)}
+                aria-label="Deskripsi invoice"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="inv-amount">Nominal (sebelum PPN)</Label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden>Rp</span>
+                <Input
+                  id="inv-amount"
+                  type="number" min={0} step={100000} inputMode="numeric"
+                  className="pl-9"
+                  value={invAmount}
+                  onChange={(e) => setInvAmount(e.target.value)}
+                  placeholder="0"
+                  aria-label="Nominal invoice dalam rupiah"
+                />
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Default = nilai kontrak dibagi rata per milestone — sesuaikan bila termin berbeda. PPN 11% ditambahkan otomatis.
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setInvTarget(null)} disabled={invSaving}>
+              Batal
+            </Button>
+            <Button type="button" onClick={() => void submitMilestoneInvoice()} disabled={invSaving || !Number(invAmount)}>
+              {invSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+              {invSaving ? "Membuat…" : "Buat Invoice Draft"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

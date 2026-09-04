@@ -234,12 +234,16 @@ export interface MilestoneDTO {
   order: number;
   status: string;
   dueDate?: string | null;
+  /** Ronde 35 — apa yang dicapai/diserahkan pada milestone ini (opsional). */
+  achievement?: string | null;
 }
 
 /** Deliverable project: tautan atau file kecil yang dikirim untuk ditinjau klien/manajemen. */
 export interface ProjectDeliverableDTO {
   id: string;
   projectId: string;
+  /** Ronde 35 — opsional: deliverable ini untuk milestone mana (timeline produksi). */
+  milestoneId?: string | null;
   name: string;
   kind: "link" | "file";
   url?: string | null;
