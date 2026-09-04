@@ -1955,7 +1955,14 @@ export default function InboxModule() {
       handleSelectLead(target);
       clearPendingFocus();
     } else {
-      clearPendingFocus(); // tak ditemukan (di luar filter kanal/brand) — lepas agar tidak loop
+      // Ronde 34 — feedback jelas bila target tak punya percakapan di Inbox
+      // (mis. task follow-up untuk opportunity yang datang bukan dari chat):
+      // dulu diam tanpa efek — user bingung "kok tidak terjadi apa-apa".
+      toast.info("Tidak ada percakapan di Inbox untuk item ini", {
+        description: "Opportunity ini kemungkinan dibuat manual / tanpa chat masuk. Lakukan tindak lanjut lewat Sales Pipeline atau kirim pesan baru dari kanal terhubung.",
+        duration: 6000,
+      });
+      clearPendingFocus(); // lepas agar tidak loop
     }
   }, [pendingFocus, leads, view, clearPendingFocus]);
 

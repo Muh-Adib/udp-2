@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   ArrowLeftRight,
+  ArrowRight,
   BadgeCheck,
   BedDouble,
   Calculator,
@@ -17,6 +18,7 @@ import {
   Clock,
   CircleAlert,
   FileText,
+  FolderKanban,
   Globe,
   Handshake,
   Hourglass,
@@ -136,6 +138,15 @@ const CHANNEL_ICONS: Record<string, LucideIcon> = {
   meeting: Video,
   portal: LayoutDashboard,
   note: StickyNote,
+};
+
+/** Ronde 34 — label status project produksi (kartu "Project Produksi" pada deal Won). */
+const PROJECT_STATUS_LABEL: Record<string, string> = {
+  planning: "Perencanaan",
+  in_progress: "Berjalan",
+  review: "Review",
+  completed: "Selesai",
+  cancelled: "Dibatalkan",
 };
 
 /** Wrapper stabil agar ikon kanal tidak dianggap komponen yang dibuat saat render. */
@@ -1944,6 +1955,46 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                   <Meta label="Sumber">{data.leadSource ?? "-"}</Meta>
                   <Meta label="Target Deadline">{formatDate(data.targetDeadline)}</Meta>
                 </div>
+
+                {/* Ronde 34 — record Project produksi yang lahir dari deal Won:
+                    dulu data ini SUDAH dikirim API tapi tidak pernah dirender —
+                    sales tidak tahu deal won-nya sudah jadi project apa. */}
+                {(data.projects ?? []).length > 0 ? (
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                      <FolderKanban className="size-3.5" aria-hidden="true" /> Project Produksi
+                    </p>
+                    {(data.projects ?? []).map((p) => (
+                      <div key={p.id} className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-zinc-900">
+                            <span className="font-mono text-xs text-zinc-500">{p.code}</span> · {p.name}
+                          </p>
+                          <p className="text-xs text-emerald-700">
+                            {PROJECT_STATUS_LABEL[p.status] ?? p.status}
+                            {" · "}{p.progress}%
+                            {" · "}{(p.milestones ?? []).filter((m) => m.status === "done").length}/{(p.milestones ?? []).length} milestone selesai
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 shrink-0 gap-1.5 border-emerald-300 bg-white text-xs text-emerald-700 hover:bg-emerald-100"
+                          onClick={() => {
+                            setPendingFocus({ module: "projects", id: p.id });
+                            setActiveModule("projects");
+                            onOpenChange(false);
+                          }}
+                          aria-label={`Buka project ${p.code} di modul Projects`}
+                        >
+                          Buka di Projects
+                          <ArrowRight className="size-3.5" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
 
                 {data.lostReason ? (
                   <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">

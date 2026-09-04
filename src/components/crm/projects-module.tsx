@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
   Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
-  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, ShieldCheck, Trash2, User, User2, X, XCircle,
+  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Route, ShieldCheck, Trash2, User, User2, X, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,7 +33,7 @@ import { api } from "@/lib/crm/api-client";
 import { SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
-  Brand, ChangeRequestDTO, CompanyRef, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
+  Brand, ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
 } from "@/lib/crm/types";
 import { formatCurrency, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
@@ -81,6 +81,112 @@ const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
 
 function dlvMeta(s: string) {
   return DELIVERABLE_STATUS[s] ?? { label: s, cls: "bg-zinc-100 text-zinc-600" };
+}
+
+// ============ Ronde 34 — Alur Produksi: peta tahapan + RECORD nyata per tahap ============
+// Keluhan user: "untuk keproduksian floenya belum jelas recordnya". Sheet detail dulu
+// hanya menampilkan status + progress tanpa menjelaskan posisi project dalam alur
+// produksi dan record apa yang sudah tersimpan di tiap tahap.
+
+const PRODUCTION_STEPS = ["Deal & Kontrak", "Perencanaan", "Produksi", "Review", "Serah Terima"] as const;
+
+function ProductionFlow({ project, deliverables, crs, invoices }: {
+  project: ProjectDTO;
+  deliverables: ProjectDeliverableDTO[] | null;
+  crs: ChangeRequestDTO[];
+  invoices: InvoiceDTO[] | null;
+}) {
+  const milestones = project.milestones ?? [];
+  const doneMs = milestones.filter((m) => m.status === "done").length;
+  const dlv = deliverables ?? [];
+  const dlvApproved = dlv.filter((d) => d.status === "approved").length;
+  const dlvRevision = dlv.filter((d) => d.status === "revision").length;
+  const dlvPending = dlv.filter((d) => d.status === "pending").length;
+  const approvedCr = crs.filter((c) => c.status === "approved");
+  const invTotal = (invoices ?? []).reduce((s, i) => s + i.total, 0);
+  const paidTotal = (invoices ?? []).reduce((s, i) => s + (i.payments ?? []).reduce((ps, p) => ps + p.amount, 0), 0);
+
+  // Posisi tahap saat ini (0-4): planning→1, in_progress→2, review→3, completed→4 (semua selesai)
+  const currentIdx = project.status === "planning" ? 1
+    : project.status === "in_progress" ? 2
+    : project.status === "review" ? 3
+    : project.status === "completed" ? 5 // 5 = seluruh alur selesai
+    : 0;
+
+  /** Record yang tampil di bawah tiap nama tahap — dari data nyata, bukan teks statis. */
+  const stepRecords: string[] = [
+    // 0 — Deal & Kontrak
+    project.opportunityId
+      ? `Dari opportunity won · kontrak ${formatCurrency(project.contractValue ?? 0)}`
+      : `Project manual · kontrak ${formatCurrency(project.contractValue ?? 0)}`,
+    // 1 — Perencanaan
+    milestones.length > 0
+      ? `${milestones.length} milestone direncanakan`
+      : "Belum ada milestone — tambahkan rencana kerja",
+    // 2 — Produksi
+    milestones.length > 0
+      ? `${doneMs}/${milestones.length} milestone selesai · progress ${project.progress}%`
+      : `Progress ${project.progress}%`,
+    // 3 — Review
+    deliverables === null
+      ? "Memuat deliverable…"
+      : dlv.length > 0
+        ? `${dlv.length} deliverable · ${dlvApproved} disetujui${dlvPending ? ` · ${dlvPending} menunggu` : ""}${dlvRevision ? ` · ${dlvRevision} revisi` : ""}`
+        : "Belum ada deliverable dikirim",
+    // 4 — Serah Terima & Penagihan
+    invoices === null
+      ? "Memuat invoice…"
+      : invoices.length > 0
+        ? `${invoices.length} invoice · terbit ${formatCurrency(invTotal)}${paidTotal > 0 ? ` · dibayar ${formatCurrency(paidTotal)}` : ""}`
+        : approvedCr.length > 0
+          ? `${approvedCr.length} CR disetujui — invoice tambahan terbit`
+          : "Belum ada invoice project",
+  ];
+
+  return (
+    <div className="rounded-xl border bg-white p-3 shadow-sm">
+      <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+        <Route className="h-3.5 w-3.5" aria-hidden /> Alur Produksi
+        {currentIdx === 5 ? (
+          <Badge variant="outline" className="ml-auto border-transparent bg-emerald-100 text-[11px] text-emerald-700">Alur selesai</Badge>
+        ) : (
+          <span className="ml-auto text-[11px] font-normal normal-case text-zinc-400">
+            Tahap {currentIdx + 1}/5 · {PRODUCTION_STEPS[currentIdx]}
+          </span>
+        )}
+      </p>
+      <ol className="mt-2.5 flex items-start gap-0" aria-label="Alur produksi project">
+        {PRODUCTION_STEPS.map((label, idx) => {
+          const isDone = idx < currentIdx;
+          const isCurrent = idx === currentIdx;
+          return (
+            <li key={label} className="flex min-w-0 flex-1 flex-col items-center text-center" aria-current={isCurrent ? "step" : undefined}>
+              <div className="flex w-full items-center" aria-hidden>
+                <span className={cn("h-0.5 flex-1", idx === 0 ? "bg-transparent" : isDone || isCurrent ? "bg-emerald-400" : "bg-zinc-200")} />
+                <span
+                  className={cn(
+                    "flex size-5 shrink-0 items-center justify-center rounded-full border-2 text-[9px] font-bold",
+                    isDone ? "border-emerald-500 bg-emerald-500 text-white"
+                      : isCurrent ? "border-emerald-500 bg-white text-emerald-600"
+                      : "border-zinc-200 bg-white text-zinc-300",
+                  )}
+                >
+                  {isDone ? <Check className="h-3 w-3" /> : idx + 1}
+                </span>
+                <span className={cn("h-0.5 flex-1", idx === PRODUCTION_STEPS.length - 1 ? "bg-transparent" : isDone ? "bg-emerald-400" : "bg-zinc-200")} />
+              </div>
+              <p className={cn("mt-1 px-0.5 text-[10px] font-semibold leading-tight", isDone || isCurrent ? "text-zinc-800" : "text-zinc-400")}>
+                {label}
+              </p>
+              <p className={cn("mt-0.5 px-0.5 text-[9px] leading-tight", isDone || isCurrent ? "text-zinc-500" : "text-zinc-300")}>
+                {stepRecords[idx]}
+              </p>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 /** Task 25-b — label peran reviewer deliverable (reviewedRole). Role tak dikenal ditampilkan apa adanya. */
@@ -1087,6 +1193,8 @@ export default function ProjectsModule() {
 
   // Task 22-4 — Deliverable & Review pada sheet detail
   const [deliverables, setDeliverables] = useState<ProjectDeliverableDTO[] | null>(null);
+  // Ronde 34 — invoice project utk record tahap Penagihan di Alur Produksi
+  const [detailInvoices, setDetailInvoices] = useState<InvoiceDTO[] | null>(null);
   const [dfOpen, setDfOpen] = useState(false);
   const [dfName, setDfName] = useState("");
   const [dfKind, setDfKind] = useState<"link" | "file">("link");
@@ -1192,8 +1300,18 @@ export default function ProjectsModule() {
           toast.error("Gagal memuat deliverable");
         }
       });
+    // Ronde 34 — invoice project (untuk record "Penagihan" di Alur Produksi):
+    // API invoice tak punya filter projectId — ambil per perusahaan lalu filter klien.
+    const proj = (projects ?? []).find((p) => p.id === detailId);
+    if (proj?.companyId) {
+      api.invoices({ companyId: proj.companyId })
+        .then((res) => { if (!cancelled) setDetailInvoices(res.invoices.filter((i) => i.projectId === detailId)); })
+        .catch(() => { if (!cancelled) setDetailInvoices([]); });
+    } else if (!cancelled) {
+      setDetailInvoices([]);
+    }
     return () => { cancelled = true; };
-  }, [detailId]);
+  }, [detailId, projects]);
 
   /** Muat ulang deliverable project yang sedang dibuka di sheet detail. */
   const reloadDeliverables = useCallback(async () => {
@@ -1854,6 +1972,14 @@ export default function ProjectsModule() {
                   </div>
                   <Progress value={detail.progress} aria-label={`Progress ${detail.progress}%`} />
                 </div>
+
+                {/* Ronde 34 — peta alur produksi + record nyata per tahap */}
+                <ProductionFlow
+                  project={detail}
+                  deliverables={deliverables}
+                  crs={detailCrs}
+                  invoices={detailInvoices}
+                />
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>

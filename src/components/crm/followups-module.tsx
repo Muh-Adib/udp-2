@@ -116,6 +116,24 @@ function TaskCard({ task, onToggle, busy, onSend }: {
   const overdue = isOverdue(task);
   const opp = task.opportunity;
   const brand = opp?.brand;
+  // Ronde 34 — task kini TERHUBUNG ke modul sumber: klik opportunity → Pipeline,
+  // "Buka Percakapan" → chat lead/opportunity di Inbox. Dulu tombol opportunity hanya
+  // toast "Buka dari modul Sales Pipeline" (dead end) dan satu-satunya aksi adalah
+  // Kirim Pesan — inilah keluhan "task hanya memberikan response bukan menuju chat".
+  const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+
+  function goToPipeline() {
+    if (!task.opportunityId) return;
+    setPendingFocus({ module: "pipeline", id: task.opportunityId });
+    setActiveModule("pipeline");
+  }
+
+  function goToChat() {
+    if (!task.opportunityId) return;
+    setPendingFocus({ module: "inbox", id: task.opportunityId });
+    setActiveModule("inbox");
+  }
 
   return (
     <div className={`rounded-xl border bg-white p-4 shadow-sm transition-colors hover:border-zinc-300 ${done ? "opacity-70" : ""}`}>
@@ -154,9 +172,10 @@ function TaskCard({ task, onToggle, busy, onSend }: {
             {opp ? (
               <button
                 type="button"
-                onClick={() => toast.info("Buka dari modul Sales Pipeline")}
+                onClick={goToPipeline}
                 className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-                aria-label={`Buka opportunity ${opp.title} dari modul Sales Pipeline`}
+                aria-label={`Buka opportunity ${opp.title} di Sales Pipeline`}
+                title="Buka opportunity ini di Sales Pipeline"
               >
                 {brand ? (
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
@@ -171,7 +190,17 @@ function TaskCard({ task, onToggle, busy, onSend }: {
             ) : null}
           </div>
           {!done && task.opportunityId && task.type === "follow_up" ? (
-            <div className="pt-0.5">
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              {/* Ronde 34 — AKSI UTAMA: menuju chat sumber task di Inbox (fix keluhan user:
+                  task hanya menawarkan form respons, tidak membawa ke percakapannya). */}
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 rounded-lg bg-emerald-600 text-xs text-white hover:bg-emerald-700"
+                onClick={goToChat}
+                aria-label={`Buka percakapan di Inbox untuk ${task.title}`}
+              >
+                <MessageCircle className="h-3 w-3" aria-hidden /> Buka Percakapan
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
