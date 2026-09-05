@@ -1,0 +1,868 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+     4→     4→import {
+     5→     5→  BellRing, Building2, CalendarClock, CalendarDays, CheckCircle2, ClipboardList,
+     6→     6→  FileText, ListFilter, Mail, MessageCircle, Phone, Plus, RefreshCw, Send,
+     7→     7→  Sparkles, Video, type LucideIcon,
+     8→     8→} from "lucide-react";
+     9→     9→import { toast } from "sonner";
+    10→    10→
+    11→    11→import { Badge } from "@/components/ui/badge";
+    12→    12→import { Button } from "@/components/ui/button";
+    13→    13→import { Checkbox } from "@/components/ui/checkbox";
+    14→    14→import {
+    15→    15→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    16→    16→} from "@/components/ui/dialog";
+    17→    17→import { Input } from "@/components/ui/input";
+    18→    18→import { Label } from "@/components/ui/label";
+    19→    19→import {
+    20→    20→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    21→    21→} from "@/components/ui/select";
+    22→    22→import { Skeleton } from "@/components/ui/skeleton";
+    23→    23→import { Switch } from "@/components/ui/switch";
+    24→    24→import { Textarea } from "@/components/ui/textarea";
+    25→    25→import { api } from "@/lib/crm/api-client";
+    26→    26→import { PRIORITIES } from "@/lib/crm/constants";
+    27→    27→import { useCrmStore } from "@/lib/crm/store";
+    28→    28→import type { FollowUpTemplateDTO, TaskDTO } from "@/lib/crm/types";
+    29→    29→import { formatDate, initials, timeAgo } from "@/lib/crm/utils";
+    30→    30→
+    31→    31→// ============ Meta tipe task & prioritas ============
+    32→    32→
+    33→    33→const TASK_TYPES: { key: string; label: string; icon: LucideIcon; cls: string }[] = [
+    34→    34→  { key: "follow_up", label: "Follow-up", icon: BellRing, cls: "bg-amber-100 text-amber-700" },
+    35→    35→  { key: "meeting", label: "Meeting", icon: Video, cls: "bg-violet-100 text-violet-700" },
+    36→    36→  { key: "internal", label: "Internal", icon: Building2, cls: "bg-zinc-100 text-zinc-600" },
+    37→    37→  { key: "admin", label: "Admin", icon: ClipboardList, cls: "bg-cyan-100 text-cyan-700" },
+    38→    38→];
+    39→    39→
+    40→    40→function taskTypeMeta(type: string) {
+    41→    41→  return TASK_TYPES.find((t) => t.key === type) ?? { key: type, label: type, icon: ClipboardList, cls: "bg-zinc-100 text-zinc-600" };
+    42→    42→}
+    43→    43→
+    44→    44→function priorityMeta(p: string): { label: string; cls: string } {
+    45→    45→  switch (p) {
+    46→    46→    case "urgent": return { label: "Urgent", cls: "bg-rose-100 text-rose-700" };
+    47→    47→    case "high": return { label: "Tinggi", cls: "bg-amber-100 text-amber-700" };
+    48→    48→    case "medium": return { label: "Sedang", cls: "bg-zinc-100 text-zinc-600" };
+    49→    49→    case "low": return { label: "Rendah", cls: "bg-zinc-100 text-zinc-400" };
+    50→    50→    default: return { label: p, cls: "bg-zinc-100 text-zinc-600" };
+    51→    51→  }
+    52→    52→}
+    53→    53→
+    54→    54→// ============ Helper tanggal ============
+    55→    55→
+    56→    56→function startOfToday(): Date {
+    57→    57→  const d = new Date();
+    58→    58→  d.setHours(0, 0, 0, 0);
+    59→    59→  return d;
+    60→    60→}
+    61→    61→
+    62→    62→function endOfToday(): Date {
+    63→    63→  const d = new Date();
+    64→    64→  d.setHours(23, 59, 59, 999);
+    65→    65→  return d;
+    66→    66→}
+    67→    67→
+    68→    68→function isOverdue(t: TaskDTO): boolean {
+    69→    69→  return t.status === "open" && !!t.dueDate && new Date(t.dueDate).getTime() < startOfToday().getTime();
+    70→    70→}
+    71→    71→
+    72→    72→function isToday(t: TaskDTO): boolean {
+    73→    73→  if (!t.dueDate) return false;
+    74→    74→  const due = new Date(t.dueDate).getTime();
+    75→    75→  return due >= startOfToday().getTime() && due <= endOfToday().getTime();
+    76→    76→}
+    77→    77→
+    78→    78→// ============ Sub-komponen kecil ============
+    79→    79→
+    80→    80→function StatCard({ label, value, icon: Icon, cls }: {
+    81→    81→  label: string; value: number; icon: LucideIcon; cls: string;
+    82→    82→}) {
+    83→    83→  return (
+    84→    84→    <div className="rounded-xl border bg-white p-4 shadow-sm">
+    85→    85→      <div className="flex items-center justify-between gap-2">
+    86→    86→        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+    87→    87→        <span className={`rounded-lg p-2 ${cls}`} aria-hidden>
+    88→    88→          <Icon className="h-4 w-4" />
+    89→    89→        </span>
+    90→    90→      </div>
+    91→    91→      <p className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">{value}</p>
+    92→    92→    </div>
+    93→    93→  );
+    94→    94→}
+    95→    95→
+    96→    96→function SectionHeading({ title, count }: { title: string; count: number }) {
+    97→    97→  return (
+    98→    98→    <div className="flex items-center gap-2 pt-1">
+    99→    99→      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</h3>
+   100→   100→      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-600">{count}</span>
+   101→   101→      <span className="h-px flex-1 bg-zinc-200" aria-hidden />
+   102→   102→    </div>
+   103→   103→  );
+   104→   104→}
+   105→   105→
+   106→   106→function TaskCard({ task, onToggle, busy, onSend }: {
+   107→   107→  task: TaskDTO;
+   108→   108→  onToggle: (t: TaskDTO) => void;
+   109→   109→  busy: boolean;
+   110→   110→  onSend: (t: TaskDTO) => void;
+   111→   111→}) {
+   112→   112→  const type = taskTypeMeta(task.type);
+   113→   113→  const prio = priorityMeta(task.priority);
+   114→   114→  const TypeIcon = type.icon;
+   115→   115→  const done = task.status === "done";
+   116→   116→  const overdue = isOverdue(task);
+   117→   117→  const opp = task.opportunity;
+   118→   118→  const brand = opp?.brand;
+   119→   119→
+   120→   120→  return (
+   121→   121→    <div className={`rounded-xl border bg-white p-4 shadow-sm transition-colors hover:border-zinc-300 ${done ? "opacity-70" : ""}`}>
+   122→   122→      <div className="flex items-start gap-3">
+   123→   123→        <Checkbox
+   124→   124→          checked={done}
+   125→   125→          onCheckedChange={() => onToggle(task)}
+   126→   126→          disabled={busy}
+   127→   127→          className="mt-0.5"
+   128→   128→          aria-label={done ? `Buka kembali task ${task.title}` : `Tandai selesai task ${task.title}`}
+   129→   129→        />
+   130→   130→        <div className="min-w-0 flex-1 space-y-2">
+   131→   131→          <div className="flex flex-wrap items-center gap-1.5">
+   132→   132→            <Badge variant="outline" className={`gap-1 border-transparent px-1.5 ${type.cls}`}>
+   133→   133→              <TypeIcon className="h-3 w-3" aria-hidden /> {type.label}
+   134→   134→            </Badge>
+   135→   135→            <Badge variant="outline" className={`border-transparent px-1.5 ${prio.cls}`}>{prio.label}</Badge>
+   136→   136→            {overdue && <Badge className="border-transparent bg-rose-100 text-rose-700">Overdue</Badge>}
+   137→   137→          </div>
+   138→   138→          <p className={`text-sm font-semibold leading-snug text-zinc-900 ${done ? "line-through decoration-zinc-400" : ""}`}>
+   139→   139→            {task.title}
+   140→   140→          </p>
+   141→   141→          {task.description ? (
+   142→   142→            <p className="line-clamp-2 text-xs text-zinc-500">{task.description}</p>
+   143→   143→          ) : null}
+   144→   144→          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-500">
+   145→   145→            {task.dueDate ? (
+   146→   146→              <span className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-rose-600" : "text-zinc-600"}`}>
+   147→   147→                <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden /> {formatDate(task.dueDate)}
+   148→   148→              </span>
+   149→   149→            ) : (
+   150→   150→              <span className="inline-flex items-center gap-1 text-zinc-400">
+   151→   151→                <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden /> Tanpa tenggat
+   152→   152→              </span>
+   153→   153→            )}
+   154→   154→            {opp ? (
+   155→   155→              <button
+   156→   156→                type="button"
+   157→   157→                onClick={() => toast.info("Buka dari modul Sales Pipeline")}
+   158→   158→                className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+   159→   159→                aria-label={`Buka opportunity ${opp.title} dari modul Sales Pipeline`}
+   160→   160→              >
+   161→   161→                {brand ? (
+   162→   162→                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} aria-hidden />
+   163→   163→                ) : null}
+   164→   164→                <span className="truncate">{opp.title}</span>
+   165→   165→              </button>
+   166→   166→            ) : null}
+   167→   167→            {done && task.completedAt ? (
+   168→   168→              <span className="inline-flex items-center gap-1 text-emerald-600">
+   169→   169→                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden /> Selesai {timeAgo(task.completedAt)}
+   170→   170→              </span>
+   171→   171→            ) : null}
+   172→   172→          </div>
+   173→   173→          {!done && task.opportunityId && task.type === "follow_up" ? (
+   174→   174→            <div className="pt-0.5">
+   175→   175→              <Button
+   176→   176→                size="sm"
+   177→   177→                variant="outline"
+   178→   178→                className="h-7 gap-1.5 rounded-lg border-zinc-300 text-xs text-zinc-700 hover:border-zinc-900 hover:bg-zinc-900 hover:text-white"
+   179→   179→                onClick={() => onSend(task)}
+   180→   180→                disabled={busy}
+   181→   181→                aria-label={`Kirim pesan follow-up untuk ${task.title}`}
+   182→   182→              >
+   183→   183→                <Send className="h-3 w-3" aria-hidden /> Kirim Pesan
+   184→   184→              </Button>
+   185→   185→            </div>
+   186→   186→          ) : null}
+   187→   187→        </div>
+   188→   188→        {task.assigneeName ? (
+   189→   189→          <span
+   190→   190→            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white"
+   191→   191→            title={task.assigneeName}
+   192→   192→            aria-label={`Ditugaskan ke ${task.assigneeName}`}
+   193→   193→          >
+   194→   194→            {initials(task.assigneeName)}
+   195→   195→          </span>
+   196→   196→        ) : (
+   197→   197→          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-zinc-300 text-[11px] font-bold text-zinc-400" title="Belum di-assign" aria-hidden>
+   198→   198→            ?
+   199→   199→          </span>
+   200→   200→        )}
+   201→   201→      </div>
+   202→   202→    </div>
+   203→   203→  );
+   204→   204→}
+   205→   205→
+   206→   206→function FollowupsSkeleton() {
+   207→   207→  return (
+   208→   208→    <div className="space-y-6" aria-hidden>
+   209→   209→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   210→   210→        <div className="space-y-2">
+   211→   211→          <Skeleton className="h-7 w-52" />
+   212→   212→          <Skeleton className="h-4 w-72" />
+   213→   213→        </div>
+   214→   214→        <Skeleton className="h-9 w-28 rounded-lg" />
+   215→   215→      </div>
+   216→   216→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   217→   217→        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+   218→   218→      </div>
+   219→   219→      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+   220→   220→        <Skeleton className="h-10 w-full" />
+   221→   221→        <div className="mt-4 space-y-3">
+   222→   222→          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+   223→   223→        </div>
+   224→   224→      </div>
+   225→   225→    </div>
+   226→   226→  );
+   227→   227→}
+   228→   228→
+   229→   229→function EmptyGroup({ text }: { text: string }) {
+   230→   230→  return (
+   231→   231→    <div className="flex items-center gap-2 rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-400">
+   232→   232→      <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden /> {text}
+   233→   233→    </div>
+   234→   234→  );
+   235→   235→}
+   236→   236→
+   237→   237→// ============ Outbound send (Fase 3): kirim & catat pesan follow-up ============
+   238→   238→
+   239→   239→const OUTBOUND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
+   240→   240→  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+   241→   241→  { key: "email", label: "Email", icon: Mail },
+   242→   242→  { key: "phone", label: "Telepon", icon: Phone },
+   243→   243→];
+   244→   244→
+   245→   245→/** Konteks opportunity yang dibutuhkan dialog kirim (subset detail API). */
+   246→   246→interface SendContext {
+   247→   247→  id: string;
+   248→   248→  title: string;
+   249→   249→  serviceName?: string | null;
+   250→   250→  brand?: { id: string; name: string; color: string } | null;
+   251→   251→  contact?: { id: string; fullName: string; email?: string | null; whatsapp?: string | null } | null;
+   252→   252→  company?: { id: string; name: string } | null;
+   253→   253→  ownerName?: string | null;
+   254→   254→}
+   255→   255→
+   256→   256→/** Ganti placeholder template dengan data opportunity yang diketahui. */
+   257→   257→function renderTemplate(body: string, ctx: SendContext, senderName: string): string {
+   258→   258→  const map: Record<string, string> = {
+   259→   259→    contact_name: ctx.contact?.fullName ?? "Bapak/Ibu",
+   260→   260→    company_name: ctx.company?.name ?? "perusahaan Bapak/Ibu",
+   261→   261→    brand_name: ctx.brand?.name ?? "tim kami",
+   262→   262→    service_name: ctx.serviceName ?? ctx.title,
+   263→   263→    marketing_name: senderName,
+   264→   264→  };
+   265→   265→  return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => map[key] ?? full);
+   266→   266→}
+   267→   267→
+   268→   268→function channelMeta(key: string) {
+   269→   269→  return OUTBOUND_CHANNELS.find((c) => c.key === key) ?? OUTBOUND_CHANNELS[0];
+   270→   270→}
+   271→   271→
+   272→   272→function SendOutboundDialog({ task, onClose, onSent }: {
+   273→   273→  task: TaskDTO | null;
+   274→   274→  onClose: () => void;
+   275→   275→  onSent: (task: TaskDTO, updated?: TaskDTO) => void;
+   276→   276→}) {
+   277→   277→  const user = useCrmStore((s) => s.user);
+   278→   278→  const [ctx, setCtx] = useState<SendContext | null>(null);
+   279→   279→  const [templates, setTemplates] = useState<FollowUpTemplateDTO[]>([]);
+   280→   280→  const [loadingCtx, setLoadingCtx] = useState(false);
+   281→   281→  const [channel, setChannel] = useState("whatsapp");
+   282→   282→  const [templateId, setTemplateId] = useState<string>("blank");
+   283→   283→  const [body, setBody] = useState("");
+   284→   284→  const [markDone, setMarkDone] = useState(true);
+   285→   285→  const [sending, setSending] = useState(false);
+   286→   286→
+   287→   287→  // Muat konteks opportunity + template saat dialog dibuka
+   288→   288→  useEffect(() => {
+   289→   289→    if (!task?.opportunityId) return;
+   290→   290→    let alive = true;
+   291→   291→    setLoadingCtx(true);
+   292→   292→    setCtx(null);
+   293→   293→    setTemplates([]);
+   294→   294→    setTemplateId("blank");
+   295→   295→    setBody("");
+   296→   296→    setChannel("whatsapp");
+   297→   297→    setMarkDone(task.status !== "done");
+   298→   298→    (async () => {
+   299→   299→      try {
+   300→   300→        const [detail, tplRes] = await Promise.all([
+   301→   301→          api.opportunity(task.opportunityId as string),
+   302→   302→          api.followUpTemplates("all"),
+   303→   303→        ]);
+   304→   304→        if (!alive) return;
+   305→   305→        const o = detail.opportunity;
+   306→   306→        const nextCtx: SendContext = {
+   307→   307→          id: o.id,
+   308→   308→          title: o.title,
+   309→   309→          serviceName: o.serviceName,
+   310→   310→          brand: o.brand ? { id: o.brand.id, name: o.brand.name, color: o.brand.color } : null,
+   311→   311→          contact: o.contact
+   312→   312→            ? { id: o.contact.id, fullName: o.contact.fullName, email: o.contact.email, whatsapp: o.contact.whatsapp }
+   313→   313→            : null,
+   314→   314→          company: o.company ? { id: o.company.id, name: o.company.name } : null,
+   315→   315→          ownerName: o.ownerName,
+   316→   316→        };
+   317→   317→        setCtx(nextCtx);
+   318→   318→        // Template global + milik brand opportunity, urut delay
+   319→   319→        const relevant = tplRes.templates
+   320→   320→          .filter((t) => !t.brandId || t.brandId === o.brandId)
+   321→   321→          .sort((a, b) => a.delayDays - b.delayDays);
+   322→   322→        setTemplates(relevant);
+   323→   323→      } catch {
+   324→   324→        if (alive) toast.error("Gagal memuat konteks opportunity");
+   325→   325→      } finally {
+   326→   326→        if (alive) setLoadingCtx(false);
+   327→   327→      }
+   328→   328→    })();
+   329→   329→    return () => { alive = false; };
+   330→   330→  }, [task]);
+   331→   331→
+   332→   332→  const senderName = user?.name ?? ctx?.ownerName ?? "Tim Sales";
+   333→   333→
+   334→   334→  function pickTemplate(id: string) {
+   335→   335→    setTemplateId(id);
+   336→   336→    if (!ctx) return;
+   337→   337→    if (id === "blank") {
+   338→   338→      setBody("");
+   339→   339→      return;
+   340→   340→    }
+   341→   341→    const tpl = templates.find((t) => t.id === id);
+   342→   342→    if (!tpl) return;
+   343→   343→    setChannel(tpl.channel);
+   344→   344→    setBody(renderTemplate(tpl.body, ctx, senderName));
+   345→   345→  }
+   346→   346→
+   347→   347→  const unknownPlaceholders = useMemo(() => {
+   348→   348→    if (!ctx) return [] as string[];
+   349→   349→    const found = body.match(/{{\s*(\w+)\s*}}/g) ?? [];
+   350→   350→    return Array.from(new Set(found));
+   351→   351→  }, [body, ctx]);
+   352→   352→
+   353→   353→  async function handleSend() {
+   354→   354→    if (!task || !ctx) return;
+   355→   355→    const content = body.trim();
+   356→   356→    if (!content) {
+   357→   357→      toast.error("Isi pesan tidak boleh kosong");
+   358→   358→      return;
+   359→   359→    }
+   360→   360→    const ch = channelMeta(channel);
+   361→   361→    if (ch.key === "email" && !ctx.contact?.email) {
+   362→   362→      toast.error("Kontak tidak memiliki alamat email");
+   363→   363→      return;
+   364→   364→    }
+   365→   365→    if (ch.key === "whatsapp" && !ctx.contact?.whatsapp) {
+   366→   366→      toast.error("Kontak tidak memiliki nomor WhatsApp");
+   367→   367→      return;
+   368→   368→    }
+   369→   369→    setSending(true);
+   370→   370→    try {
+   371→   371→      await api.createInteraction({
+   372→   372→        channel: ch.key,
+   373→   373→        direction: "outbound",
+   374→   374→        brandId: ctx.brand?.id,
+   375→   375→        senderName,
+   376→   376→        recipientName: ctx.contact?.fullName,
+   377→   377→        subject: ch.key === "email" ? `Follow-up: ${ctx.title}` : undefined,
+   378→   378→        content,
+   379→   379→        opportunityId: ctx.id,
+   380→   380→        contactId: ctx.contact?.id,
+   381→   381→        companyId: ctx.company?.id,
+   382→   382→        externalId: `task:${task.id}`,
+   383→   383→        actorName: user?.name ?? "System",
+   384→   384→        actorRole: user?.role ?? "system",
+   385→   385→      });
+   386→   386→      let updated: TaskDTO | undefined;
+   387→   387→      if (markDone && task.status !== "done") {
+   388→   388→        const res = await api.updateTask(task.id, { status: "done" });
+   389→   389→        updated = res.task;
+   390→   390→      }
+   391→   391→      toast.success(`Pesan ${ch.label} tercatat terkirim`, {
+   392→   392→        description: `Tercatat sebagai Interaction outbound pada timeline ${ctx.title}.`,
+   393→   393→      });
+   394→   394→      onSent(task, updated);
+   395→   395→      onClose();
+   396→   396→    } catch (err) {
+   397→   397→      toast.error(err instanceof Error ? err.message : "Gagal mencatat pesan");
+   398→   398→    } finally {
+   399→   399→      setSending(false);
+   400→   400→    }
+   401→   401→  }
+   402→   402→
+   403→   403→  const ChIcon = channelMeta(channel).icon;
+   404→   404→
+   405→   405→  return (
+   406→   406→    <Dialog open={task !== null} onOpenChange={(open) => { if (!open && !sending) onClose(); }}>
+   407→   407→      <DialogContent className="max-h-[92vh] overflow-y-auto crm-scroll sm:max-w-xl" aria-label="Kirim pesan follow-up">
+   408→   408→        <DialogHeader>
+   409→   409→          <DialogTitle className="flex items-center gap-2">
+   410→   410→            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden>
+   411→   411→              <Send className="h-3.5 w-3.5" />
+   412→   412→            </span>
+   413→   413→            Kirim &amp; Catat Follow-up
+   414→   414→          </DialogTitle>
+   415→   415→          <DialogDescription>
+   416→   416→            {task?.opportunity ? (
+   417→   417→              <>Pesan outbound untuk <span className="font-medium text-zinc-700">{task.opportunity.title}</span> — tercatat otomatis di timeline interaksi.</>
+   418→   418→            ) : (
+   419→   419→              <>Task ini belum tertaut ke opportunity — kirim pesan tersedia hanya untuk task dengan opportunity.</>
+   420→   420→            )}
+   421→   421→          </DialogDescription>
+   422→   422→        </DialogHeader>
+   423→   423→
+   424→   424→        {loadingCtx || !ctx ? (
+   425→   425→          <div className="space-y-3 py-2" aria-hidden>
+   426→   426→            <Skeleton className="h-16 w-full rounded-lg" />
+   427→   427→            <Skeleton className="h-20 w-full rounded-lg" />
+   428→   428→            <Skeleton className="h-28 w-full rounded-lg" />
+   429→   429→          </div>
+   430→   430→        ) : (
+   431→   431→          <div className="space-y-4 py-1">
+   432→   432→            {/* Penerima */}
+   433→   433→            <div className="rounded-lg border bg-zinc-50 p-3">
+   434→   434→              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+   435→   435→                <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+   436→   436→                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-[9px] font-bold text-white" aria-hidden>
+   437→   437→                    {initials(ctx.contact?.fullName ?? "?")}
+   438→   438→                  </span>
+   439→   439→                  {ctx.contact?.fullName ?? "Kontak tidak dikenal"}
+   440→   440→                </span>
+   441→   441→                {ctx.contact?.whatsapp ? (
+   442→   442→                  <span className="inline-flex items-center gap-1 text-zinc-600"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden /> {ctx.contact.whatsapp}</span>
+   443→   443→                ) : null}
+   444→   444→                {ctx.contact?.email ? (
+   445→   445→                  <span className="inline-flex items-center gap-1 text-zinc-600"><Mail className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> {ctx.contact.email}</span>
+   446→   446→                ) : null}
+   447→   447→                {ctx.brand ? (
+   448→   448→                  <span className="inline-flex items-center gap-1 text-zinc-600">
+   449→   449→                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: ctx.brand.color }} aria-hidden />
+   450→   450→                    {ctx.brand.name}
+   451→   451→                  </span>
+   452→   452→                ) : null}
+   453→   453→              </div>
+   454→   454→            </div>
+   455→   455→
+   456→   456→            {/* Pilih template */}
+   457→   457→            <div className="space-y-2">
+   458→   458→              <Label className="flex items-center gap-1.5">
+   459→   459→                <FileText className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Template follow-up
+   460→   460→              </Label>
+   461→   461→              {templates.length === 0 ? (
+   462→   462→                <p className="rounded-lg border border-dashed border-zinc-200 p-2.5 text-xs text-zinc-400">
+   463→   463→                  Belum ada template untuk brand ini — tulis pesan manual di bawah.
+   464→   464→                </p>
+   465→   465→              ) : (
+   466→   466→                <div className="crm-scroll max-h-40 space-y-1.5 overflow-y-auto pr-1">
+   467→   467→                  <label
+   468→   468→                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors ${templateId === "blank" ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"}`}
+   469→   469→                  >
+   470→   470→                    <span className="flex items-center gap-2 font-medium text-zinc-900">
+   471→   471→                      <Sparkles className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Tulis pesan sendiri
+   472→   472→                    </span>
+   473→   473→                    <input type="radio" className="sr-only" checked={templateId === "blank"} onChange={() => pickTemplate("blank")} aria-label="Tulis pesan sendiri" />
+   474→   474→                  </label>
+   475→   475→                  {templates.map((t) => {
+   476→   476→                    const TplIcon = channelMeta(t.channel).icon;
+   477→   477→                    return (
+   478→   478→                      <label
+   479→   479→                        key={t.id}
+   480→   480→                        className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-xs transition-colors ${templateId === t.id ? "border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900" : "border-zinc-200 hover:border-zinc-300"}`}
+   481→   481→                      >
+   482→   482→                        <span className="min-w-0">
+   483→   483→                          <span className="flex items-center gap-1.5 font-medium text-zinc-900">
+   484→   484→                            {t.name}
+   485→   485→                            {!t.approved ? <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1 text-[9px] text-amber-700">review</Badge> : null}
+   486→   486→                          </span>
+   487→   487→                          <span className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+   488→   488→                            <span className="inline-flex items-center gap-1">
+   489→   489→                              <TplIcon className="h-3 w-3" aria-hidden />
+   490→   490→                              {channelMeta(t.channel).label}
+   491→   491→                            </span>
+   492→   492→                            <span aria-hidden>·</span>
+   493→   493→                            <span>H+{t.delayDays}</span>
+   494→   494→                          </span>
+   495→   495→                        </span>
+   496→   496→                        <input type="radio" className="sr-only" checked={templateId === t.id} onChange={() => pickTemplate(t.id)} aria-label={`Pakai template ${t.name}`} />
+   497→   497→                      </label>
+   498→   498→                    );
+   499→   499→                  })}
+   500→   500→                </div>
+   501→   501→              )}
+   502→   502→            </div>
+   503→   503→
+   504→   504→            {/* Kanal + isi */}
+   505→   505→            <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
+   506→   506→              <div className="space-y-2">
+   507→   507→                <Label htmlFor="outbound-channel">Kanal</Label>
+   508→   508→                <Select value={channel} onValueChange={setChannel}>
+   509→   509→                  <SelectTrigger id="outbound-channel" className="bg-white">
+   510→   510→                    <SelectValue />
+   511→   511→                  </SelectTrigger>
+   512→   512→                  <SelectContent>
+   513→   513→                    {OUTBOUND_CHANNELS.map((c) => (
+   514→   514→                      <SelectItem key={c.key} value={c.key} disabled={c.key === "email" && !ctx.contact?.email}>
+   515→   515→                        <span className="flex items-center gap-2"><c.icon className="h-3.5 w-3.5" aria-hidden /> {c.label}</span>
+   516→   516→                      </SelectItem>
+   517→   517→                    ))}
+   518→   518→                  </SelectContent>
+   519→   519→                </Select>
+   520→   520→              </div>
+   521→   521→              <div className="space-y-2">
+   522→   522→                <Label htmlFor="outbound-body">Isi pesan</Label>
+   523→   523→                <Textarea
+   524→   524→                  id="outbound-body"
+   525→   525→                  value={body}
+   526→   526→                  onChange={(e) => setBody(e.target.value)}
+   527→   527→                  rows={7}
+   528→   528→                  placeholder="Tulis pesan follow-up…"
+   529→   529→                  className="bg-white text-sm"
+   530→   530→                />
+   531→   531→                {unknownPlaceholders.length > 0 ? (
+   532→   532→                  <p className="text-[11px] text-amber-600">
+   533→   533→                    Placeholder belum terisi: {unknownPlaceholders.join(", ")} — lengkapi manual sebelum kirim.
+   534→   534→                  </p>
+   535→   535→                ) : null}
+   536→   536→              </div>
+   537→   537→            </div>
+   538→   538→
+   539→   539→            <label className="flex cursor-pointer items-center gap-2 rounded-lg border bg-zinc-50 p-3 text-sm text-zinc-700">
+   540→   540→              <Checkbox checked={markDone} onCheckedChange={(v) => setMarkDone(v === true)} aria-label="Tandai task selesai setelah kirim" />
+   541→   541→              Tandai task selesai setelah pesan tercatat
+   542→   542→            </label>
+   543→   543→          </div>
+   544→   544→        )}
+   545→   545→
+   546→   546→        <DialogFooter>
+   547→   547→          <Button variant="outline" onClick={onClose} disabled={sending}>Batal</Button>
+   548→   548→          <Button
+   549→   549→            onClick={() => void handleSend()}
+   550→   550→            disabled={sending || loadingCtx || !ctx || !body.trim()}
+   551→   551→            aria-label="Kirim dan catat pesan follow-up"
+   552→   552→          >
+   553→   553→            {sending ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden /> : <ChIcon className="h-4 w-4" aria-hidden />}
+   554→   554→            {sending ? "Mencatat…" : `Kirim via ${channelMeta(channel).label}`}
+   555→   555→          </Button>
+   556→   556→        </DialogFooter>
+   557→   557→      </DialogContent>
+   558→   558→    </Dialog>
+   559→   559→  );
+   560→   560→}
+   561→   561→
+   562→   562→// ============ Module utama ============
+   563→   563→
+   564→   564→export default function FollowupsModule() {
+   565→   565→  const user = useCrmStore((s) => s.user);
+   566→   566→
+   567→   567→  const [tasks, setTasks] = useState<TaskDTO[] | null>(null);
+   568→   568→  const [loading, setLoading] = useState(true);
+   569→   569→  const [error, setError] = useState<string | null>(null);
+   570→   570→  const [busyId, setBusyId] = useState<string | null>(null);
+   571→   571→
+   572→   572→  const [statusFilter, setStatusFilter] = useState("all");
+   573→   573→  const [assigneeFilter, setAssigneeFilter] = useState("all");
+   574→   574→  const [onlyOverdue, setOnlyOverdue] = useState(false);
+   575→   575→
+   576→   576→  const [createOpen, setCreateOpen] = useState(false);
+   577→   577→  const [saving, setSaving] = useState(false);
+   578→   578→  const [form, setForm] = useState({
+   579→   579→    title: "", type: "follow_up", priority: "medium", assigneeName: "", dueDate: "", opportunityId: "",
+   580→   580→  });
+   581→   581→  // Fase 3 — kirim & catat pesan outbound dari task follow-up
+   582→   582→  const [sendTarget, setSendTarget] = useState<TaskDTO | null>(null);
+   583→   583→
+   584→   584→  const load = useCallback(async (silent = false) => {
+   585→   585→    if (!silent) setLoading(true);
+   586→   586→    setError(null);
+   587→   587→    try {
+   588→   588→      const res = await api.tasks({
+   589→   589→        status: statusFilter !== "all" ? statusFilter : undefined,
+   590→   590→        assignee: assigneeFilter !== "all" ? assigneeFilter : undefined,
+   591→   591→        overdue: onlyOverdue ? "true" : undefined,
+   592→   592→      });
+   593→   593→      setTasks(res.tasks);
+   594→   594→    } catch (err) {
+   595→   595→      setError(err instanceof Error ? err.message : "Gagal memuat task");
+   596→   596→      if (!silent) toast.error("Gagal memuat task follow-up");
+   597→   597→    } finally {
+   598→   598→      setLoading(false);
+   599→   599→    }
+   600→   600→  }, [statusFilter, assigneeFilter, onlyOverdue]);
+   601→   601→
+   602→   602→  useEffect(() => { void load(); }, [load]);
+   603→   603→
+   604→   604→  const assignees = useMemo(() => {
+   605→   605→    const set = new Set<string>();
+   606→   606→    (tasks ?? []).forEach((t) => { if (t.assigneeName) set.add(t.assigneeName); });
+   607→   607→    return Array.from(set).sort((a, b) => a.localeCompare(b));
+   608→   608→  }, [tasks]);
+   609→   609→
+   610→   610→  const stats = useMemo(() => {
+   611→   611→    const list = tasks ?? [];
+   612→   612→    const todayEnd = endOfToday().getTime();
+   613→   613→    const weekAgo = todayEnd - 7 * 24 * 60 * 60 * 1000;
+   614→   614→    return {
+   615→   615→      open: list.filter((t) => t.status === "open").length,
+   616→   616→      overdue: list.filter((t) => isOverdue(t)).length,
+   617→   617→      dueToday: list.filter((t) => t.status === "open" && isToday(t)).length,
+   618→   618→      doneThisWeek: list.filter((t) => t.status === "done" && t.completedAt
+   619→   619→        && new Date(t.completedAt).getTime() >= weekAgo
+   620→   620→        && new Date(t.completedAt).getTime() <= todayEnd).length,
+   621→   621→    };
+   622→   622→  }, [tasks]);
+   623→   623→
+   624→   624→  const groups = useMemo(() => {
+   625→   625→    const list = tasks ?? [];
+   626→   626→    return {
+   627→   627→      overdue: list.filter((t) => isOverdue(t)),
+   628→   628→      today: list.filter((t) => t.status === "open" && isToday(t)),
+   629→   629→      upcoming: list.filter((t) => t.status === "open" && !isOverdue(t) && !isToday(t)),
+   630→   630→      done: list.filter((t) => t.status === "done"),
+   631→   631→    };
+   632→   632→  }, [tasks]);
+   633→   633→
+   634→   634→  async function handleToggle(t: TaskDTO) {
+   635→   635→    const nextStatus = t.status === "done" ? "open" : "done";
+   636→   636→    setBusyId(t.id);
+   637→   637→    try {
+   638→   638→      const res = await api.updateTask(t.id, { status: nextStatus });
+   639→   639→      setTasks((prev) => (prev ?? []).map((x) => (x.id === t.id ? res.task : x)));
+   640→   640→      toast.success(nextStatus === "done" ? "Task ditandai selesai" : "Task dibuka kembali");
+   641→   641→    } catch (err) {
+   642→   642→      toast.error(err instanceof Error ? err.message : "Gagal memperbarui task");
+   643→   643→    } finally {
+   644→   644→      setBusyId(null);
+   645→   645→    }
+   646→   646→  }
+   647→   647→
+   648→   648→  async function handleCreate(e: React.FormEvent) {
+   649→   649→    e?.preventDefault();
+   650→   650→    if (!form.title.trim()) { toast.error("Judul task wajib diisi"); return; }
+   651→   651→    setSaving(true);
+   652→   652→    try {
+   653→   653→      await api.createTask({
+   654→   654→        title: form.title.trim(),
+   655→   655→        type: form.type,
+   656→   656→        priority: form.priority,
+   657→   657→        assigneeName: form.assigneeName.trim() || undefined,
+   658→   658→        dueDate: form.dueDate || undefined,
+   659→   659→        opportunityId: form.opportunityId.trim() || undefined,
+   660→   660→        actorName: user?.name ?? "System",
+   661→   661→        actorRole: user?.role ?? "system",
+   662→   662→      });
+   663→   663→      toast.success("Task follow-up dibuat");
+   664→   664→      setCreateOpen(false);
+   665→   665→      setForm({ title: "", type: "follow_up", priority: "medium", assigneeName: "", dueDate: "", opportunityId: "" });
+   666→   666→      await load(true);
+   667→   667→    } catch (err) {
+   668→   668→      toast.error(err instanceof Error ? err.message : "Gagal membuat task");
+   669→   669→    } finally {
+   670→   670→      setSaving(false);
+   671→   671→    }
+   672→   672→  }
+   673→   673→
+   674→   674→  /** Callback setelah pesan outbound tercatat: perbarui status task di list. */
+   675→   675→  function handleSent(_task: TaskDTO, updated?: TaskDTO) {
+   676→   676→    if (updated) {
+   677→   677→      setTasks((prev) => (prev ?? []).map((x) => (x.id === updated.id ? updated : x)));
+   678→   678→    }
+   679→   679→  }
+   680→   680→
+   681→   681→  if (loading && tasks === null) return <FollowupsSkeleton />;
+   682→   682→
+   683→   683→  const sectionBody = (list: TaskDTO[], emptyText: string): ReactNode =>
+   684→   684→    list.length === 0 ? (
+   685→   685→      <EmptyGroup text={emptyText} />
+   686→   686→    ) : (
+   687→   687→      <div className="space-y-3">
+   688→   688→        {list.map((t) => (
+   689→   689→          <TaskCard key={t.id} task={t} onToggle={handleToggle} busy={busyId === t.id} onSend={setSendTarget} />
+   690→   690→        ))}
+   691→   691→      </div>
+   692→   692→    );
+   693→   693→
+   694→   694→  return (
+   695→   695→    <div className="space-y-6">
+   696→   696→      {/* Header + filter */}
+   697→   697→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   698→   698→        <div>
+   699→   699→          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Follow-up Center</h1>
+   700→   700→          <p className="text-sm text-zinc-500">Task &amp; jadwal follow-up per opportunity</p>
+   701→   701→        </div>
+   702→   702→        <div className="flex items-center gap-2">
+   703→   703→          <Button
+   704→   704→            variant="outline"
+   705→   705→            size="sm"
+   706→   706→            onClick={() => void load()}
+   707→   707→            disabled={loading}
+   708→   708→            aria-label="Muat ulang daftar task"
+   709→   709→          >
+   710→   710→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   711→   711→          </Button>
+   712→   712→          <Button size="sm" onClick={() => setCreateOpen(true)} aria-label="Tambah task follow-up baru">
+   713→   713→            <Plus className="h-4 w-4" aria-hidden /> Tambah Task
+   714→   714→          </Button>
+   715→   715→        </div>
+   716→   716→      </div>
+   717→   717→
+   718→   718→      <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+   719→   719→        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+   720→   720→          <div className="flex items-center gap-2">
+   721→   721→            <ListFilter className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+   722→   722→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   723→   723→              <SelectTrigger className="w-full sm:w-[150px]" aria-label="Filter status task">
+   724→   724→                <SelectValue placeholder="Status" />
+   725→   725→              </SelectTrigger>
+   726→   726→              <SelectContent>
+   727→   727→                <SelectItem value="all">Semua Status</SelectItem>
+   728→   728→                <SelectItem value="open">Open</SelectItem>
+   729→   729→                <SelectItem value="done">Done</SelectItem>
+   730→   730→              </SelectContent>
+   731→   731→            </Select>
+   732→   732→          </div>
+   733→   733→          <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
+   734→   734→            <SelectTrigger className="w-full sm:w-[190px]" aria-label="Filter assignee">
+   735→   735→              <SelectValue placeholder="Assignee" />
+   736→   736→            </SelectTrigger>
+   737→   737→            <SelectContent>
+   738→   738→              <SelectItem value="all">Semua Assignee</SelectItem>
+   739→   739→              {assignees.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+   740→   740→            </SelectContent>
+   741→   741→          </Select>
+   742→   742→        </div>
+   743→   743→        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700">
+   744→   744→          <Switch checked={onlyOverdue} onCheckedChange={setOnlyOverdue} aria-label="Hanya tampilkan task overdue" />
+   745→   745→          Hanya overdue
+   746→   746→        </label>
+   747→   747→      </div>
+   748→   748→
+   749→   749→      {/* Stat strip */}
+   750→   750→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   751→   751→        <StatCard label="Total Open" value={stats.open} icon={ListFilter} cls="bg-zinc-100 text-zinc-600" />
+   752→   752→        <StatCard label="Overdue" value={stats.overdue} icon={CalendarClock} cls="bg-rose-100 text-rose-600" />
+   753→   753→        <StatCard label="Due Hari Ini" value={stats.dueToday} icon={CalendarDays} cls="bg-amber-100 text-amber-600" />
+   754→   754→        <StatCard label="Selesai Minggu Ini" value={stats.doneThisWeek} icon={CheckCircle2} cls="bg-emerald-100 text-emerald-600" />
+   755→   755→      </div>
+   756→   756→
+   757→   757→      {error ? (
+   758→   758→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+   759→   759→          {error}
+   760→   760→        </div>
+   761→   761→      ) : null}
+   762→   762→
+   763→   763→      {/* List dikelompokkan */}
+   764→   764→      <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+   765→   765→        {assigneeFilter !== "all" && assignees.length === 0 && tasks?.length === 0 ? (
+   766→   766→          <EmptyGroup text="Tidak ada task untuk filter ini" />
+   767→   767→        ) : null}
+   768→   768→        <div className="space-y-6">
+   769→   769→          {groups.overdue.length > 0 && (
+   770→   770→            <section aria-label="Task overdue" className="space-y-3">
+   771→   771→              <SectionHeading title="Overdue" count={groups.overdue.length} />
+   772→   772→              {sectionBody(groups.overdue, "Tidak ada task overdue")}
+   773→   773→            </section>
+   774→   774→          )}
+   775→   775→          <section aria-label="Task hari ini" className="space-y-3">
+   776→   776→            <SectionHeading title="Hari ini" count={groups.today.length} />
+   777→   777→            {sectionBody(groups.today, "Tidak ada task jatuh tempo hari ini")}
+   778→   778→          </section>
+   779→   779→          <section aria-label="Task mendatang" className="space-y-3">
+   780→   780→            <SectionHeading title="Mendatang" count={groups.upcoming.length} />
+   781→   781→            {sectionBody(groups.upcoming, "Tidak ada task mendatang")}
+   782→   782→          </section>
+   783→   783→          <section aria-label="Task selesai" className="space-y-3">
+   784→   784→            <SectionHeading title="Selesai" count={groups.done.length} />
+   785→   785→            {sectionBody(groups.done, "Belum ada task selesai")}
+   786→   786→          </section>
+   787→   787→        </div>
+   788→   788→      </div>
+   789→   789→
+   790→   790→      {/* Dialog tambah task */}
+   791→   791→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   792→   792→        <DialogContent className="sm:max-w-lg">
+   793→   793→          <DialogHeader>
+   794→   794→            <DialogTitle>Tambah Task Follow-up</DialogTitle>
+   795→   795→            <DialogDescription>Buat task baru untuk jadwal follow-up, meeting, atau pekerjaan internal.</DialogDescription>
+   796→   796→          </DialogHeader>
+   797→   797→          <form onSubmit={handleCreate} className="grid gap-4 py-2">
+   798→   798→            <div className="grid gap-2">
+   799→   799→              <Label htmlFor="task-title">Judul Task *</Label>
+   800→   800→              <Input
+   801→   801→                id="task-title" value={form.title} required
+   802→   802→                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+   803→   803→                placeholder="Contoh: Follow-up proposal redesign website"
+   804→   804→              />
+   805→   805→            </div>
+   806→   806→            <div className="grid gap-4 sm:grid-cols-2">
+   807→   807→              <div className="grid gap-2">
+   808→   808→                <Label htmlFor="task-type">Tipe</Label>
+   809→   809→                <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
+   810→   810→                  <SelectTrigger id="task-type"><SelectValue /></SelectTrigger>
+   811→   811→                  <SelectContent>
+   812→   812→                    {TASK_TYPES.map((t) => <SelectItem key={t.key} value={t.key}>{t.label}</SelectItem>)}
+   813→   813→                  </SelectContent>
+   814→   814→                </Select>
+   815→   815→              </div>
+   816→   816→              <div className="grid gap-2">
+   817→   817→                <Label htmlFor="task-priority">Prioritas</Label>
+   818→   818→                <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v }))}>
+   819→   819→                  <SelectTrigger id="task-priority"><SelectValue /></SelectTrigger>
+   820→   820→                  <SelectContent>
+   821→   821→                    {PRIORITIES.map((p) => (
+   822→   822→                      <SelectItem key={p} value={p}>{priorityMeta(p).label}</SelectItem>
+   823→   823→                    ))}
+   824→   824→                  </SelectContent>
+   825→   825→                </Select>
+   826→   826→              </div>
+   827→   827→            </div>
+   828→   828→            <div className="grid gap-4 sm:grid-cols-2">
+   829→   829→              <div className="grid gap-2">
+   830→   830→                <Label htmlFor="task-assignee">Assignee</Label>
+   831→   831→                <Input
+   832→   832→                  id="task-assignee" value={form.assigneeName}
+   833→   833→                  onChange={(e) => setForm((f) => ({ ...f, assigneeName: e.target.value }))}
+   834→   834→                  placeholder="Nama orang yang mengerjakan"
+   835→   835→                />
+   836→   836→              </div>
+   837→   837→              <div className="grid gap-2">
+   838→   838→                <Label htmlFor="task-due">Due Date</Label>
+   839→   839→                <Input
+   840→   840→                  id="task-due" type="date" value={form.dueDate}
+   841→   841→                  onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+   842→   842→                />
+   843→   843→              </div>
+   844→   844→            </div>
+   845→   845→            <div className="grid gap-2">
+   846→   846→              <Label htmlFor="task-opp">Opportunity ID (opsional)</Label>
+   847→   847→              <Input
+   848→   848→                id="task-opp" value={form.opportunityId}
+   849→   849→                onChange={(e) => setForm((f) => ({ ...f, opportunityId: e.target.value }))}
+   850→   850→                placeholder="Tempel ID opportunity bila terkait"
+   851→   851→              />
+   852→   852→            </div>
+   853→   853→            <DialogFooter className="mt-2">
+   854→   854→              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
+   855→   855→              <Button type="submit" disabled={saving} aria-label="Simpan task baru">
+   856→   856→                {saving ? "Menyimpan…" : "Simpan Task"}
+   857→   857→              </Button>
+   858→   858→            </DialogFooter>
+   859→   859→          </form>
+   860→   860→        </DialogContent>
+   861→   861→      </Dialog>
+   862→   862→
+   863→   863→      {/* Dialog kirim & catat pesan outbound (Fase 3) */}
+   864→   864→      <SendOutboundDialog task={sendTarget} onClose={() => setSendTarget(null)} onSent={handleSent} />
+   865→   865→    </div>
+   866→   866→  );
+   867→   867→}
+   868→   868→
