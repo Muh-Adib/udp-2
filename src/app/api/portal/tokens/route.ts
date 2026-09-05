@@ -13,7 +13,14 @@ import { resolveActor, assertRole } from "@/lib/crm/auth";
  *      Audit action "create" entity "portal_token".
  */
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Ronde 36 (audit): daftar token portal memuat token rahasia tanpa masking —
+  // kini wajib sesi + peran Super Admin/Direktur (mirror POST di bawah).
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
+
   const tokens = await db.clientPortalToken.findMany({
     include: { company: { select: { id: true, name: true } } },
     orderBy: { createdAt: "desc" },

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, logAudit, numOrNull, pageLimit, fail } from "@/lib/crm/server";
+import { ok, readBody, logAudit, numOrNull, pageLimit, fail, dateOrNull, isUniqueViolation } from "@/lib/crm/server";
 import { resolveActor, assertRole } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
@@ -145,30 +145,44 @@ export async function POST(req: NextRequest) {
     const description = String(body.description ?? "").trim() || `Invoice project ${project.name}`;
     const taxRate = numOrNull(body.taxRate) ?? 11;
     const taxAmount = Math.round((amount * taxRate) / 100);
-    const dueDate = body.dueDate ? new Date(String(body.dueDate)) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const dueDate = dateOrNull(body.dueDate) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
+    // Ronde 36 (audit): nomor invoice dicek keunikan (loop 5x, pola yg sama dgn
+    // change-request & projects) — dua klik bersamaan tidak lagi 500 P2002.
     const year = new Date().getFullYear();
-    const invCount = await db.invoice.count();
-    const number = `${project.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
+    let number = "";
+    for (let attempt = 0; attempt < 5 && !number; attempt++) {
+      const invCount = await db.invoice.count();
+      const candidate = `${project.brand.invoicePrefix}-${year}-INV-${String(invCount + attempt + 1).padStart(3, "0")}`;
+      const exists = await db.invoice.findUnique({ where: { number: candidate } });
+      if (!exists) number = candidate;
+    }
+    if (!number) return ok({ error: "Gagal menyusun nomor invoice unik — coba sekali lagi" }, 409);
 
-    const invoice = await db.invoice.create({
-      data: {
-        number,
-        brandId: project.brandId,
-        companyId: project.companyId,
-        projectId: project.id,
-        opportunityId: project.opportunityId,
-        description,
-        amount,
-        taxRate,
-        taxAmount,
-        total: amount + taxAmount,
-        currency: project.brand.primaryCurrency ?? "IDR",
-        status: "draft",
-        dueDate,
-      },
-      include: { payments: true },
-    });
+    let invoice;
+    try {
+      invoice = await db.invoice.create({
+        data: {
+          number,
+          brandId: project.brandId,
+          companyId: project.companyId,
+          projectId: project.id,
+          opportunityId: project.opportunityId,
+          description,
+          amount,
+          taxRate,
+          taxAmount,
+          total: amount + taxAmount,
+          currency: project.brand.primaryCurrency ?? "IDR",
+          status: "draft",
+          dueDate,
+        },
+        include: { payments: true },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) return ok({ error: "Nomor invoice baru saja dipakai proses lain — coba sekali lagi" }, 409);
+      throw err;
+    }
     await logAudit({
       actorName: actor.name, actorRole: actor.role,
       action: "create", entity: "invoice", entityId: invoice.id, entityLabel: invoice.number,

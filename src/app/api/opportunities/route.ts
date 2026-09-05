@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, dateOrNull } from "@/lib/crm/server";
 import { computeLeadScore } from "@/lib/crm/scoring";
 import { resolveActor } from "@/lib/crm/auth";
 
@@ -73,44 +73,50 @@ export async function POST(req: NextRequest) {
 
   const estimatedValue = body.estimatedValue ? Number(body.estimatedValue) : null;
 
-  const opp = await db.opportunity.create({
-    data: {
-      title,
-      brandId,
-      contactId,
-      companyId: contact.companyId ?? (body.companyId ? String(body.companyId) : null),
-      serviceCategory: body.serviceCategory ? String(body.serviceCategory) : null,
-      serviceName: body.serviceName ? String(body.serviceName) : null,
-      leadSource: body.leadSource ? String(body.leadSource) : "manual",
-      brief: body.brief ? String(body.brief) : null,
-      estimatedValue,
-      currency: body.currency ? String(body.currency) : "IDR",
-      probability: body.probability ? Number(body.probability) : 20,
-      expectedCloseDate: body.expectedCloseDate ? new Date(String(body.expectedCloseDate)) : null,
-      ownerName: body.ownerName ? String(body.ownerName) : null,
-      priority: body.priority ? String(body.priority) : "medium",
-      stage: body.stage ? String(body.stage) : "new",
-      temperature: body.temperature ? String(body.temperature) : "warm",
-      nextAction: body.nextAction ? String(body.nextAction) : null,
-      nextActionDate: body.nextActionDate ? new Date(String(body.nextActionDate)) : null,
-      crossSellOfId: body.crossSellOfId ? String(body.crossSellOfId) : null,
-    },
-    include: { brand: true, contact: { include: { company: true } }, company: true },
-  });
-
-  // Auto-create follow-up task untuk lead baru
-  if (opp.stage === "new") {
-    await db.task.create({
+  // Ronde 36 (audit): opportunity + task follow-up dalam SATU transaksi —
+  // gagal di tengah tidak menyisakan opportunity tanpa task follow-up.
+  const opp = await db.$transaction(async (tx) => {
+    const opp = await tx.opportunity.create({
       data: {
-        title: `Follow-up 1: ${opp.title}`,
-        type: "follow_up",
-        priority: "high",
-        assigneeName: opp.ownerName ?? "Belum ditentukan",
-        dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        opportunityId: opp.id,
+        title,
+        brandId,
+        contactId,
+        companyId: contact.companyId ?? (body.companyId ? String(body.companyId) : null),
+        serviceCategory: body.serviceCategory ? String(body.serviceCategory) : null,
+        serviceName: body.serviceName ? String(body.serviceName) : null,
+        leadSource: body.leadSource ? String(body.leadSource) : "manual",
+        brief: body.brief ? String(body.brief) : null,
+        estimatedValue,
+        currency: body.currency ? String(body.currency) : "IDR",
+        probability: body.probability ? Number(body.probability) : 20,
+        // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
+        expectedCloseDate: dateOrNull(body.expectedCloseDate),
+        ownerName: body.ownerName ? String(body.ownerName) : null,
+        priority: body.priority ? String(body.priority) : "medium",
+        stage: body.stage ? String(body.stage) : "new",
+        temperature: body.temperature ? String(body.temperature) : "warm",
+        nextAction: body.nextAction ? String(body.nextAction) : null,
+        nextActionDate: dateOrNull(body.nextActionDate),
+        crossSellOfId: body.crossSellOfId ? String(body.crossSellOfId) : null,
       },
+      include: { brand: true, contact: { include: { company: true } }, company: true },
     });
-  }
+
+    // Auto-create follow-up task untuk lead baru
+    if (opp.stage === "new") {
+      await tx.task.create({
+        data: {
+          title: `Follow-up 1: ${opp.title}`,
+          type: "follow_up",
+          priority: "high",
+          assigneeName: opp.ownerName ?? "Belum ditentukan",
+          dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          opportunityId: opp.id,
+        },
+      });
+    }
+    return opp;
+  });
 
   await logAudit({
     actorName: actor.name,

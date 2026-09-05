@@ -335,6 +335,9 @@ export default function ChannelsModule() {
       setData(res);
     } catch (e) {
       console.error(e);
+      // Ronde 36 (audit FIX): kegagalan muat kini terlihat — dulu diam-diam
+      // menampilkan empty state "Belum ada kanal" yang menyesatkan.
+      toast.error(e instanceof Error ? e.message : "Gagal memuat daftar kanal");
     } finally {
       setLoading(false);
     }
@@ -427,10 +430,17 @@ export default function ChannelsModule() {
     setBusy(`test-${config.id}`);
     try {
       const res = await channelsApi.update(config.id, { action: "test", actorName: user?.name, actorRole: user?.role });
-      void res;
+      // Ronde 36 (audit FIX): hasil tes kini DITAMPILKAN — dulu di-void (user tak tahu
+      // apakah kanal benar-benar berfungsi).
+      const st = res.config?.status;
+      const note = res.config?.statusNote;
+      if (st === "connected") toast.success(note || `Koneksi ${config.displayName} OK`);
+      else if (st === "error" || st === "disconnected") toast.error(note || `Tes ${config.displayName} gagal`);
+      else if (note) toast.info(note);
       await load();
     } catch (e) {
       console.error(e);
+      toast.error(e instanceof Error ? e.message : "Gagal mengetes kanal");
     } finally {
       setBusy(null);
     }
@@ -447,6 +457,7 @@ export default function ChannelsModule() {
       await load();
     } catch (e) {
       console.error(e);
+      toast.error(e instanceof Error ? e.message : "Gagal mengubah status kanal");
     } finally {
       setBusy(null);
     }
@@ -461,6 +472,7 @@ export default function ChannelsModule() {
       await load();
     } catch (e) {
       console.error(e);
+      toast.error(e instanceof Error ? e.message : "Gagal menghapus kanal");
     } finally {
       setBusy(null);
     }

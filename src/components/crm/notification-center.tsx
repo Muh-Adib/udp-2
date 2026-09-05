@@ -278,7 +278,11 @@ export default function NotificationCenter() {
     if (!u) return;
     if (!n.read) {
       setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: true } : i)));
-      api.markNotifications({ user: u.email, action: "read", keys: [n.key] }).catch(() => {});
+      // Ronde 36 (audit FIX): optimistic read kini di-revert bila request gagal
+      // (dulu tetap "terbaca" di UI sampai poll berikutnya).
+      api.markNotifications({ user: u.email, action: "read", keys: [n.key] }).catch(() => {
+        setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: false } : i)));
+      });
     }
     if (NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
     setOpen(false);

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, unsafeAttachmentReason } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
 import { computeReplyChannels, REPLY_CHANNELS, reachableAddress, serializeInteractionAttachments } from "@/lib/crm/thread";
 import { resolveActor } from "@/lib/crm/auth";
@@ -22,6 +22,9 @@ function parseAttachments(input: unknown): { list: InteractionAttachment[]; erro
     const url = String(item?.url ?? "");
     if (!name || !url) continue;
     if (!DATA_URL_RE.test(url)) return { list: [], error: `Lampiran "${name}" harus berupa file (data URL)` };
+    // Ronde 36 (audit): tolak file berbahaya (html/svg/js/exe…) dgn pesan jelas.
+    const unsafe = unsafeAttachmentReason(name, url);
+    if (unsafe) return { list: [], error: `Lampiran "${name}" ditolak — ${unsafe}` };
     const base64 = url.slice(url.indexOf(",") + 1);
     const bytes = Math.max(0, Math.floor((base64.length * 3) / 4) - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0));
     if (bytes > MAX_ATTACHMENT_BYTES) {
@@ -114,33 +117,39 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const reply = await db.interaction.create({
-    data: {
-      channel,
-      direction: "outbound",
-      brandId: lead.brandId,
-      senderName: actorName,
-      recipientName: replyAddress ?? lead.contact?.fullName ?? lead.senderName,
-      subject,
-      content,
-      attachments: att.list.length > 0 ? JSON.stringify(att.list) : null, // Ronde 34-b
-      deliveryStatus,
-      deliveryNote,
-      // Ronde 32: balasan pada thread terkonversi ikut tertaut ke opportunity —
-      // muncul di Timeline opportunity (Pipeline) DAN di thread inbox (view=all).
-      opportunityId: lead.opportunityId ?? null,
-      contactId,
-      companyId,
-      externalId: `inbox-reply:${lead.id}`,
-    },
-    include: { contact: { include: { company: true } }, brand: true },
-  });
+  // Ronde 36 (audit): reply + penandaan SLA dalam SATU transaksi — gagal di tengah
+  // tidak menyisakan balasan tercatat tapi lead masih dianggap belum direspons
+  // (dulu memicu eskalasi SLA palsu oleh sweep).
+  const { reply, updatedLead } = await db.$transaction(async (tx) => {
+    const reply = await tx.interaction.create({
+      data: {
+        channel,
+        direction: "outbound",
+        brandId: lead.brandId,
+        senderName: actorName,
+        recipientName: replyAddress ?? lead.contact?.fullName ?? lead.senderName,
+        subject,
+        content,
+        attachments: att.list.length > 0 ? JSON.stringify(att.list) : null, // Ronde 34-b
+        deliveryStatus,
+        deliveryNote,
+        // Ronde 32: balasan pada thread terkonversi ikut tertaut ke opportunity —
+        // muncul di Timeline opportunity (Pipeline) DAN di thread inbox (view=all).
+        opportunityId: lead.opportunityId ?? null,
+        contactId,
+        companyId,
+        externalId: `inbox-reply:${lead.id}`,
+      },
+      include: { contact: { include: { company: true } }, brand: true },
+    });
 
-  // Tandai lead inbound sudah direspons (SLA terpenuhi)
-  const updatedLead = await db.interaction.update({
-    where: { id: lead.id },
-    data: { respondedBy: actorName, respondedAt: new Date() },
-    include: { contact: { include: { company: true } }, brand: true },
+    // Tandai lead inbound sudah direspons (SLA terpenuhi)
+    const updatedLead = await tx.interaction.update({
+      where: { id: lead.id },
+      data: { respondedBy: actorName, respondedAt: new Date() },
+      include: { contact: { include: { company: true } }, brand: true },
+    });
+    return { reply, updatedLead };
   });
 
   await logAudit({

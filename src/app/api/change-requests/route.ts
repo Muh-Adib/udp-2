@@ -5,9 +5,19 @@ import { resolveActor } from "@/lib/crm/auth";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** Roles yang boleh memutuskan (menyetujui/menolak) change request. */
+/** Ronde 36 (audit): sinyal CR sudah diputuskan saat approve (race dua direktur). */
+class AlreadyDecidedError extends Error {
+  constructor() {
+    super("CR_ALREADY_DECIDED");
+  }
+}
+
+/** Roles yang boleh memutuskan (menyetujui/menolak) change request.
+ * Ronde 36 (audit): "client" DIHAPUS — user role client tidak punya pemetaan
+ * perusahaan, sehingga sebelumnya bisa menyetujui CR proyek perusahaan SIAPA PUN
+ * (naikkan nilai kontrak + terbitkan invoice). Keputusan klien tetap lewat secure link portal. */
 function canDecide(role: string) {
-  return ["director", "super_admin", "client"].includes(role);
+  return ["director", "super_admin"].includes(role);
 }
 
 export async function GET(req: NextRequest) {
@@ -113,7 +123,7 @@ export async function PATCH(req: NextRequest) {
 
   // Cancel boleh oleh pengaju mana pun; approve/reject hanya role berwenang
   if (decision !== "cancel" && (!actorRole || !canDecide(actorRole))) {
-    return fail("Hanya Direktur, Super Admin, atau klien yang bisa memutuskan change request", 403);
+    return fail("Hanya Direktur atau Super Admin yang bisa memutuskan change request", 403);
   }
   if (cr.status !== "pending") {
     return fail(`Change request sudah diputuskan (status: ${cr.status})`, 400);
@@ -142,11 +152,21 @@ export async function PATCH(req: NextRequest) {
     : undefined;
 
   const result = await db.$transaction(async (tx) => {
-    const u = await tx.changeRequest.update({
-      where: { id },
+    // Ronde 36 (audit): guard status DI DALAM transaksi (updateMany ter-filter
+    // status:"pending") — dua direktur yang menyetujui bersamaan tidak lagi
+    // mengincrement contractValue dua kali / membuat dua invoice tambahan.
+    const claimed = await tx.changeRequest.updateMany({
+      where: { id, status: "pending" },
       data: { status: "approved", decidedBy: actorName, decidedAt: new Date(), decisionNote },
+    });
+    if (claimed.count === 0) {
+      throw new AlreadyDecidedError();
+    }
+    const u = await tx.changeRequest.findUnique({
+      where: { id },
       include: { project: { select: { id: true, code: true, name: true, status: true, dueDate: true, brand: true, company: true } } },
     });
+    if (!u) throw new AlreadyDecidedError();
 
     await tx.project.update({
       where: { id: cr.projectId },
@@ -192,7 +212,14 @@ export async function PATCH(req: NextRequest) {
       }
     }
     return { updated: u, invoice: created };
+  }).catch((err: unknown) => {
+    if (err instanceof AlreadyDecidedError) return null;
+    throw err;
   });
+
+  if (!result) {
+    return fail(`Change request sudah diputuskan`, 409);
+  }
 
   await logAudit({
     actorName, actorRole, action: "update", entity: "change_request", entityId: cr.id,

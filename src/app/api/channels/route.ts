@@ -69,7 +69,15 @@ function serializeConfig(r: ConfigRow) {
   };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Ronde 36 (audit): GET channels kini khusus Super Admin/Direktur — responsnya
+  // memuat token verifikasi webhook (dibutuhkan utk setup Meta) sehingga tidak boleh
+  // terbaca tanpa batasan peran.
+  const actor = await resolveActor(req);
+  if (actor.denied) return fail(actor.reason, 401);
+  const gate = assertRole(actor, ["super_admin", "director"]);
+  if (!gate.ok) return fail(gate.reason, 403);
+
   const rows = await listChannelConfigs();
 
   // Info webhook WhatsApp utk panduan setup Meta (path relatif — gateway menanganinya).

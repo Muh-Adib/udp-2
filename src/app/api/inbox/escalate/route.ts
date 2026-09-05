@@ -32,9 +32,21 @@ export async function POST(req: NextRequest) {
       ? `${interaction.content.slice(0, 160)}…`
       : interaction.content;
 
+  // Ronde 36 (audit): dedupe — satu lead hanya boleh punya SATU eskalasi terbuka.
+  // Marker [lead:<id>] sama dgn pola SLA sweep; dobel-klik tombol tidak lagi
+  // membuat banyak task urgent duplikat.
+  const marker = `[lead:${interaction.id}]`;
+  const existing = await db.task.findFirst({
+    where: { type: "internal", status: "open", description: { contains: marker } },
+    select: { id: true, title: true },
+  });
+  if (existing) {
+    return fail(`Lead ini sudah dieskalasi: "${existing.title}"`, 409);
+  }
+
   let description =
     `Lead ${channelLabel(interaction.channel)} dari brand ${interaction.brand?.name ?? "-"} ` +
-    `menunggu respons melewati SLA. Pesan: "${snippet}"`;
+    `menunggu respons melewati SLA. Pesan: "${snippet}"\n${marker}`;
   if (note) description += `\nCatatan eskalasi: ${note}`;
 
   const task = await db.task.create({

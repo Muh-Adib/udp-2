@@ -1055,9 +1055,18 @@ function QuotationFormDialog({
 
   const filledItems = totals.items.filter((it) => it.description.length > 0);
 
+  // Ronde 36 (audit FIX): persen dipatok 0–100 di klien juga — dulu -10 DISKON
+  // bisa menaikkan total dokumen resmi, 150% pajak juga lolos (server kini clamp juga).
+  const discountPctNum = Math.min(100, Math.max(0, toNum(discountPct)));
+  const taxPctNum = Math.min(100, Math.max(0, toNum(taxPct)));
+
   async function submit() {
     if (filledItems.length === 0) {
       toast.error("Minimal satu item dengan deskripsi wajib diisi");
+      return;
+    }
+    if (toNum(discountPct) < 0 || toNum(discountPct) > 100 || toNum(taxPct) < 0 || toNum(taxPct) > 100) {
+      toast.error("Diskon & PPN harus angka antara 0–100");
       return;
     }
     setSaving(true);
@@ -1066,8 +1075,8 @@ function QuotationFormDialog({
         await api.quotationAction(editing.id, {
           action: "update",
           items: filledItems,
-          discountPct: toNum(discountPct),
-          taxPct: toNum(taxPct),
+          discountPct: discountPctNum,
+          taxPct: taxPctNum,
           notes: notes.trim() || null,
           validUntil: validUntil || null,
           actorName,
@@ -1078,8 +1087,8 @@ function QuotationFormDialog({
         await api.createQuotation({
           opportunityId,
           items: filledItems,
-          discountPct: toNum(discountPct),
-          taxPct: toNum(taxPct),
+          discountPct: discountPctNum,
+          taxPct: taxPctNum,
           notes: notes.trim() || undefined,
           validUntil: validUntil || undefined,
           actorName,
@@ -1732,7 +1741,13 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     }
   }
 
+  // Ronde 36 (audit FIX): guard per-baris — dobel-klik checkbox tidak lagi
+  // mengirim dua PATCH (dulu last-write-wins bisa balikin status).
+  const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
+
   async function toggleTask(task: TaskRow, done: boolean) {
+    if (taskBusyId) return;
+    setTaskBusyId(task.id);
     try {
       await api.updateTask(task.id, { status: done ? "done" : "open" });
       setData((prev) =>
@@ -1751,6 +1766,8 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Gagal memperbarui tugas");
       await load();
+    } finally {
+      setTaskBusyId(null);
     }
   }
 

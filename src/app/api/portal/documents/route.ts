@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { fail, logAudit, ok, readBody, unsafeAttachmentReason } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 
 /**
@@ -77,6 +77,9 @@ export async function POST(req: NextRequest) {
     if (fileData.startsWith("data:") && !/^data:[\w.+-]+\/[\w.+-]+;base64,/.test(fileData)) {
       return fail("Format file (data URL) tidak valid", 400);
     }
+    // Ronde 36 (audit): tolak file berbahaya (html/svg/js/exe…) dgn pesan jelas.
+    const unsafe = unsafeAttachmentReason(String(body.fileName ?? "").trim() || title, fileData);
+    if (unsafe) return fail(`File ditolak — ${unsafe}`, 400);
   }
 
   // 6) Tanggal rapat (bila diisi) harus tanggal valid

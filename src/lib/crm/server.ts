@@ -48,6 +48,52 @@ export function pageLimit(v: string | null, def: number, max = 200): number {
   return Math.min(max, Math.max(1, Math.round(n)));
 }
 
+// ===== Ronde 36 (audit) — blokir lampiran yang berbahaya =====
+// MIME/ekstensi berikut bisa dieksekusi saat file dibuka di browser/OS
+// (phishing via file yang diunduh dari CRM). Kandidat ditolak 400 dgn pesan jelas.
+const BLOCKED_ATTACHMENT_MIME = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "application/javascript",
+  "text/javascript",
+  "application/x-javascript",
+  "application/x-msdownload",
+  "application/x-msi",
+  "application/x-bat",
+  "application/x-sh",
+  "application/x-shellscript",
+]);
+const BLOCKED_ATTACHMENT_EXT = new Set([
+  "html", "htm", "xhtml", "svg", "js", "mjs", "exe", "msi", "bat", "cmd",
+  "ps1", "sh", "vbs", "scr", "com", "jar", "lnk",
+]);
+
+/** Return alasan penolakan bila lampiran berbahaya, atau null bila aman. */
+export function unsafeAttachmentReason(name: string, url: string): string | null {
+  const semi = url.indexOf(";");
+  if (url.toLowerCase().startsWith("data:") && semi > 5) {
+    const mime = url.slice(5, semi).toLowerCase();
+    if (BLOCKED_ATTACHMENT_MIME.has(mime)) return `tipe file "${mime}" tidak diizinkan (keamanan)`;
+  }
+  const dot = name.lastIndexOf(".");
+  if (dot >= 0) {
+    const ext = name.slice(dot + 1).toLowerCase();
+    if (BLOCKED_ATTACHMENT_EXT.has(ext)) return `jenis file .${ext} tidak diizinkan (keamanan)`;
+  }
+  return null;
+}
+
+/** Ronde 36 (audit): true bila error Prisma = pelanggaran unique (P2002) —
+ * dipakai utk mengubah 500 mentah menjadi 409 dgn pesan ramah. */
+export function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === "P2002"
+  );
+}
+
 export async function logAudit(entry: {
   actorName: string;
   actorRole?: string | null;

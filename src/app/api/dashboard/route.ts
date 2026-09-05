@@ -27,11 +27,11 @@ export async function GET(req: NextRequest) {
     opportunities, interactions, tasks, invoices, projects, recentAudit, brands, pendingApprovals,
     unresolvedInbound, pendingChangeRequests,
   ] = await Promise.all([
-    db.opportunity.findMany({ where: { deletedAt: null }, include: { brand: true, contact: true, company: true } }),
+    db.opportunity.findMany({ where: { deletedAt: null }, include: { brand: true, contact: true, company: true }, take: 2000 }),
     db.interaction.findMany({ orderBy: { createdAt: "desc" }, take: 500 }),
-    db.task.findMany({ where: { status: "open" } }),
-    db.invoice.findMany({ include: { payments: true, company: { select: { name: true } } } }),
-    db.project.findMany({ include: { brand: { select: { name: true, color: true } }, company: { select: { name: true } } } }),
+    db.task.findMany({ where: { status: "open" }, take: 2000 }),
+    db.invoice.findMany({ include: { payments: true, company: { select: { name: true } } }, take: 2000 }),
+    db.project.findMany({ include: { brand: { select: { name: true, color: true } }, company: { select: { name: true } } }, take: 2000 }),
     db.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 8 }),
     db.brand.findMany(),
     db.approvalRequest.findMany({

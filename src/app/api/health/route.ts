@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok } from "@/lib/crm/server";
+import { getSessionUser } from "@/lib/crm/auth";
 
 /**
  * GET /api/health — monitoring kesehatan sistem (ronde 17-d).
@@ -18,7 +19,7 @@ import { ok } from "@/lib/crm/server";
 const DB_SLOW_MS = 500;
 const NOTIF_TIMEOUT_MS = 2000;
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   // 1) Probe database + latency
   let dbMs: number | null = null;
   let dbUp = true;
@@ -51,14 +52,19 @@ export async function GET(_req: NextRequest) {
   const degraded = !dbUp || dbMs === null || dbMs > DB_SLOW_MS || notifStatus === "down";
   const mem = process.memoryUsage();
 
+  // Ronde 36 (audit): detail internal (uptime/RSS/latency/port) hanya utk sesi
+  // sah — pemanggil anonim cukup melihat status ringkas (recon surface diperkecil).
+  const viewer = await getSessionUser(req);
   const res = ok(
-    {
-      status: degraded ? "degraded" : "ok",
-      db: { status: dbUp ? "up" : "down", ms: dbMs },
-      notifService: { status: notifStatus, detail: notifDetail },
-      uptimeSec: Math.round(process.uptime()),
-      rssMb: Math.round((mem.rss / (1024 * 1024)) * 10) / 10,
-    },
+    viewer
+      ? {
+          status: degraded ? "degraded" : "ok",
+          db: { status: dbUp ? "up" : "down", ms: dbMs },
+          notifService: { status: notifStatus, detail: notifDetail },
+          uptimeSec: Math.round(process.uptime()),
+          rssMb: Math.round((mem.rss / (1024 * 1024)) * 10) / 10,
+        }
+      : { status: degraded ? "degraded" : "ok" },
     200,
   );
   res.headers.set("Cache-Control", "no-store");

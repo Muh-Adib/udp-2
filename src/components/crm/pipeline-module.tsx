@@ -1044,6 +1044,9 @@ export default function PipelineModule() {
 
   const [opps, setOpps] = useState<OpportunityDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  // Ronde 36 (audit FIX): state error muat — dulu kegagalan fetch hanya toast &
+  // kanban menampilkan empty state "Belum ada opportunity" yang menyesatkan.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
   const [owner, setOwner] = useState<string>("all");
@@ -1082,7 +1085,9 @@ export default function PipelineModule() {
         });
         oppsRef.current = res.opportunities;
         setOpps(res.opportunities);
+        setLoadError(null);
       } catch (e) {
+        setLoadError(e instanceof Error ? e.message : "Gagal memuat opportunity");
         toast.error(e instanceof Error ? e.message : "Gagal memuat opportunity");
       } finally {
         if (!opts?.silent) setLoading(false);
@@ -1415,7 +1420,15 @@ export default function PipelineModule() {
       </div>
 
       {/* Konten */}
-      {loading ? (
+      {loadError && !loading ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-rose-200 bg-rose-50 py-14 text-center">
+          <p className="font-medium text-rose-700">Gagal memuat pipeline</p>
+          <p className="max-w-sm text-sm text-rose-600">{loadError}</p>
+          <Button size="sm" variant="outline" onClick={() => void load()} aria-label="Coba muat ulang pipeline">
+            Coba lagi
+          </Button>
+        </div>
+      ) : loading ? (
         <div className="flex gap-3 overflow-hidden">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-[420px] w-[280px] shrink-0 rounded-xl" />

@@ -74,8 +74,15 @@ export async function POST(req: NextRequest) {
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : opp.title;
 
   const year = new Date().getFullYear();
-  const count = await db.clientBrief.count();
-  const code = `BRF-${year}-${String(count + 1).padStart(4, "0")}`;
+  // Ronde 36 (audit): nomor brief dicek unik loop 5x (dulu count+1 mentah → P2002 500 saat bersamaan).
+  let code = "";
+  for (let attempt = 0; attempt < 5 && !code; attempt++) {
+    const count = await db.clientBrief.count();
+    const candidate = `BRF-${year}-${String(count + attempt + 1).padStart(4, "0")}`;
+    const exists = await db.clientBrief.findUnique({ where: { code: candidate } });
+    if (!exists) code = candidate;
+  }
+  if (!code) return fail("Gagal menyusun kode brief unik — coba sekali lagi", 409);
 
   const serviceTypes = Array.isArray(body.serviceTypes)
     ? (body.serviceTypes as unknown[]).filter((s): s is string => typeof s === "string")

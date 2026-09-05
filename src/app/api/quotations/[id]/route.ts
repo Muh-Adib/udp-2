@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit, clampNum } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, clampNum, dateOrNull, isUniqueViolation } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -79,25 +79,44 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (existing) return fail(`Invoice untuk quotation ini sudah ada: ${existing.number}`);
     const invCount = await db.invoice.count();
     const year = new Date().getFullYear();
-    const number = `${quotation.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
+    let number = "";
+    for (let attempt = 0; attempt < 5 && !number; attempt++) {
+      const candidate = `${quotation.brand.invoicePrefix}-${year}-INV-${String(invCount + attempt + 1).padStart(3, "0")}`;
+      const exists = await db.invoice.findUnique({ where: { number: candidate } });
+      if (!exists) number = candidate;
+    }
+    if (!number) return fail("Gagal menyusun nomor invoice unik — coba sekali lagi", 409);
     const amount = quotation.total - quotation.taxAmount;
-    const invoice = await db.invoice.create({
-      data: {
-        number,
-        brandId: quotation.brandId,
-        companyId: quotation.companyId,
-        opportunityId: quotation.opportunityId,
-        description: `Invoice dari quotation ${quotation.number}`,
-        amount,
-        taxRate: quotation.taxPct,
-        taxAmount: quotation.taxAmount,
-        total: quotation.total,
-        currency: quotation.currency,
-        status: "draft",
-        dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-        notes: `Dikonversi dari quotation ${quotation.number} oleh ${actorName}`,
-      },
-    });
+    // Ronde 36 (audit): cek ulang invoice-quotation DI DALAM transaksi + P2002 → 409
+    // (dulu double-click bisa membuat dua DP invoice untuk quotation yang sama).
+    const invoice = await db
+      .$transaction(async (tx) => {
+        const dup = await tx.invoice.findFirst({ where: { description: { contains: quotation.number } } });
+        if (dup) throw new Error("QUOTE_ALREADY_INVOICED");
+        return tx.invoice.create({
+          data: {
+            number,
+            brandId: quotation.brandId,
+            companyId: quotation.companyId,
+            opportunityId: quotation.opportunityId,
+            description: `Invoice dari quotation ${quotation.number}`,
+            amount,
+            taxRate: quotation.taxPct,
+            taxAmount: quotation.taxAmount,
+            total: quotation.total,
+            currency: quotation.currency,
+            status: "draft",
+            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+            notes: `Dikonversi dari quotation ${quotation.number} oleh ${actorName}`,
+          },
+        });
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.message === "QUOTE_ALREADY_INVOICED") return null;
+        if (isUniqueViolation(err)) return null;
+        throw err;
+      });
+    if (!invoice) return fail(`Invoice untuk quotation ini sudah ada (mungkin baru saja dibuat)`);
     await logAudit({
       actorName, actorRole, action: "create", entity: "invoice", entityId: invoice.id,
       entityLabel: invoice.number, metadata: `Konversi dari quotation ${quotation.number}`, req,
@@ -133,7 +152,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data.total = afterDiscount + taxAmount;
   }
   if ("notes" in body) data.notes = body.notes ? String(body.notes) : null;
-  if ("validUntil" in body) data.validUntil = body.validUntil ? new Date(String(body.validUntil)) : null;
+  // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
+  if ("validUntil" in body) data.validUntil = dateOrNull(body.validUntil);
 
   const updated = await db.quotation.update({
     where: { id },

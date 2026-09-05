@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import {
   SESSION_COOKIE, SESSION_TTL_MS, signSession, verifyPin, hashPin,
-  isPlainPin, loginRateLimit, loginRateLimitReset,
+  isPlainPin, loginRateLimit, loginRateLimitEmail, loginRateLimitReset,
 } from "@/lib/crm/auth";
 
 /**
@@ -19,6 +19,11 @@ export async function POST(req: NextRequest) {
   const pin = String(body.pin ?? "").trim();
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "127.0.0.1";
+  // Ronde 36 (audit): batas GLOBAL per email — ganti IP tidak lagi melewati limit.
+  const rlEmail = loginRateLimitEmail(email);
+  if (!rlEmail.allowed) {
+    return fail(`Terlalu banyak percobaan masuk utk akun ini — coba lagi dalam ${Math.ceil(rlEmail.retryAfterSec / 60)} menit`, 429);
+  }
   const rl = loginRateLimit(`${ip}:${email}`);
   if (!rl.allowed) {
     return fail(`Terlalu banyak percobaan masuk — coba lagi dalam ${Math.ceil(rl.retryAfterSec / 60)} menit`, 429);
@@ -31,7 +36,9 @@ export async function POST(req: NextRequest) {
       entityId: email || "(kosong)", entityLabel: email,
       metadata: `Login gagal: ${!user ? "email tidak terdaftar" : "akun tidak aktif"}`, req,
     });
-    return fail("Email tidak terdaftar atau tidak aktif", 401);
+    // Ronde 36 (audit): pesan DISERAGAMKAN agar tak bisa dipakai menebak
+    // email mana yang terdaftar (email enumeration). Detail tetap tercatat di audit log.
+    return fail("Email atau PIN salah", 401);
   }
   if (!pin || !verifyPin(pin, user.pin)) {
     await logAudit({
@@ -39,7 +46,7 @@ export async function POST(req: NextRequest) {
       entityId: user.id, entityLabel: user.email,
       metadata: "Login gagal: PIN salah", req,
     });
-    return fail("PIN salah", 401);
+    return fail("Email atau PIN salah", 401);
   }
 
   // Migrasi diam-diam: PIN plaintext legacy → hash scrypt (sekali per pengguna).

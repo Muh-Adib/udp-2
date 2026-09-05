@@ -411,7 +411,10 @@ function NotificationBriefWidget() {
     if (!user) return;
     if (!n.read) {
       setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: true } : i)));
-      api.markNotifications({ user: user.email, action: "read", keys: [n.key] }).catch(() => {});
+      // Ronde 36 (audit FIX): revert optimistic read bila gagal (sinkron dgn notification-center).
+      api.markNotifications({ user: user.email, action: "read", keys: [n.key] }).catch(() => {
+        setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: false } : i)));
+      });
     }
     if (NOTIF_NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
   }
@@ -1027,9 +1030,13 @@ export default function DashboardModule() {
         });
       }
     } catch (err) {
-      toast.error("Gagal memuat data Command Center", {
-        description: err instanceof Error ? err.message : "Silakan coba lagi.",
-      });
+      // Ronde 36 (audit FIX): polling senyap (silent=true, tiap 60 dtk) TIDAK
+      // lagi memunculkan toast tiap menit saat server down — cukup yang awal.
+      if (!silent) {
+        toast.error("Gagal memuat data Command Center", {
+          description: err instanceof Error ? err.message : "Silakan coba lagi.",
+        });
+      }
     } finally {
       setLoading(false);
     }

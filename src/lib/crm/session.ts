@@ -10,7 +10,18 @@
 export const SESSION_COOKIE = "crm_session";
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 hari
 
-const SECRET = process.env.SESSION_SECRET || "grupcrm-dev-secret-ganti-di-produksi";
+// Ronde 36 (audit): fallback secret HANYA untuk development. Di produksi,
+// jika SESSION_SECRET tidak diisi, server MENOLAK menyala (fail-closed) —
+// karena secret bawaan ada di repo publik, siapa pun bisa memalsukan cookie sesi.
+const DEV_FALLBACK_SECRET = "grupcrm-dev-secret-ganti-di-produksi";
+const IS_PROD = process.env.NODE_ENV === "production";
+const SECRET: string =
+  process.env.SESSION_SECRET ?? (IS_PROD ? "" : DEV_FALLBACK_SECRET);
+if (IS_PROD && !SECRET) {
+  throw new Error(
+    "SESSION_SECRET wajib diisi di produksi (mis. `openssl rand -hex 32`) — tanpa ini cookie sesi bisa dipalsukan",
+  );
+}
 
 export type SessionPayload = { uid: string; email: string; name: string; role: string; exp: number };
 export type SessionUser = { id: string; name: string; email: string; role: string };

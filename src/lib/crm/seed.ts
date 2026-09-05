@@ -5,7 +5,22 @@ const HOUR = 60 * 60 * 1000;
 function ago(days: number) { return new Date(Date.now() - days * DAY); }
 function ahead(days: number) { return new Date(Date.now() + days * DAY); }
 
+/**
+ * Ronde 36 (audit): kunci in-process agar dua pemanggilan seed bersamaan
+ * (mis. dua tab pertama dibuka bersamaan) TIDAK saling menghapus datanya —
+ * pemanggil kedua menunggu hasil pemanggil pertama lalu melihat "data already exists".
+ */
+let seedInFlight: Promise<{ seeded: boolean; reason?: string }> | null = null;
+
 export async function seedDatabase(force = false) {
+  if (seedInFlight) return seedInFlight;
+  seedInFlight = runSeed(force).finally(() => {
+    seedInFlight = null;
+  });
+  return seedInFlight;
+}
+
+async function runSeed(force = false): Promise<{ seeded: boolean; reason?: string; counts?: Record<string, number> }> {
   const existing = await db.brand.count();
   if (existing > 0 && !force) return { seeded: false, reason: "data already exists" };
 

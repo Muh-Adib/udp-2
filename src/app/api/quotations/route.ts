@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, dateOrNull, isUniqueViolation, clampNum } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 
 interface QuotationItem {
@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
       opportunity: { select: { id: true, title: true, stage: true } },
     },
     orderBy: { createdAt: "desc" },
+    take: 300, // Ronde 36 (audit): guardrail payload (data demo jauh di bawah batas)
   });
   return ok({ quotations });
 }
@@ -77,13 +78,22 @@ export async function POST(req: NextRequest) {
   const items = parseItems(body.items);
   if (items.length === 0) return fail("Minimal satu item quotation wajib diisi");
 
-  const discountPct = Number(body.discountPct ?? 0);
-  const taxPct = Number(body.taxPct ?? 11);
+  // Ronde 36 (audit): persen dipatok 0–100 di server juga (POST belum pernah clamp —
+  // diskon -10 dulu MENAMBAH total; 150% pajak juga lolos).
+  const discountPct = clampNum(body.discountPct ?? 0, 0, 100, 0);
+  const taxPct = clampNum(body.taxPct ?? 11, 0, 100, 11);
   const totals = computeTotals(items, discountPct, taxPct);
 
+  // Ronde 36 (audit): nomor unik dicek loop 5x + P2002 → 409 ramah.
   const year = new Date().getFullYear();
-  const count = await db.quotation.count();
-  const number = `${opp.brand.quotePrefix}-${year}-${String(count + 1).padStart(4, "0")}`;
+  let number = "";
+  for (let attempt = 0; attempt < 5 && !number; attempt++) {
+    const count = await db.quotation.count();
+    const candidate = `${opp.brand.quotePrefix}-${year}-${String(count + attempt + 1).padStart(4, "0")}`;
+    const exists = await db.quotation.findUnique({ where: { number: candidate } });
+    if (!exists) number = candidate;
+  }
+  if (!number) return fail("Gagal menyusun nomor quotation unik — coba sekali lagi", 409);
 
   const quotation = await db.quotation.create({
     data: {
@@ -97,7 +107,8 @@ export async function POST(req: NextRequest) {
       taxPct,
       currency: opp.currency,
       status: "draft",
-      validUntil: body.validUntil ? new Date(String(body.validUntil)) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini fallback 14 hari (sebelumnya 500)
+      validUntil: dateOrNull(body.validUntil) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       notes: body.notes ? String(body.notes) : null,
     },
     include: { brand: true, company: true, opportunity: { select: { id: true, title: true, stage: true } } },

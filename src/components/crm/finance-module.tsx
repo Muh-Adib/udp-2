@@ -335,6 +335,15 @@ export default function FinanceModule() {
       toast.error("Nominal pembayaran tidak valid");
       return;
     }
+    // Ronde 36 (audit FIX): blokir kelebihan bayar (fat-finger nol ekstra bisa
+    // langsung menutup invoice Rp jutaan sbg "paid"). Sisa tagihan = total - terbayar.
+    const outstanding = Math.max(0, payTarget.total - paidAmount(payTarget));
+    if (amount > outstanding) {
+      toast.error(
+        `Nominal melebihi sisa tagihan (sisa: ${formatCurrencyFull(outstanding, payTarget.currency)}). Catat pembayaran bertahap atau sesuaikan nominal.`,
+      );
+      return;
+    }
     setPaying(true);
     try {
       const res = await api.addPayment({

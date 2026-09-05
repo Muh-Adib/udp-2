@@ -202,6 +202,12 @@ model Interaction {
   companyId      String?
   brand          Brand?       @relation(fields: [brandId], references: [id])
   createdAt      DateTime     @default(now())
+
+  // Ronde 36 (audit): index utk filter inbox/timeline yang tumbuh paling cepat
+  @@index([contactId])
+  @@index([opportunityId])
+  @@index([externalId])
+  @@index([createdAt])
 }
 
 model Task {
@@ -218,6 +224,10 @@ model Task {
   completedAt   DateTime?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  // Ronde 36 (audit): index utk daftar follow-up & timeline opportunity
+  @@index([opportunityId])
+  @@index([status, dueDate])
 }
 
 model Note {
@@ -259,6 +269,11 @@ model Invoice {
   updatedAt       DateTime       @updatedAt
 
   payments Payment[]
+
+  // Ronde 36 (audit): index utk aging & tagihan per project
+  @@index([projectId])
+  @@index([dueDate])
+  @@index([status])
 }
 
 model Payment {
@@ -380,6 +395,10 @@ model AuditLog {
   ip          String?
   userAgent   String?
   createdAt   DateTime @default(now())
+
+  // Ronde 36 (audit): index utk urutan audit terbaru
+  @@index([createdAt])
+  @@index([entity, entityId])
 }
 
 model FollowUpTemplate {

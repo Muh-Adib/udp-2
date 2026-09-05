@@ -1504,7 +1504,13 @@ export default function ProjectsModule() {
     setDetail((d) => (d ? fresh.find((p) => p.id === d.id) ?? d : d));
   }
 
+  // Ronde 36 (audit FIX): guard msBusyId — aksi toast "Ya, selesaikan" yang diklik
+  // berkali-kali tidak lagi mengirim banyak PATCH berturut-turut.
+  const [msBusyId, setMsBusyId] = useState<string | null>(null);
+
   async function markMilestoneDone(project: ProjectDTO, m: MilestoneDTO) {
+    if (msBusyId) return;
+    setMsBusyId(m.id);
     try {
       await api.updateProject({
         id: project.id,
@@ -1516,6 +1522,8 @@ export default function ProjectsModule() {
       await refreshDetail();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal memperbarui milestone");
+    } finally {
+      setMsBusyId(null);
     }
   }
 

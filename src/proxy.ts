@@ -5,7 +5,21 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/crm/session";
  * Ronde 27 — gerbang sesi untuk API (edge-safe: Web Crypto, tanpa node:crypto/Prisma).
  * SEMUA mutasi (POST/PATCH/PUT/DELETE) ke /api/* WAJIB membawa cookie sesi
  * bertanda tangan — kecuali allowlist di bawah.
- * GET dibiarkan terbuka (read-only, konsisten dgn transparansi demo).
+ *
+ * RONDE 36 (audit keamanan) — GET tidak lagi terbuka bebas:
+ * semua GET kini juga butuh sesi, KECUALI allowlist eksplisit di bawah.
+ * Alasan: sebelumnya siapa pun tanpa login bisa membaca seluruh data CRM
+ * (kontak, invoice, pipeline, audit, token portal klien). Allowlist dibatasi
+ * pada yang memang harus bisa diakses tanpa sesi:
+ *  - /api/auth/*        → cek sesi & login itu sendiri
+ *  - /api/webhooks/*    → dipanggil server Meta (diverifikasi HMAC di route)
+ *  - /api/bootstrap     → seeding pertama saat DB kosong (belum ada user)
+ *  - /api/health        → probe sandbox/supervisor (payload detail dibatasi di route)
+ *  - /api/users         → chip persona demo di layar login (field minimal, tanpa PIN)
+ *  - /api/notifications, /api/notif-prefs → dipoll mini-service notif tanpa cookie
+ *  - GET /api/portal/<token> (1 segmen) → portal klien publik; kuncinya token rahasia 48-hex
+ * Catatan dokumentasi: keduanya (notifications & users) adalah kompromi desain
+ * yang diketahui — dihasilkan hanya data minimal, dan dibahas di audit ronde 36.
  */
 
 const ALLOWED_MUTATION_PREFIXES = [
@@ -18,16 +32,42 @@ const ALLOWED_MUTATION_REGEXES = [
   /^\/api\/portal\/[^/]+\/review$/,    // review portal publik — auth = token rahasia di URL
 ];
 
+const ALLOWED_GET_PREFIXES = [
+  "/api/auth/",
+  "/api/webhooks/",                    // handshake GET Meta (hub.challenge)
+  "/api/bootstrap",
+  "/api/health",
+  "/api/users",                        // persona login (tanpa PIN; kompromi terdokumentasi)
+  "/api/notifications",                // dipoll notif-service tanpa cookie (kompromi terdokumentasi)
+  "/api/notif-prefs",
+];
+
+const ALLOWED_GET_REGEXES = [
+  // Portal klien publik — token rahasia di URL (1 segmen), TAPI bukan subpath
+  // staf "tokens"/"documents" (dua route itu wajib sesi — Ronde 36 audit).
+  /^\/api\/portal\/(?!tokens$|documents$)[^/]+$/,
+];
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const mutating = !["GET", "HEAD", "OPTIONS"].includes(req.method);
-  if (!mutating) return NextResponse.next();
+  const method = req.method.toUpperCase();
+  const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
 
   if (
     ALLOWED_MUTATION_PREFIXES.some((p) => pathname.startsWith(p)) ||
     ALLOWED_MUTATION_REGEXES.some((r) => r.test(pathname))
   ) {
     return NextResponse.next();
+  }
+
+  // Ronde 36: GET wajib sesi kecuali allowlist eksplisit di atas.
+  if (!mutating) {
+    if (
+      ALLOWED_GET_PREFIXES.some((p) => pathname.startsWith(p)) ||
+      ALLOWED_GET_REGEXES.some((r) => r.test(pathname))
+    ) {
+      return NextResponse.next();
+    }
   }
 
   const session = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value);

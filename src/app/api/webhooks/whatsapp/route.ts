@@ -51,7 +51,12 @@ function verifySignature(rawBody: string, header: string | null): string | null 
     }
     return "signature tidak cocok dgn kredensial terdaftar";
   }
-  return null; // belum ada kredensial sama sekali — mode demo, validasi dilewati
+  // Ronde 36 (audit): PRODUKSI fail-closed — tanpa secret sama sekali, webhook ditolak
+  // (sebelumnya siapa pun bisa mengirim status palsu). Development tetap mode demo.
+  if (process.env.NODE_ENV === "production") {
+    return "webhook ditolak: WHATSAPP_APP_SECRET / appSecret kanal belum dikonfigurasi (wajib di produksi)";
+  }
+  return null; // belum ada kredensial sama sekali — mode demo (development), validasi dilewati
 }
 
 /** Secret appSecret WhatsApp dari ChannelConfig (di-load per request, kecil & ter-cache 30 dtk). */
@@ -78,7 +83,10 @@ async function refreshDbSecrets() {
 
 /** Token verify yang sah: env WHATSAPP_VERIFY_TOKEN ATAU verifyToken di ChannelConfig. */
 async function verifyHandshakeToken(token: string): Promise<boolean> {
-  if (token === (process.env.WHATSAPP_VERIFY_TOKEN || DEMO_VERIFY_TOKEN)) return true;
+  // Ronde 36 (audit): token demo HANYA berlaku di development — di produksi
+  // handshake dengan token bawaan repo ditolak.
+  if (process.env.NODE_ENV !== "production" && token === DEMO_VERIFY_TOKEN) return true;
+  if (process.env.WHATSAPP_VERIFY_TOKEN && token === process.env.WHATSAPP_VERIFY_TOKEN) return true;
   const rows = await db.channelConfig.findMany({ where: { channel: "whatsapp" }, select: { credentials: true } });
   for (const r of rows) {
     try {

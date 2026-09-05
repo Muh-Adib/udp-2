@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
+import { ok, fail, readBody, logAudit, dateOrNull } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -21,7 +21,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data.completedAt = body.status === "done" ? new Date() : null;
   }
   if ("assigneeName" in body) data.assigneeName = body.assigneeName ? String(body.assigneeName) : null;
-  if ("dueDate" in body) data.dueDate = body.dueDate ? new Date(String(body.dueDate)) : null;
+  // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
+  if ("dueDate" in body) data.dueDate = dateOrNull(body.dueDate);
 
   const task = await db.task.update({ where: { id }, data, include: { opportunity: { include: { brand: true } } } });
 

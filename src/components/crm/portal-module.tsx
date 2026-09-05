@@ -1108,7 +1108,17 @@ function StaffPortalDocuments({ companies, actorName }: {
                                 variant="outline"
                                 size="icon"
                                 className="h-11 w-11"
-                                onClick={() => window.open(d.fileData ?? "", "_blank", "noopener,noreferrer")}
+                                onClick={() => {
+                                  // Ronde 36 (audit FIX): window.open(data: URL) DIBLOKIR
+                                  // browser modern (no-op diam) — unduh kini via anchor download,
+                                  // pola yang sama dgn portal token klien.
+                                  const a = document.createElement("a");
+                                  a.href = d.fileData ?? "";
+                                  a.download = d.fileName || d.title || "dokumen";
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                }}
                                 aria-label={`Unduh file dokumen ${d.title}`}
                               >
                                 <ReceiptText className="h-4 w-4" aria-hidden />

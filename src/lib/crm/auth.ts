@@ -107,20 +107,49 @@ const attempts = new Map<string, { count: number; resetAt: number }>();
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 8;
 
-export function loginRateLimit(key: string): { allowed: boolean; retryAfterSec: number } {
+/** Ronde 36 (audit): batas GLOBAL per email (tidak bisa dilewati ganti IP). */
+const EMAIL_WINDOW_MS = 15 * 60 * 1000;
+const EMAIL_MAX_ATTEMPTS = 10;
+const emailAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function bumpLimit(
+  store: Map<string, { count: number; resetAt: number }>,
+  key: string,
+  windowMs: number,
+  max: number,
+): { allowed: boolean; retryAfterSec: number } {
   const now = Date.now();
-  const rec = attempts.get(key);
+  const rec = store.get(key);
   if (!rec || rec.resetAt < now) {
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
+    store.set(key, { count: 1, resetAt: now + windowMs });
     return { allowed: true, retryAfterSec: 0 };
   }
   rec.count += 1;
-  if (rec.count > MAX_ATTEMPTS) {
+  if (rec.count > max) {
     return { allowed: false, retryAfterSec: Math.ceil((rec.resetAt - now) / 1000) };
   }
   return { allowed: true, retryAfterSec: 0 };
 }
 
+export function loginRateLimit(key: string): { allowed: boolean; retryAfterSec: number } {
+  return bumpLimit(attempts, key, WINDOW_MS, MAX_ATTEMPTS);
+}
+
+export function loginRateLimitEmail(email: string): { allowed: boolean; retryAfterSec: number } {
+  return bumpLimit(emailAttempts, email.toLowerCase(), EMAIL_WINDOW_MS, EMAIL_MAX_ATTEMPTS);
+}
+
+// Ronde 36: sapuan berkala agar Map tidak tumbuh tanpa batas (bot rotasi IP).
+let lastSweep = 0;
+function sweepStores() {
+  const now = Date.now();
+  if (now - lastSweep < 5 * 60 * 1000) return;
+  lastSweep = now;
+  for (const [k, v] of attempts) if (v.resetAt < now) attempts.delete(k);
+  for (const [k, v] of emailAttempts) if (v.resetAt < now) emailAttempts.delete(k);
+}
+
 export function loginRateLimitReset(key: string): void {
   attempts.delete(key);
+  sweepStores();
 }

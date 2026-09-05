@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { fail, logAudit, ok, readBody, unsafeAttachmentReason } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 
 /**
@@ -62,6 +62,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (fileData.startsWith("data:") && !/^data:[\w.+-]+\/[\w.+-]+;base64,/.test(fileData)) {
       return fail("Format file (data URL) tidak valid", 400);
     }
+    // Ronde 36 (audit): tolak file berbahaya (html/svg/js/exe…) dgn pesan jelas.
+    const unsafe = unsafeAttachmentReason(fileName, fileData);
+    if (unsafe) return fail(`File ditolak — ${unsafe}`, 400);
     mimeType = body.mimeType ? String(body.mimeType) : null;
   }
 
