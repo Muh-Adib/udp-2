@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { ok, findMatchCandidates, loadMatchContacts, logAudit } from "@/lib/crm/server";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
 import { extractEmailFromText } from "@/lib/crm/utils";
-import { computeReplyChannels, inferBrandIdFromSource, senderTokens, threadKeyFor } from "@/lib/crm/thread";
+import { computeReplyChannels, inferBrandIdFromSource, senderTokens, serializeInteractionAttachments, threadKeyFor } from "@/lib/crm/thread";
 
 /**
  * Unified Lead Inbox: pesan inbound yang belum ditautkan ke opportunity
@@ -25,6 +25,7 @@ function serializeThreadMessage(i: {
   id: string; channel: string; direction: string; subject: string | null;
   content: string; senderName: string | null; recipientName: string | null;
   respondedBy: string | null; deliveryStatus: string | null; createdAt: Date; externalId: string | null;
+  attachments?: string | null;
 }) {
   return {
     id: i.id,
@@ -37,6 +38,8 @@ function serializeThreadMessage(i: {
     respondedBy: i.respondedBy,
     deliveryStatus: i.deliveryStatus,
     externalId: i.externalId,
+    // Ronde 34-b — lampiran dokumen/gambar ikut tampil di bubble chat
+    attachments: serializeInteractionAttachments(i.attachments ?? null),
     createdAt: i.createdAt.toISOString(),
   };
 }
@@ -116,6 +119,17 @@ export async function GET(req: NextRequest) {
   const brandId = sp.get("brandId");
   // Ronde 32 — view=all menyertakan pesan inbound yang sudah tertaut opportunity.
   const view = sp.get("view") === "all" ? "all" : "open";
+  // Ronde 34-b — fokus kontak lintas modul (task follow-up → chat kontak): bila contactId dikirim,
+  // lead kontak TERSEBUT ikut disertakan walau sudah dikonversi — via contactId ATAU kecocokan
+  // identitas sender (thread belum ter-link contactId) — supaya follow-up bisa lanjut dari Inbox.
+  const focusContactId = sp.get("contactId");
+  let focusContact: { id: string; fullName: string | null; email: string | null; whatsapp: string | null; phone: string | null; instagram: string | null } | null = null;
+  if (focusContactId) {
+    focusContact = await db.contact.findUnique({
+      where: { id: focusContactId },
+      select: { id: true, fullName: true, email: true, whatsapp: true, phone: true, instagram: true },
+    });
+  }
 
   // Sweep berjalan ketika modul inbox dibuka (throttle 5 menit di lib).
   let autoEscalated = 0;
@@ -131,7 +145,23 @@ export async function GET(req: NextRequest) {
     where: {
       direction: "inbound",
       // Ronde 32: view=open → hanya belum dikonversi; view=all → termasuk terkonversi.
-      ...(view === "open" ? { opportunityId: null } : {}),
+      // Ronde 34-b: mode fokus kontak HANYA di view=open — menambah lead kontak tsb
+      // (contactId / identitas sender) di atas lead belum-dikonversi lainnya.
+      // view=all tetap tanpa filter (semua percakapan; lead kontak pasti sudah termasuk).
+      ...(focusContactId && view === "open"
+        ? {
+            OR: [
+              { opportunityId: null },
+              { contactId: focusContactId },
+              ...(focusContact?.fullName ? [{ senderName: focusContact.fullName }] : []),
+              ...(focusContact?.email ? [{ senderName: { contains: focusContact.email } }] : []),
+              ...(focusContact?.whatsapp ? [{ senderName: focusContact.whatsapp }] : []),
+              ...(focusContact?.phone ? [{ senderName: focusContact.phone }] : []),
+            ],
+          }
+        : view === "open"
+          ? { opportunityId: null }
+          : {}),
       ...(channelId && channelId !== "all" ? { channel: channelId } : {}),
       ...(brandId && brandId !== "all" ? { brandId } : {}),
     },

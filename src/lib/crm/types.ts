@@ -117,6 +117,15 @@ export interface OpportunityDTO {
   updatedAt: string;
 }
 
+/** Ronde 34-b — lampiran pesan chat (dokumen/gambar) — data URL kecil (≤2 MB per file). */
+export interface InteractionAttachment {
+  name: string;
+  /** Data URL (data:...;base64,...) — bisa langsung diunduh dari bubble chat. */
+  url: string;
+  /** Ukuran file dalam byte (opsional). */
+  size?: number;
+}
+
 export interface InteractionDTO {
   id: string;
   channel: string;
@@ -138,6 +147,8 @@ export interface InteractionDTO {
   contact?: ContactRef | null;
   opportunity?: { id: string; title: string; stage: string } | null;
   brand?: Brand | null;
+  /** Ronde 34-b — lampiran pesan (JSON di DB, diparse di API). */
+  attachments?: InteractionAttachment[] | null;
 }
 
 export interface TaskDTO {
@@ -150,7 +161,8 @@ export interface TaskDTO {
   assigneeName?: string | null;
   dueDate?: string | null;
   opportunityId?: string | null;
-  opportunity?: { id: string; title: string; stage: string; brand?: Brand } | null;
+  /** Ronde 34-b — contact ikut di-include API tasks agar task follow-up bisa loncat ke chat kontak. */
+  opportunity?: { id: string; title: string; stage: string; brand?: Brand; contact?: ContactRef | null } | null;
   completedAt?: string | null;
   createdAt: string;
 }
@@ -178,6 +190,8 @@ export interface ThreadMessageDTO {
   direction: string;
   subject?: string | null;
   content: string;
+  /** Ronde 34-b — lampiran dokumen/gambar yang dikirim bersama pesan. */
+  attachments?: InteractionAttachment[] | null;
   senderName?: string | null;
   recipientName?: string | null;
   respondedBy?: string | null;

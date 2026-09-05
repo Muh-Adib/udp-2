@@ -5,8 +5,8 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
-  Fingerprint, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
-  MessagesSquare, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
+  Fingerprint, File, FileArchive, FileImage, FileText, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
+  MessagesSquare, Paperclip, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, channelsApi } from "@/lib/crm/api-client";
@@ -15,7 +15,7 @@ import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES, stageLabel } 
 import { CHANNEL_TYPES } from "@/lib/crm/channels";
 import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
 import type {
-  Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionDTO, MatchCandidateDTO, ThreadMessageDTO,
+  Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ThreadMessageDTO,
 } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +36,67 @@ import { Textarea } from "@/components/ui/textarea";
 
 /** Task 24-a — lead inbox kini InboxLeadDTO dari backend: membawa threadKey + thread percakapan. */
 type InboxLead = InboxLeadDTO;
+
+// ============ Ronde 34-b — lampiran dokumen di chat ============
+
+/** Draf lampiran di composer (data URL) sebelum dikirim. */
+interface AttachmentDraft {
+  name: string;
+  url: string;
+  size: number;
+}
+
+const MAX_ATTACH_FILES = 3;
+const MAX_ATTACH_BYTES = 2 * 1024 * 1024; // 2 MB per file — sinkron dgn validasi API
+
+function formatBytes(n: number | null | undefined): string {
+  if (!n || n <= 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentIconOf(name: string): LucideIcon {
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "heic"].includes(ext)) return FileImage;
+  if (["pdf", "doc", "docx", "txt", "csv", "ppt", "pptx", "xls", "xlsx"].includes(ext)) return FileText;
+  if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) return FileArchive;
+  return File;
+}
+
+/** Baca File browser → data URL (base64) utk dikirim sebagai lampiran. */
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Gagal membaca file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Cocokkan 9 digit terakhir nomor (awalan +62/0 sering beda antar sumber). */
+function digitsMatch(a: string, b: string): boolean {
+  const da = a.replace(/\D+/g, "");
+  const db = b.replace(/\D+/g, "");
+  return da.length >= 9 && db.length >= 9 && da.slice(-9) === db.slice(-9);
+}
+
+/**
+ * Ronde 34-b — pencocokan identitas best-effort lead↔kontak (thread belum ter-link contactId):
+ * email di sender/recipient, 9 digit nomor, handle IG, atau nama persis.
+ */
+function leadMatchesContactIdentity(lead: InboxLead, c: ContactRef): boolean {
+  for (const raw of [(lead.senderName ?? "").trim(), (lead.recipientName ?? "").trim()]) {
+    if (!raw) continue;
+    const lower = raw.toLowerCase();
+    if (c.email && lower.includes(c.email.toLowerCase())) return true;
+    if (c.whatsapp && digitsMatch(lower, c.whatsapp)) return true;
+    if (c.phone && digitsMatch(lower, c.phone)) return true;
+    if (c.instagram && lower === c.instagram.toLowerCase()) return true;
+    if (c.fullName && lower === c.fullName.toLowerCase()) return true;
+  }
+  return false;
+}
 
 /** Lead sudah direspons (respondedAt terisi dari alur Respons & Catat Fase 3). */
 function isResponded(lead: InboxLead): boolean {
@@ -794,6 +855,32 @@ function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { m
           </p>
         ) : null}
         <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
+        {message.attachments && message.attachments.length > 0 ? (
+          <ul className="mt-1.5 space-y-1" aria-label="Lampiran pesan">
+            {message.attachments.map((a, i) => {
+              const AIcon = attachmentIconOf(a.name);
+              return (
+                <li key={`${a.name}-${i}`}>
+                  <a
+                    href={a.url}
+                    download={a.name}
+                    className={cn(
+                      "flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
+                      isInbound
+                        ? "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        : "bg-white/10 text-white hover:bg-white/20"
+                    )}
+                    aria-label={`Unduh lampiran ${a.name}`}
+                  >
+                    <AIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                    <span className="shrink-0 opacity-70">{formatBytes(a.size)}</span>
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
         {isOwnReply ? (
           <span
             className={cn(
@@ -818,6 +905,7 @@ function renderLeadTemplate(body: string, vars: Record<string, string>): string 
 
 function ChatComposer({
   lead, channel, onChannelChange, body, onBodyChange, onSend, sending, respondContactName, onNeedIdentity,
+  attachments, onAttachmentsChange,
 }: {
   lead: InboxLead;
   channel: string;
@@ -830,8 +918,12 @@ function ChatComposer({
   respondContactName: string | null;
   /** Belum ada kanal balasan → buka modal Identitas. */
   onNeedIdentity: () => void;
+  /** Ronde 34-b — lampiran siap kirim (data URL) + pengubahnya (state diangkat ke modul). */
+  attachments: AttachmentDraft[];
+  onAttachmentsChange: (next: AttachmentDraft[]) => void;
 }) {
   const user = useCrmStore((s) => s.user);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const replyChannels = useMemo(() => replyChannelsOf(lead), [lead]);
   const addresses = useMemo(() => {
     const map = new Map<string, string>();
@@ -879,7 +971,32 @@ function ChatComposer({
     onBodyChange(renderLeadTemplate(tpl.body, vars));
   }
 
-  const canSend = replyChannels.length > 0 && body.trim() !== "" && !sending;
+  // Ronde 34-b — pilih file → data URL + validasi ukuran/jumlah (sinkron dgn batas API)
+  async function handleFilesPicked(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const room = MAX_ATTACH_FILES - attachments.length;
+    if (room <= 0) {
+      toast.error(`Maksimal ${MAX_ATTACH_FILES} lampiran per pesan`);
+      return;
+    }
+    const picked = Array.from(files).slice(0, room);
+    const next: AttachmentDraft[] = [];
+    for (const f of picked) {
+      if (f.size > MAX_ATTACH_BYTES) {
+        toast.error(`"${f.name}" melebihi 2 MB`, { description: "Pilih file yang lebih kecil" });
+        continue;
+      }
+      try {
+        const url = await readFileAsDataUrl(f);
+        next.push({ name: f.name, url, size: f.size });
+      } catch {
+        toast.error(`Gagal membaca "${f.name}"`);
+      }
+    }
+    if (next.length > 0) onAttachmentsChange([...attachments, ...next]);
+  }
+
+  const canSend = replyChannels.length > 0 && !sending && (body.trim() !== "" || attachments.length > 0);
 
   return (
     <div className="border-t border-zinc-200 bg-white p-3 sm:px-4">
@@ -898,6 +1015,32 @@ function ChatComposer({
             Lengkapi Identitas
           </Button>
         </div>
+      ) : null}
+      {/* Ronde 34-b — chip lampiran siap kirim */}
+      {attachments.length > 0 ? (
+        <ul className="mb-2 flex flex-wrap gap-1.5" aria-label="Lampiran yang siap dikirim">
+          {attachments.map((a, i) => {
+            const AIcon = attachmentIconOf(a.name);
+            return (
+              <li
+                key={`${a.name}-${i}`}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 py-1 pl-2 pr-1 text-xs"
+              >
+                <AIcon className="size-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+                <span className="max-w-[10rem] truncate font-medium text-zinc-700">{a.name}</span>
+                <span className="shrink-0 text-zinc-400">{formatBytes(a.size)}</span>
+                <button
+                  type="button"
+                  className="flex size-5 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-700"
+                  onClick={() => onAttachmentsChange(attachments.filter((_, j) => j !== i))}
+                  aria-label={`Hapus lampiran ${a.name}`}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
       <div className="flex items-end gap-2">
         {replyChannels.length > 0 ? (
@@ -979,6 +1122,32 @@ function ChatComposer({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* Ronde 34-b — lampirkan dokumen/gambar */}
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="size-10 shrink-0"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={replyChannels.length === 0 || sending || attachments.length >= MAX_ATTACH_FILES}
+          aria-label="Lampirkan dokumen"
+          title={`Lampirkan dokumen (maks ${MAX_ATTACH_FILES} file @2 MB)`}
+        >
+          <Paperclip className="size-4" aria-hidden="true" />
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
+          onChange={(e) => {
+            void handleFilesPicked(e.target.files);
+            e.target.value = ""; // izinkan pilih file yg sama lagi
+          }}
+        />
         <Button
           type="button"
           size="icon"
@@ -991,7 +1160,7 @@ function ChatComposer({
         </Button>
       </div>
       <p className="mt-1.5 text-[10px] leading-snug text-zinc-400">
-        Enter kirim · Shift+Enter baris baru
+        Enter kirim · Shift+Enter baris baru · Lampiran maks {MAX_ATTACH_FILES} file @2 MB
         {replyChannels.length > 0 && addresses.get(channel) ? (
           <> · Tujuan: <span className="font-medium text-zinc-500">{addresses.get(channel)}</span></>
         ) : null}
@@ -1698,6 +1867,8 @@ export default function InboxModule() {
   const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
   const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
   const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  // Ronde 34-b — cache detail kontak utk fallback pencocokan identitas (kind "contact")
+  const contactDetailRef = useRef<{ id: string; contact: ContactRef | null } | null>(null);
 
   const [leads, setLeads] = useState<InboxLead[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1726,6 +1897,8 @@ export default function InboxModule() {
   const [chatChannel, setChatChannel] = useState("");
   const [chatBody, setChatBody] = useState("");
   const [sending, setSending] = useState(false);
+  // Ronde 34-b — lampiran dokumen di composer chat (data URL, state diangkat ke modul)
+  const [chatAttachments, setChatAttachments] = useState<AttachmentDraft[]>([]);
 
   // Fase 3 — eskalasi SLA
   const [escalateTarget, setEscalateTarget] = useState<InboxLead | null>(null);
@@ -1949,6 +2122,52 @@ export default function InboxModule() {
   useEffect(() => {
     if (!pendingFocus || pendingFocus.module !== "inbox" || !leads) return;
     const id = pendingFocus.id;
+    // ===== Ronde 34-b — kind "contact": task follow-up → chat kontak =====
+    // Urutan: link contactId di list (view=all memuat semua) → pencocokan identitas sender
+    // (thread belum ter-link contactId) → longgarkan filter → feedback jelas.
+    if (pendingFocus.kind === "contact") {
+      let cancelled = false;
+      void (async () => {
+        const byNewest = (a: InboxLead, b: InboxLead) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        let target = leads.filter((l) => l.contact?.id === id).sort(byNewest)[0];
+        // Fallback identitas: thread milik kontak tapi contactId-nya belum terisi
+        if (!target && contactDetailRef.current?.id !== id) {
+          contactDetailRef.current = { id, contact: null };
+          try {
+            const res = await api.contacts();
+            if (cancelled) return;
+            contactDetailRef.current = { id, contact: res.contacts.find((x) => x.id === id) ?? null };
+          } catch {
+            // gagal muat kontak → target tetap null
+          }
+        }
+        const detailContact = contactDetailRef.current?.id === id ? contactDetailRef.current?.contact : null;
+        if (!target && detailContact) {
+          target = leads.filter((l) => leadMatchesContactIdentity(l, detailContact)).sort(byNewest)[0];
+        }
+        if (cancelled) return;
+        if (target) {
+          if (target.opportunityId && view === "open") setView("all");
+          handleSelectLead(target);
+          clearPendingFocus();
+          return;
+        }
+        // List ter-filter bisa menyembunyikan target → longgarkan sekali (effect jalan lagi)
+        if (channelFilter !== "all" || activeBrandFilter !== "all") {
+          setChannelFilter("all");
+          if (activeBrandFilter !== "all") setActiveBrandFilter("all");
+          return;
+        }
+        toast.info("Belum ada percakapan aktif dengan kontak ini di Inbox", {
+          description: "Hubungi via kanal yang tersedia, atau mulai dari tombol Kirim Pesan di task follow-up.",
+          duration: 6000,
+        });
+        clearPendingFocus();
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
     const target = leads.find((l) => l.id === id || l.opportunityId === id);
     if (target) {
       if (target.opportunityId && view === "open") setView("all");
@@ -1964,7 +2183,7 @@ export default function InboxModule() {
       });
       clearPendingFocus(); // lepas agar tidak loop
     }
-  }, [pendingFocus, leads, view, clearPendingFocus]);
+  }, [pendingFocus, leads, view, channelFilter, activeBrandFilter, clearPendingFocus, setActiveBrandFilter]);
 
   function handleSelectLead(lead: InboxLead) {
     setSelectedId(lead.id);
@@ -1974,6 +2193,7 @@ export default function InboxModule() {
     setShowIdentify(false);
     setShowConvert(false);
     setChatBody("");
+    setChatAttachments([]); // Ronde 34-b — bersihkan draf lampiran saat ganti thread
     const avail = replyChannelsOf(lead);
     setChatChannel(avail.includes(lead.channel as ReplyChannelKey) ? lead.channel : (avail[0] ?? ""));
 
@@ -2054,7 +2274,11 @@ export default function InboxModule() {
       return;
     }
     const content = chatBody.trim();
-    if (!content) { toast.error("Pesan tidak boleh kosong"); return; }
+    // Ronde 34-b — boleh kirim lampiran tanpa teks, tapi minimal salah satu ada
+    if (!content && chatAttachments.length === 0) {
+      toast.error("Tulis pesan atau lampirkan dokumen dulu");
+      return;
+    }
     setSending(true);
     try {
       const res = await api.inboxRespond({
@@ -2065,6 +2289,10 @@ export default function InboxModule() {
         contactId: linkTargetId ?? undefined,
         actorName: user.name,
         actorRole: user.role,
+        attachments:
+          chatAttachments.length > 0
+            ? chatAttachments.map(({ name, url, size }) => ({ name, url, size }))
+            : undefined,
       });
       // Sampaikan hasil pengiriman NYATA dengan jujur.
       const st = res.reply?.deliveryStatus;
@@ -2107,6 +2335,7 @@ export default function InboxModule() {
                 respondedBy: res.reply.respondedBy ?? null,
                 deliveryStatus: res.reply.deliveryStatus ?? null,
                 externalId: res.reply.externalId ?? null,
+                attachments: res.reply.attachments ?? null, // Ronde 34-b — lampiran ikut muncul di bubble
                 createdAt: res.reply.createdAt,
               },
             ],
@@ -2114,6 +2343,7 @@ export default function InboxModule() {
         };
       }));
       setChatBody("");
+      setChatAttachments([]); // Ronde 34-b — bersihkan draf lampiran setelah terkirim
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal mengirim pesan");
     } finally {
@@ -2683,6 +2913,8 @@ export default function InboxModule() {
                   sending={sending}
                   respondContactName={respondContactName}
                   onNeedIdentity={() => setShowIdentity(true)}
+                  attachments={chatAttachments}
+                  onAttachmentsChange={setChatAttachments}
                 />
               </>
             )}

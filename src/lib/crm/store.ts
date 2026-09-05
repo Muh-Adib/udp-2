@@ -29,13 +29,15 @@ interface CrmState {
   brands: Brand[];
   activeModule: ModuleKey;
   activeBrandFilter: string; // "all" | brandId
-  /** Target fokus lintas modul dari global search (ronde 26) — nonce utk guard idempoten; TIDAK dipersist. */
-  pendingFocus: { module: ModuleKey; id: string; nonce: number } | null;
+  /** Target fokus lintas modul dari global search (ronde 26) — nonce utk guard idempoten; TIDAK dipersist.
+   * Ronde 34-b: `kind` opsional — "lead" (default: id interaksi/opportunity, global search & Buka Percakapan)
+   * atau "contact" (id kontak → thread terbaru kontak tsb, pencocokan identitas fallback). */
+  pendingFocus: { module: ModuleKey; id: string; nonce: number; kind?: string } | null;
   setUser: (u: SessionUser | null) => void;
   setBrands: (b: Brand[]) => void;
   setActiveModule: (m: ModuleKey) => void;
   setActiveBrandFilter: (b: string) => void;
-  setPendingFocus: (f: { module: ModuleKey; id: string }) => void;
+  setPendingFocus: (f: { module: ModuleKey; id: string; kind?: string }) => void;
   clearPendingFocus: () => void;
 }
 

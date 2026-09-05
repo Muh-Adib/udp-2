@@ -130,6 +130,16 @@ function TaskCard({ task, onToggle, busy, onSend }: {
   }
 
   function goToChat() {
+    // Ronde 34-b — kontak-first: task kini TERTAUT KONTAK (TaskDTO.opportunity.contact),
+    // jadi chat dibuka by contactId (kind "contact") — thread ditemukan walau lead sumber
+    // sudah dikonversi/relink, plus fallback pencocokan identitas di Inbox.
+    // Fallback: opportunityId (kind default) — perilaku Ronde 34 utk task tanpa kontak.
+    const contact = task.opportunity?.contact;
+    if (contact) {
+      setPendingFocus({ module: "inbox", id: contact.id, kind: "contact" });
+      setActiveModule("inbox");
+      return;
+    }
     if (!task.opportunityId) return;
     setPendingFocus({ module: "inbox", id: task.opportunityId });
     setActiveModule("inbox");
@@ -183,6 +193,21 @@ function TaskCard({ task, onToggle, busy, onSend }: {
                 <span className="truncate">{opp.title}</span>
               </button>
             ) : null}
+            {/* Ronde 34-b — chip kontak: klik juga membuka chat dgn kontak ini di Inbox */}
+            {opp?.contact ? (
+              <button
+                type="button"
+                onClick={goToChat}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                aria-label={`Chat dengan ${opp.contact.fullName}`}
+                title="Buka chat dengan kontak ini di Lead Inbox — kirim pesan & dokumen langsung"
+              >
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[8px] font-bold text-white" aria-hidden>
+                  {initials(opp.contact.fullName)}
+                </span>
+                <span className="truncate">{opp.contact.fullName}</span>
+              </button>
+            ) : null}
             {done && task.completedAt ? (
               <span className="inline-flex items-center gap-1 text-emerald-600">
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden /> Selesai {timeAgo(task.completedAt)}
@@ -199,7 +224,9 @@ function TaskCard({ task, onToggle, busy, onSend }: {
                 onClick={goToChat}
                 aria-label={`Buka percakapan di Inbox untuk ${task.title}`}
               >
-                <MessageCircle className="h-3 w-3" aria-hidden /> Buka Percakapan
+                <MessageCircle className="h-3 w-3" aria-hidden />
+                {/* Ronde 34-b — label menyebut kontak bila ada: jelas chat itu DENGAN SIAPA */}
+                {opp?.contact ? `Chat ${opp.contact.fullName.split(" ")[0]}` : "Buka Percakapan"}
               </Button>
               <Button
                 size="sm"

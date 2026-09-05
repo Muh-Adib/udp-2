@@ -2,8 +2,36 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
-import { computeReplyChannels, REPLY_CHANNELS, reachableAddress } from "@/lib/crm/thread";
+import { computeReplyChannels, REPLY_CHANNELS, reachableAddress, serializeInteractionAttachments } from "@/lib/crm/thread";
 import { resolveActor } from "@/lib/crm/auth";
+import type { InteractionAttachment } from "@/lib/crm/types";
+
+/** Ronde 34-b — batas lampiran per pesan chat. */
+const MAX_ATTACHMENTS = 3;
+const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2 MB per file (data URL)
+const DATA_URL_RE = /^data:[\w.+-]+\/[\w.+-]+;base64,/;
+
+/** Ronde 34-b — parse & validasi lampiran dari body (data URL saja, ada batas ukuran/jumlah). */
+function parseAttachments(input: unknown): { list: InteractionAttachment[]; error: string | null } {
+  if (input == null) return { list: [], error: null };
+  if (!Array.isArray(input)) return { list: [], error: "Format lampiran tidak valid" };
+  const list: InteractionAttachment[] = [];
+  for (const raw of input.slice(0, MAX_ATTACHMENTS)) {
+    const item = raw as { name?: unknown; url?: unknown };
+    const name = String(item?.name ?? "").trim().slice(0, 200);
+    const url = String(item?.url ?? "");
+    if (!name || !url) continue;
+    if (!DATA_URL_RE.test(url)) return { list: [], error: `Lampiran "${name}" harus berupa file (data URL)` };
+    const base64 = url.slice(url.indexOf(",") + 1);
+    const bytes = Math.max(0, Math.floor((base64.length * 3) / 4) - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0));
+    if (bytes > MAX_ATTACHMENT_BYTES) {
+      return { list: [], error: `Lampiran "${name}" melebihi 2 MB` };
+    }
+    list.push({ name, url, size: bytes });
+  }
+  if (input.length > MAX_ATTACHMENTS) return { list, error: `Maksimal ${MAX_ATTACHMENTS} lampiran per pesan` };
+  return { list, error: null };
+}
 
 /**
  * Fase 3 — Respons & catat lead inbox:
@@ -23,7 +51,11 @@ export async function POST(req: NextRequest) {
   const interactionId = body.interactionId ? String(body.interactionId) : "";
   const content = String(body.content ?? "").trim();
   if (!interactionId) return fail("Lead tidak ditemukan", 404);
-  if (!content) return fail("Isi respons wajib diisi");
+  // Ronde 34-b — lampiran dokumen/gambar (maks 3 @2MB, data URL)
+  const att = parseAttachments(body.attachments);
+  if (att.error) return fail(att.error);
+  // Ronde 34-b — pesan boleh HANYA lampiran (tanpa teks)
+  if (!content && att.list.length === 0) return fail("Isi respons wajib diisi");
 
   const lead = await db.interaction.findUnique({
     where: { id: interactionId },
@@ -76,6 +108,10 @@ export async function POST(req: NextRequest) {
     });
     deliveryStatus = delivery.status;
     deliveryNote = delivery.note;
+    // Ronde 34-b — jujur: lampiran tersimpan di CRM, belum ikut terkirim via SMTP
+    if (att.list.length > 0) {
+      deliveryNote = `${deliveryNote ?? ""}${deliveryNote ? " · " : ""}Lampiran tersimpan di CRM (belum ikut terkirim via SMTP)`;
+    }
   }
 
   const reply = await db.interaction.create({
@@ -87,6 +123,7 @@ export async function POST(req: NextRequest) {
       recipientName: replyAddress ?? lead.contact?.fullName ?? lead.senderName,
       subject,
       content,
+      attachments: att.list.length > 0 ? JSON.stringify(att.list) : null, // Ronde 34-b
       deliveryStatus,
       deliveryNote,
       // Ronde 32: balasan pada thread terkonversi ikut tertaut ke opportunity —
@@ -120,5 +157,6 @@ export async function POST(req: NextRequest) {
     req,
   });
 
-  return ok({ reply, lead: updatedLead }, 201);
+  // Ronde 34-b — reply dikembalikan dgn attachments terparse (bukan JSON string mentah)
+  return ok({ reply: { ...reply, attachments: serializeInteractionAttachments(reply.attachments) }, lead: updatedLead }, 201);
 }

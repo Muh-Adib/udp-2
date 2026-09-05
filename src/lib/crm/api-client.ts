@@ -180,12 +180,15 @@ export const api = {
 
   // Inbox
   // Ronde 32 — view: "open" (default, belum dikonversi) | "all" (termasuk terkonversi)
-  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all" }) => {
+  // Ronde 34-b — contactId: mode fokus kontak (task follow-up → chat kontak) — server ikut menyertakan
+  // lead kontak tsb (via contactId ATAU kecocokan identitas sender) walau sudah dikonversi.
+  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all"; contactId?: string }) => {
     const sp = new URLSearchParams();
     if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     if (params?.sweep) sp.set("sweep", "1");
     if (params?.view === "all") sp.set("view", "all");
+    if (params?.contactId) sp.set("contactId", params.contactId);
     return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
@@ -194,8 +197,9 @@ export const api = {
   // (aksi yang hilang di modal Identifikasi: dulu satu-satunya jalan adalah konversi).
   linkLead: (payload: { interactionId: string; contactId: string }) =>
     request<{ contactId: string; contactName: string | null; unifiedCount: number }>("/api/inbox/link", { method: "POST", body: JSON.stringify(payload) }),
-  /** Respons & catat lead inbox (Fase 3): outbound reply + tandai respondedAt. */
-  inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string }) =>
+  /** Respons & catat lead inbox (Fase 3): outbound reply + tandai respondedAt.
+   *  Ronde 34-b — lampiran dokumen (maks 3 file @2MB, data URL) ikut dikirim bersama respons. */
+  inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string; attachments?: { name: string; url: string; size?: number }[] }) =>
     request<{ reply: InteractionDTO; lead: InteractionDTO & { slaHours?: number } }>("/api/inbox/respond", { method: "POST", body: JSON.stringify(payload) }),
 
   // Interactions

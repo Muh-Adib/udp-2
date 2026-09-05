@@ -12,6 +12,18 @@
  */
 
 import { extractEmailFromText, isSocialHandle } from "@/lib/crm/utils";
+import type { InteractionAttachment } from "@/lib/crm/types";
+
+/** Ronde 34-b — kolom attachments (JSON string) di Interaction → array terstruktur utk DTO. */
+export function serializeInteractionAttachments(raw: string | null): InteractionAttachment[] | null {
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) && arr.length > 0 ? (arr as InteractionAttachment[]) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function digitsOnly(v: string): string {
   return v.replace(/\D+/g, "");
