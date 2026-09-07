@@ -1547,3 +1547,26 @@ Stage Summary:
 - Keluhan user terjawab: yang "hilang" = tombol akun demo Andi Saputra (terlewat sejak desain awal, bukan regresi perubahan terbaru); kini 7 akun demo tampil lengkap di layar login
 - Semua 7 akun demo (PIN 1234) login normal; tidak ada data/perubahan lain yang hilang dari history git
 - Catatan: jika user maksud nama persona demo harus DIGANTI (bukan sekadar tombol hilang), itu keputusan konten — minta nama yang diinginkan, perubahan seed+login mudah diterapkan
+
+---
+Task ID: 38-main
+Agent: Z.ai Code (main)
+Task: Alur pembuatan project + detail view (permintaan user "flow untuk pembuatan project ntar di per detail")
+
+Work Log:
+- Explore agent memetakan alur existing: auto-create on Won (handleWonTransition: project + milestone dari template statis + invoice DP), manual create (POST /api/projects TANPA milestone), detail sheet (ProductionFlow 5 tahap, timeline milestone, CR, deliverable, form update status+progress saja)
+- Gap teridentifikasi: toast Won tanpa navigasi; fokus pendingFocus diam-diam dibuang bila filter aktif; project manual tanpa milestone (alur produksi kosong); kode Won tanpa retry unik (potensi 500); API PATCH dukung pmName/dueDate/budgetInternal tapi UI tak sediakan
+- FIX server.ts: retry kode unik handleWonTransition (pola identik POST manual)
+- FIX /api/projects POST: milestone otomatis dari workflowFor(serviceCategory) dalam $transaction atomic + include paritas GET (brand/company/milestones/opportunity/changeRequests)
+- FIX projects-module: focus effect reset filter bila target tak ketemu di daftar terfiltered; submitNewProject → detail langsung terbuka + toast info jumlah milestone; openDetail prefill editPm/editDue/editBudget
+- FIX pipeline-module + opportunity-detail: toast Won dengan action "Buka Project" → setPendingFocus({module:"projects",id}) + setActiveModule; api-client type createdProject +id
+- FITUR detail: form Update Produksi tambah field Project Manager / Deadline (date) / Budget Internal (Rp) — PATCH existing dipakai, validasi budget client-side
+- QA browser (Sari/direktur): detail form prefill benar (Budi Hartono/2026-09-18/198400000); edit budget 200jt → API verify → revert ✓; buat manual "QA Alur Ronde 38" (Erfo/Global EdTech/Website) → toast "6 milestone dari template workflow" + detail auto-open ERF-2026-005 + 6 milestone (Discovery→Launch) + Alur Produksi terisi ✓; Won "Dokumentasi pabrik + drone" → toast + tombol Buka Project ✓ (pelajaran: sonner timeout 4s, klik harus cepat); Won "Video profil internasional EN" → klik aksi dalam 1.5s → navigasi Projects + detail UNI-2026-007 terbuka otomatis ✓
+- Cleanup: skrip temp hapus 3 project QA + milestone + invoice DP + revert 2 opp ke negotiation (COUNTS kembali: projects 4, wonOpps 3); skrip terhapus
+- lint 0, tsc 0, dev.log bersih; commit 6931beb push origin/main; repo sinkron
+
+Stage Summary:
+- Alur pembuatan project kini tersambung penuh: Won → toast beraksi → detail; manual → milestone otomatis → detail; fokus lintas modul tahan filter
+- Detail project kini bisa edit PM/deadline/budget (bukan cuma status+progress)
+- Tidak ada skema DB baru; semua perubahan backward-compatible
+- Backlog (dari explore, tidak diubah): milestone tak bisa dihapus/reorder; invoice fetch per company + filter klien (belum projectId param); estimasi cost breakdown belum dibawa ke budgetInternal; notif center tak loncat ke project spesifik

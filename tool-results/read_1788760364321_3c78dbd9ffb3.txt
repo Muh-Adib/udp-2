@@ -1,0 +1,704 @@
+     1→generator client {
+     2→  provider = "prisma-client-js"
+     3→}
+     4→
+     5→datasource db {
+     6→  provider = "sqlite"
+     7→  url      = env("DATABASE_URL")
+     8→}
+     9→
+    10→// ============ ORGANIZATION STRUCTURE ============
+    11→
+    12→model Brand {
+    13→  id              String   @id @default(cuid())
+    14→  name            String
+    15→  slug            String   @unique
+    16→  color           String   @default("#f97316") // hex accent
+    17→  description     String?
+    18→  website         String?
+    19→  primaryCurrency String   @default("IDR")
+    20→  invoicePrefix   String   @default("INV")
+    21→  quotePrefix     String   @default("QUO")
+    22→  slaHours        Int      @default(4)
+    23→  portalDomain    String?
+    24→  active          Boolean  @default(true)
+    25→  createdAt       DateTime @default(now())
+    26→  updatedAt       DateTime @updatedAt
+    27→
+    28→  // ==== Ronde 29-b — Identitas brand dari data asli situs ====
+    29→  logoUrl          String? // path aset publik ("/brands/logo-x.png") atau data URL upload
+    30→  tagline          String? // tagline resmi (mis. "Jagonya Buat Animasi")
+    31→  address          String? // alamat lengkap kantor
+    32→  city             String? // kota utama operasional
+    33→  phone            String? // telepon utama
+    34→  whatsappNumber   String? // nomor WA bisnis utama brand
+    35→  instagramHandle  String? // akun IG resmi (mis. @unimasi_)
+    36→  threadsHandle    String? // akun Threads resmi
+    37→  email            String? // email bisnis utama brand
+    38→  letterheadHeader String? // gambar kop surat atas (data URL ≤1.6MB)
+    39→  letterheadFooter String? // gambar kaki surat bawah (data URL)
+    40→  letterTemplate   String? // JSON style template surat {fontFamily, accentColor, headerStyle, showLogo, footerNote}
+    41→
+    42→  opportunities     Opportunity[]
+    43→  projects          Project[]
+    44→  invoices          Invoice[]
+    45→  interactions      Interaction[]
+    46→  quotations        Quotation[]
+    47→  briefs            ClientBrief[]
+    48→  channels          ChannelConfig[]
+    49→  serviceCategories ServiceCategory[]
+    50→  services          Service[]
+    51→}
+    52→
+    53→model User {
+    54→  id          String   @id @default(cuid())
+    55→  name        String
+    56→  email       String   @unique
+    57→  role        String   @default("marketing") // super_admin, director, marketing, finance, production, client
+    58→  pin         String   @default("1234")
+    59→  avatarColor String   @default("#f97316")
+    60→  phone       String?
+    61→  active      Boolean  @default(true)
+    62→  brandAccess String   @default("all") // "all" or comma-separated brand slugs
+    63→  createdAt   DateTime @default(now())
+    64→  updatedAt   DateTime @updatedAt
+    65→}
+    66→
+    67→// ============ IDENTITY (company-centric & contact-centric) ============
+    68→
+    69→model Company {
+    70→  id              String    @id @default(cuid())
+    71→  name            String
+    72→  industry        String?
+    73→  website         String?
+    74→  websiteDomain   String? // normalized for matching
+    75→  country         String?
+    76→  city            String?
+    77→  address         String?
+    78→  size            String? // startup, sme, enterprise, government
+    79→  taxId           String?
+    80→  defaultCurrency String    @default("IDR")
+    81→  lifetimeValue   Float     @default(0)
+    82→  tags            String    @default("[]") // JSON array
+    83→  notes           String?
+    84→  deletedAt       DateTime?
+    85→  createdAt       DateTime  @default(now())
+    86→  updatedAt       DateTime  @updatedAt
+    87→
+    88→  contacts      Contact[]
+    89→  opportunities Opportunity[]
+    90→  projects      Project[]
+    91→  invoices      Invoice[]
+    92→  quotations    Quotation[]
+    93→  portalTokens  ClientPortalToken[]
+    94→  documents     ClientDocument[]
+    95→}
+    96→
+    97→model Contact {
+    98→  id               String    @id @default(cuid())
+    99→  firstName        String
+   100→  lastName         String?
+   101→  fullName         String // computed & stored for search
+   102→  position         String?
+   103→  email            String? // normalized lowercase
+   104→  emailAlt         String?
+   105→  whatsapp         String? // normalized E.164 digits
+   106→  phone            String?
+   107→  country          String?
+   108→  city             String?
+   109→  timezone         String?
+   110→  language         String    @default("id")
+   111→  preferredChannel String    @default("whatsapp") // whatsapp, email, phone, instagram
+   112→  socialProfile    String? // handle/URL sosial lain (bebas)
+   113→  instagram        String? // handle IG (mis. @rani.creativehouse) — lead kerap datang dari IG
+   114→  facebook         String?
+   115→  tiktok           String?
+   116→  linkedin         String?
+   117→  consentStatus    String    @default("granted") // granted, declined, pending
+   118→  tags             String    @default("[]") // JSON array
+   119→  notes            String?
+   120→  companyId        String?
+   121→  company          Company?  @relation(fields: [companyId], references: [id])
+   122→  deletedAt        DateTime?
+   123→  createdAt        DateTime  @default(now())
+   124→  updatedAt        DateTime  @updatedAt
+   125→
+   126→  opportunities Opportunity[]
+   127→  interactions  Interaction[]
+   128→}
+   129→
+   130→// ============ SALES ============
+   131→
+   132→model Opportunity {
+   133→  id                String    @id @default(cuid())
+   134→  title             String
+   135→  brandId           String
+   136→  brand             Brand     @relation(fields: [brandId], references: [id])
+   137→  companyId         String?
+   138→  company           Company?  @relation(fields: [companyId], references: [id])
+   139→  contactId         String
+   140→  contact           Contact   @relation(fields: [contactId], references: [id])
+   141→  serviceCategory   String? // animation, website, video, immersive...
+   142→  serviceName       String?
+   143→  leadSource        String? // instagram, whatsapp, email, website, referral, event
+   144→  campaign          String?
+   145→  brief             String?
+   146→  requirements      String?
+   147→  targetAudience    String?
+   148→  deliverables      String?
+   149→  targetDeadline    DateTime?
+   150→  estimatedValue    Float?
+   151→  currency          String    @default("IDR")
+   152→  probability       Int       @default(20)
+   153→  expectedCloseDate DateTime?
+   154→  ownerName         String?
+   155→  priority          String    @default("medium") // low, medium, high, urgent
+   156→  stage             String    @default("new") // new, contact_attempted, connected, qualified, discovery, estimation, proposal_sent, negotiation, verbal_agreement, won, lost, nurture
+   157→  temperature       String    @default("warm") // hot, warm, cold
+   158→  competitor        String?
+   159→  nextAction        String?
+   160→  nextActionDate    DateTime?
+   161→  lostReason        String?
+   162→  lostNotes         String?
+   163→  lastOfferValue    Float?
+   164→  reactivation      Boolean   @default(false)
+   165→  followUpDate      DateTime?
+   166→  nurtureSegment    String? // reoffer_30, reoffer_90, budget_season, cross_sell, smaller_package, alternative_service
+   167→  crossSellOfId     String?
+   168→  createdAt         DateTime  @default(now())
+   169→  updatedAt         DateTime  @updatedAt
+   170→  deletedAt         DateTime?
+   171→
+   172→  interactions Interaction[]
+   173→  tasks        Task[]
+   174→  notes        Note[]
+   175→  projects     Project[]
+   176→  invoices     Invoice[]
+   177→  estimation   Estimation?
+   178→  quotations   Quotation[]
+   179→  approvals    ApprovalRequest[]
+   180→  clientBrief  ClientBrief?
+   181→}
+   182→
+   183→model Interaction {
+   184→  id             String       @id @default(cuid())
+   185→  channel        String // whatsapp, email, instagram, website, phone, meeting, portal
+   186→  direction      String // inbound, outbound
+   187→  brandId        String?
+   188→  externalId     String?
+   189→  senderName     String?
+   190→  recipientName  String?
+   191→  subject        String?
+   192→  content        String
+   193→  attachments    String? // JSON array
+   194→  respondedBy    String?
+   195→  respondedAt    DateTime?
+   196→  deliveryStatus String? // delivered, read, failed, sent
+   197→  deliveryNote   String? // catatan pengiriman nyata (error SMTP, dsb)
+   198→  opportunityId  String?
+   199→  opportunity    Opportunity? @relation(fields: [opportunityId], references: [id])
+   200→  contactId      String?
+   201→  contact        Contact?     @relation(fields: [contactId], references: [id])
+   202→  companyId      String?
+   203→  brand          Brand?       @relation(fields: [brandId], references: [id])
+   204→  createdAt      DateTime     @default(now())
+   205→
+   206→  // Ronde 36 (audit): index utk filter inbox/timeline yang tumbuh paling cepat
+   207→  @@index([contactId])
+   208→  @@index([opportunityId])
+   209→  @@index([externalId])
+   210→  @@index([createdAt])
+   211→}
+   212→
+   213→model Task {
+   214→  id            String       @id @default(cuid())
+   215→  title         String
+   216→  description   String?
+   217→  type          String       @default("follow_up") // follow_up, meeting, internal, admin
+   218→  priority      String       @default("medium") // low, medium, high
+   219→  status        String       @default("open") // open, done, cancelled
+   220→  assigneeName  String?
+   221→  dueDate       DateTime?
+   222→  opportunityId String?
+   223→  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+   224→  completedAt   DateTime?
+   225→  createdAt     DateTime     @default(now())
+   226→  updatedAt     DateTime     @updatedAt
+   227→
+   228→  // Ronde 36 (audit): index utk daftar follow-up & timeline opportunity
+   229→  @@index([opportunityId])
+   230→  @@index([status, dueDate])
+   231→}
+   232→
+   233→model Note {
+   234→  id            String      @id @default(cuid())
+   235→  body          String
+   236→  authorName    String
+   237→  type          String      @default("internal") // internal, director_feedback
+   238→  opportunityId String
+   239→  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+   240→  createdAt     DateTime    @default(now())
+   241→}
+   242→
+   243→// ============ FINANCE ============
+   244→
+   245→model Invoice {
+   246→  id              String         @id @default(cuid())
+   247→  number          String         @unique
+   248→  brandId         String
+   249→  brand           Brand          @relation(fields: [brandId], references: [id])
+   250→  companyId       String
+   251→  company         Company        @relation(fields: [companyId], references: [id])
+   252→  projectId       String?
+   253→  project         Project?       @relation(fields: [projectId], references: [id])
+   254→  changeRequestId String?        @unique
+   255→  changeRequest   ChangeRequest? @relation(fields: [changeRequestId], references: [id])
+   256→  opportunityId   String?
+   257→  opportunity     Opportunity?   @relation(fields: [opportunityId], references: [id])
+   258→  description     String?
+   259→  amount          Float          @default(0)
+   260→  taxRate         Float          @default(11) // PPN %
+   261→  taxAmount       Float          @default(0)
+   262→  total           Float          @default(0)
+   263→  currency        String         @default("IDR")
+   264→  status          String         @default("draft") // draft, sent, partial, paid, overdue, cancelled
+   265→  issueDate       DateTime       @default(now())
+   266→  dueDate         DateTime?
+   267→  notes           String?
+   268→  createdAt       DateTime       @default(now())
+   269→  updatedAt       DateTime       @updatedAt
+   270→
+   271→  payments Payment[]
+   272→
+   273→  // Ronde 36 (audit): index utk aging & tagihan per project
+   274→  @@index([projectId])
+   275→  @@index([dueDate])
+   276→  @@index([status])
+   277→}
+   278→
+   279→model Payment {
+   280→  id        String   @id @default(cuid())
+   281→  invoiceId String
+   282→  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+   283→  amount    Float
+   284→  method    String   @default("transfer") // transfer, cash, qris, credit_card
+   285→  reference String?
+   286→  paidAt    DateTime @default(now())
+   287→  createdAt DateTime @default(now())
+   288→}
+   289→
+   290→// ============ PRODUCTION ============
+   291→
+   292→model Project {
+   293→  id              String       @id @default(cuid())
+   294→  code            String       @unique
+   295→  name            String
+   296→  brandId         String
+   297→  brand           Brand        @relation(fields: [brandId], references: [id])
+   298→  companyId       String
+   299→  company         Company      @relation(fields: [companyId], references: [id])
+   300→  opportunityId   String?      @unique
+   301→  opportunity     Opportunity? @relation(fields: [opportunityId], references: [id])
+   302→  serviceCategory String?
+   303→  status          String       @default("planning") // planning, in_progress, review, completed, cancelled
+   304→  progress        Int          @default(0)
+   305→  pmName          String?
+   306→  startDate       DateTime?
+   307→  dueDate         DateTime?
+   308→  budgetInternal  Float        @default(0)
+   309→  contractValue   Float        @default(0)
+   310→  createdAt       DateTime     @default(now())
+   311→  updatedAt       DateTime     @updatedAt
+   312→
+   313→  milestones    Milestone[]
+   314→  invoices      Invoice[]
+   315→  changeRequests ChangeRequest[]
+   316→  deliverables  ProjectDeliverable[]
+   317→}
+   318→
+   319→/**
+   320→ * Deliverable & file/tautan untuk direview — alur "kirim file/tautan ke sistem untuk ditinjau".
+   321→ * kind: link (url eksternal, contoh Google Drive/Figma) atau file (upload kecil ≤1.2MB, base64 data URL).
+   322→ * status: pending (menunggu review) → approved (disetujui) / revision (minta revisi + komentar).
+   323→ */
+   324→model ProjectDeliverable {
+   325→  id            String   @id @default(cuid())
+   326→  projectId     String
+   327→  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+   328→  milestoneId   String? // Ronde 35 — opsional: deliverable ini untuk milestone mana (timeline produksi)
+   329→  milestone     Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+   330→  name          String
+   331→  kind          String   @default("link") // link | file
+   332→  url           String? // untuk kind=link
+   333→  fileName      String? // untuk kind=file
+   334→  fileData      String? // data URL base64 (upload kecil)
+   335→  mimeType      String?
+   336→  sizeBytes     Int?
+   337→  note          String?
+   338→  status        String   @default("pending") // pending, approved, revision
+   339→  reviewComment String?
+   340→  reviewedBy    String?
+   341→  reviewedRole  String? // production, director, super_admin, client (siapa yang mereview)
+   342→  reviewedAt    DateTime?
+   343→  createdBy     String?
+   344→  createdAt     DateTime @default(now())
+   345→}
+   346→
+   347→model Milestone {
+   348→  id          String    @id @default(cuid())
+   349→  projectId   String
+   350→  project     Project   @relation(fields: [projectId], references: [id])
+   351→  name        String
+   352→  order       Int       @default(0)
+   353→  status      String    @default("pending") // pending, in_progress, done
+   354→  dueDate     DateTime?
+   355→  achievement String? // Ronde 35 — apa yang dicapai/diserahkan pada milestone ini
+   356→  createdAt   DateTime  @default(now())
+   357→
+   358→  deliverables ProjectDeliverable[]
+   359→}
+   360→
+   361→model ChangeRequest {
+   362→  id             String    @id @default(cuid())
+   363→  number         String    @unique // CR-2026-0001
+   364→  projectId      String
+   365→  project        Project   @relation(fields: [projectId], references: [id])
+   366→  title          String
+   367→  description    String
+   368→  additionalCost Float     @default(0) // tambahan nilai kontrak (net, sebelum PPN)
+   369→  additionalDays Int       @default(0) // perpanjangan deadline (hari kalender)
+   370→  status         String    @default("pending") // pending, approved, rejected, cancelled
+   371→  requestedBy    String
+   372→  decidedBy      String?
+   373→  decidedAt      DateTime?
+   374→  decisionNote   String?
+   375→  invoiceId      String? // invoice tambahan yang dibuat otomatis saat approved
+   376→  createdAt      DateTime  @default(now())
+   377→  updatedAt      DateTime  @updatedAt
+   378→  invoice        Invoice?
+   379→}
+   380→
+   381→// ============ GOVERNANCE ============
+   382→
+   383→model AuditLog {
+   384→  id          String   @id @default(cuid())
+   385→  actorName   String
+   386→  actorRole   String?
+   387→  action      String // create, update, delete, stage_change, merge, login, convert
+   388→  entity      String // opportunity, contact, company, task, invoice, project, interaction
+   389→  entityId    String
+   390→  entityLabel String?
+   391→  field       String?
+   392→  oldValue    String?
+   393→  newValue    String?
+   394→  metadata    String?
+   395→  ip          String?
+   396→  userAgent   String?
+   397→  createdAt   DateTime @default(now())
+   398→
+   399→  // Ronde 36 (audit): index utk urutan audit terbaru
+   400→  @@index([createdAt])
+   401→  @@index([entity, entityId])
+   402→}
+   403→
+   404→model FollowUpTemplate {
+   405→  id        String   @id @default(cuid())
+   406→  name      String
+   407→  brandId   String?
+   408→  channel   String   @default("whatsapp")
+   409→  language  String   @default("id")
+   410→  stage     String?
+   411→  delayDays Int      @default(1)
+   412→  body      String
+   413→  version   Int      @default(1)
+   414→  approved  Boolean  @default(false)
+   415→  createdAt DateTime @default(now())
+   416→  updatedAt DateTime @updatedAt
+   417→}
+   418→
+   419→// ============ FASE 2: KOMERSIAL ============
+   420→
+   421→model Estimation {
+   422→  id               String      @id @default(cuid())
+   423→  opportunityId    String      @unique
+   424→  opportunity      Opportunity @relation(fields: [opportunityId], references: [id])
+   425→  // Cost breakdown kategori (IDR)
+   426→  laborInternal    Float       @default(0)
+   427→  vendorFreelance  Float       @default(0)
+   428→  equipment        Float       @default(0)
+   429→  transport        Float       @default(0)
+   430→  accommodation    Float       @default(0)
+   431→  talent           Float       @default(0)
+   432→  locationFee      Float       @default(0)
+   433→  softwareLicense  Float       @default(0)
+   434→  hostingDomain    Float       @default(0)
+   435→  contingencyPct   Float       @default(5)
+   436→  managementFeePct Float       @default(5)
+   437→  discountPct      Float       @default(0)
+   438→  taxPct           Float       @default(11)
+   439→  targetMarginPct  Float       @default(30)
+   440→  // Hasil kalkulasi (disimpan saat save)
+   441→  totalCost        Float       @default(0)
+   442→  contingency      Float       @default(0)
+   443→  managementFee    Float       @default(0)
+   444→  revenue          Float       @default(0)
+   445→  discountAmount   Float       @default(0)
+   446→  netRevenue       Float       @default(0)
+   447→  taxAmount        Float       @default(0)
+   448→  grandTotal       Float       @default(0)
+   449→  margin           Float       @default(0)
+   450→  marginPct        Float       @default(0)
+   451→  notes            String?
+   452→  status           String      @default("draft") // draft, pending_approval, approved, rejected
+   453→  createdBy        String?
+   454→  approvedBy       String?
+   455→  approvedAt       DateTime?
+   456→  createdAt        DateTime    @default(now())
+   457→  updatedAt        DateTime    @updatedAt
+   458→}
+   459→
+   460→model Quotation {
+   461→  id             String      @id @default(cuid())
+   462→  number         String      @unique
+   463→  brandId        String
+   464→  brand          Brand       @relation(fields: [brandId], references: [id])
+   465→  opportunityId  String
+   466→  opportunity    Opportunity @relation(fields: [opportunityId], references: [id])
+   467→  companyId      String
+   468→  company        Company     @relation(fields: [companyId], references: [id])
+   469→  items          String      @default("[]") // JSON [{description, qty, unitPrice, subtotal}]
+   470→  subtotal       Float       @default(0)
+   471→  discountPct    Float       @default(0)
+   472→  discountAmount Float       @default(0)
+   473→  taxPct         Float       @default(11)
+   474→  taxAmount      Float       @default(0)
+   475→  total          Float       @default(0)
+   476→  currency       String      @default("IDR")
+   477→  status         String      @default("draft") // draft, sent, accepted, rejected, expired
+   478→  validUntil     DateTime?
+   479→  notes          String?
+   480→  sentAt         DateTime?
+   481→  respondedAt    DateTime?
+   482→  createdAt      DateTime    @default(now())
+   483→  updatedAt      DateTime    @updatedAt
+   484→}
+   485→
+   486→model ApprovalRequest {
+   487→  id            String       @id @default(cuid())
+   488→  entityType    String // estimation, discount, budget
+   489→  entityId      String
+   490→  entityLabel   String?
+   491→  opportunityId String?
+   492→  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+   493→  requestedBy   String
+   494→  amount        Float?
+   495→  discountPct   Float?
+   496→  note          String?
+   497→  status        String       @default("pending") // pending, approved, rejected
+   498→  decidedBy     String?
+   499→  decidedAt     DateTime?
+   500→  decisionNote  String?
+   501→  createdAt     DateTime     @default(now())
+   502→}
+   503→
+   504→// ============ NOTIFIKASI (Fase 3) ============
+   505→// State baca/dismiss per pengguna; isi notifikasi dikomputasi dari data
+   506→// operasional (SLA, approval, CR, task, deadline, invoice) di /api/notifications.
+   507→model NotificationState {
+   508→  id          String    @id @default(cuid())
+   509→  userKey     String // email user (persona demo) — kunci stabilitas per pengguna
+   510→  notifKey    String // kunci notifikasi komputasi, mis. "sla:<id>", "cr:<id>"
+   511→  readAt      DateTime?
+   512→  dismissedAt DateTime?
+   513→  createdAt   DateTime  @default(now())
+   514→  updatedAt   DateTime  @updatedAt
+   515→
+   516→  @@unique([userKey, notifKey])
+   517→  @@index([userKey])
+   518→}
+   519→
+   520→// ============ PREFERENSI PENGGUNA (Fase 3 — sinkron antar perangkat) ============
+   521→// KV store preferensi per pengguna; value berupa JSON string.
+   522→// Sumber kebenaran lintas perangkat (localStorage hanya cache instan/offline).
+   523→model UserPreference {
+   524→  id        String   @id @default(cuid())
+   525→  userKey   String // email user (persona demo) — kunci stabilitas per pengguna
+   526→  key       String // kunci preferensi, mis. "notif-prefs"
+   527→  value     String // JSON string
+   528→  createdAt DateTime @default(now())
+   529→  updatedAt DateTime @updatedAt
+   530→
+   531→  @@unique([userKey, key])
+   532→  @@index([userKey])
+   533→}
+   534→
+   535→// ============ FASE 2: BRIEF BUILDER ============
+   536→// Brief terstruktur per opportunity — tahap pertama alur komersial
+   537→// (Brief → Estimasi → Quotation). Menggantikan brief teks bebas dgn
+   538→// struktur: layanan, tujuan, audiens, deliverables, timeline, budget,
+   539→// referensi + alur status draft → in_review → approved / revision.
+   540→model ClientBrief {
+   541→  id              String      @id @default(cuid())
+   542→  code            String      @unique // BRF-2026-0001
+   543→  opportunityId   String      @unique
+   544→  opportunity     Opportunity @relation(fields: [opportunityId], references: [id])
+   545→  brandId         String
+   546→  brand           Brand       @relation(fields: [brandId], references: [id])
+   547→  title           String
+   548→  serviceTypes    String      @default("[]") // JSON array string (katalog layanan brand)
+   549→  objectives      String?
+   550→  targetAudience  String?
+   551→  keyMessages     String?
+   552→  deliverables    String      @default("[]") // JSON array [{name, qty, notes}]
+   553→  timelineStart   DateTime?
+   554→  timelineEnd     DateTime?
+   555→  budgetMin       Float?
+   556→  budgetMax       Float?
+   557→  currency        String      @default("IDR")
+   558→  references      String      @default("[]") // JSON array [{label, url}]
+   559→  attachmentsNote String?
+   560→  status          String      @default("draft") // draft, in_review, approved, revision
+   561→  revisionNote    String?
+   562→  submittedAt     DateTime?
+   563→  approvedAt      DateTime?
+   564→  approvedBy      String?
+   565→  createdBy       String?
+   566→  createdAt       DateTime    @default(now())
+   567→  updatedAt       DateTime    @updatedAt
+   568→}
+   569→
+   570→// ============ FASE 3: PORTAL KLIEN — SECURE LINK TOKEN ============
+   571→// Akses klien TANPA login: staf membuat token rahasia per perusahaan klien,
+   572→// klien membuka URL /?portal=<token>. Token bisa dicabut kapan saja.
+   573→model ClientPortalToken {
+   574→  id             String    @id @default(cuid())
+   575→  token          String    @unique // 48 hex acak — rahasia, hanya dibagikan ke klien
+   576→  companyId      String
+   577→  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+   578→  label          String?   // mis. "Hendra — PT Nusantara"
+   579→  active         Boolean   @default(true) // false = dicabut
+   580→  createdByName  String?
+   581→  lastAccessedAt DateTime?
+   582→  accessCount    Int       @default(0)
+   583→  expiresAt      DateTime?
+   584→  createdAt      DateTime  @default(now())
+   585→  updatedAt      DateTime  @updatedAt
+   586→
+   587→  @@index([companyId])
+   588→}
+   589→
+   590→// Isi secure link klien: MoU (file/tautan), catatan rapat (teks), dokumen lain.
+   591→// File kecil ≤1.2MB disimpan base64 (praktis utk demo; object storage menyusul).
+   592→model ClientDocument {
+   593→  id            String    @id @default(cuid())
+   594→  companyId     String
+   595→  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+   596→  kind          String    @default("document") // mou | meeting_note | document
+   597→  title         String
+   598→  content       String?   // isi teks (catatan rapat / deskripsi dokumen)
+   599→  url           String?   // tautan eksternal (mis. Google Drive)
+   600→  fileName      String?
+   601→  fileData      String?   // data URL base64 (upload kecil)
+   602→  mimeType      String?
+   603→  sizeBytes     Int?
+   604→  meetingAt     DateTime? // utk kind=meeting_note
+   605→  attendees     String?   // peserta rapat, dipisah koma
+   606→  createdByName String?
+   607→  createdAt     DateTime  @default(now())
+   608→  updatedAt     DateTime  @updatedAt
+   609→
+   610→  @@index([companyId, kind])
+   611→}
+   612→
+   613→// ============ KATALOG LAYANAN & WORKFLOW PRODUKSI (Ronde 29-b) ============
+   614→// Brand memiliki kategori layanan sendiri; tiap kategori berisi layanan;
+   615→// tiap layanan punya workflow produksi custom (fase + langkah, sebagian jadi
+   616→// milestone project). Contoh Unimasi: kategori "Animasi 3D" → layanan
+   617→// "Pembuatan Video Pembelajaran Anak Anak 3D" dengan flow
+   618→// Pra Production (Creative Concept & Story Board) → Production (milestone)
+   619→// → Post Production (milestone).
+   620→model ServiceCategory {
+   621→  id          String   @id @default(cuid())
+   622→  brandId     String
+   623→  brand       Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+   624→  name        String
+   625→  description String?
+   626→  order       Int      @default(0)
+   627→  active      Boolean  @default(true)
+   628→  createdAt   DateTime @default(now())
+   629→  updatedAt   DateTime @updatedAt
+   630→
+   631→  services Service[]
+   632→
+   633→  @@index([brandId])
+   634→}
+   635→
+   636→model Service {
+   637→  id          String          @id @default(cuid())
+   638→  brandId     String
+   639→  brand       Brand           @relation(fields: [brandId], references: [id], onDelete: Cascade)
+   640→  categoryId  String?
+   641→  category    ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+   642→  name        String
+   643→  description String?
+   644→  unit        String? // satuan penjualan (video, episode, proyek, bulan)
+   645→  basePrice   Float? // harga acuan (opsional)
+   646→  costItems   String? // JSON rincian biaya [{name, amount, note?}] — template harga marketing
+   647→  targetMarginPct Float? // margin target % untuk saran harga (fallback 30)
+   648→  order       Int             @default(0)
+   649→  active      Boolean         @default(true)
+   650→  createdAt   DateTime        @default(now())
+   651→  updatedAt   DateTime        @updatedAt
+   652→
+   653→  workflowStages WorkflowStage[]
+   654→
+   655→  @@index([brandId])
+   656→  @@index([categoryId])
+   657→}
+   658→
+   659→/**
+   660→ * Langkah workflow produksi per layanan. phase = nama fase bebas
+   661→ * (mis. "Pra Production", "Production", "Post Production"); isMilestone
+   662→ * menandai langkah yang tampil/terhitung sbg milestone saat project dibuat
+   663→ * dari opportunity.
+   664→ */
+   665→model WorkflowStage {
+   666→  id          String   @id @default(cuid())
+   667→  serviceId   String
+   668→  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+   669→  phase       String   @default("Production")
+   670→  name        String
+   671→  description String?
+   672→  isMilestone Boolean  @default(false)
+   673→  order       Int      @default(0)
+   674→  createdAt   DateTime @default(now())
+   675→  updatedAt   DateTime @updatedAt
+   676→
+   677→  @@index([serviceId])
+   678→}
+   679→
+   680→// ============ FASE 3: SALURAN & INTEGRASI ============
+   681→// Koneksi kanal komunikasi (WhatsApp Business, Instagram, Email) per brand
+   682→// atau organisasi. Kredensial disimpan JSON dan DIRESPONS TERSENSA oleh API.
+   683→// Webhook WhatsApp memakai verifyToken/appSecret dari sini sbg fallback env.
+   684→model ChannelConfig {
+   685→  id           String    @id @default(cuid())
+   686→  channel      String // whatsapp, instagram, threads, email, dll (lihat CHANNEL_TYPES)
+   687→  brandId      String?
+   688→  brand        Brand?    @relation(fields: [brandId], references: [id])
+   689→  displayName  String
+   690→  accountRef   String? // nomor WA / username IG / alamat email
+   691→  credentials  String    @default("{}") // JSON per kanal (token, ids, secret)
+   692→  status       String    @default("connected") // connected, disconnected, error
+   693→  statusNote   String? // hasil test/verifikasi terakhir
+   694→  isDemo       Boolean   @default(false) // koneksi demo (kredensial buatan, 1-klik)
+   695→  lastEmailSyncAt DateTime? // sinkronisasi IMAP terakhir (kanal email)
+   696→  connectedAt  DateTime?
+   697→  lastTestedAt DateTime?
+   698→  createdAt    DateTime  @default(now())
+   699→  updatedAt    DateTime  @updatedAt
+   700→
+   701→  @@index([channel])
+   702→  @@index([brandId])
+   703→}
+   704→
