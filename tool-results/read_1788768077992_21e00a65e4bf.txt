@@ -1,0 +1,616 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     4→import { useCrmStore, type ModuleKey } from "@/lib/crm/store";
+     5→import { api } from "@/lib/crm/api-client";
+     6→import {
+     7→  applyNotifPrefs, NOTIF_TYPES, useNotifPrefs,
+     8→} from "@/lib/crm/notif-prefs";
+     9→import { timeAgo } from "@/lib/crm/utils";
+    10→import { useNotifSocket } from "@/lib/crm/notif-socket";
+    11→import type { NotificationDTO, NotificationSeverity, NotificationType } from "@/lib/crm/types";
+    12→import { cn } from "@/lib/utils";
+    13→import { Button } from "@/components/ui/button";
+    14→import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+    15→import { Switch } from "@/components/ui/switch";
+    16→import { toast } from "sonner";
+    17→import { io } from "socket.io-client";
+    18→import {
+    19→  Bell, BellOff, CheckCheck, X, Timer, FileCheck2, GitPullRequestArrow,
+    20→  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal, MessageSquare,
+    21→} from "lucide-react";
+    22→
+    23→/** Event global untuk membuka pusat notifikasi dari widget dashboard. */
+    24→export const OPEN_NOTIF_EVENT = "crm:open-notifications";
+    25→
+    26→/** Event global: notifikasi berubah (realtime) — widget dashboard ikut refresh.
+    27→ * Konstanta didefinisikan di notif-prefs (dipakai juga utk sync prefs antar perangkat). */
+    28→export { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
+    29→import { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
+    30→
+    31→const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
+    32→  sla: Timer,
+    33→  message: MessageSquare, // Ronde 32 — pesan baru dari lead
+    34→  approval: FileCheck2,
+    35→  cr: GitPullRequestArrow,
+    36→  task: ListChecks,
+    37→  deadline: CalendarClock,
+    38→  invoice: ReceiptText,
+    39→};
+    40→
+    41→const SEVERITY_STYLE: Record<NotificationSeverity, string> = {
+    42→  danger: "bg-rose-100 text-rose-600",
+    43→  warning: "bg-amber-100 text-amber-600",
+    44→  info: "bg-zinc-100 text-zinc-500",
+    45→};
+    46→
+    47→/** Module tujuan navigasi yang valid untuk notifikasi (Fase 3). */
+    48→const NAV_MODULES = new Set<string>(["dashboard", "inbox", "pipeline", "followups", "finance", "projects"]);
+    49→
+    50→type FilterKey = "all" | "unread";
+    51→
+    52→/** Statistik mini service via event socket "stats" (ronde 17-d — monitoring kesehatan). */
+    53→interface ServiceStats {
+    54→  startedAt: string;
+    55→  uptimeMs: number;
+    56→  activeRooms: number;
+    57→  totalEmits: number;
+    58→  pollCount: number;
+    59→  pollErrorCount: number;
+    60→  lastPollAt: string | null;
+    61→}
+    62→
+    63→/** Hasil GET /api/health (ronde 17-d) — struktur sama dgn api.getSystemHealth. */
+    64→interface SystemHealth {
+    65→  status: "ok" | "degraded";
+    66→  db: { status: "up" | "down"; ms: number | null };
+    67→  notifService: { status: "up" | "down"; detail: string };
+    68→  uptimeSec: number;
+    69→  rssMb: number;
+    70→}
+    71→
+    72→/** Durasi pendek utk uptime layanan: "45 dtk", "12 mnt", "2 j 13 mnt", "3 hr 2 j". */
+    73→function formatUptimeShort(ms: number): string {
+    74→  const s = Math.max(0, Math.floor(ms / 1000));
+    75→  if (s < 60) return `${s} dtk`;
+    76→  const m = Math.floor(s / 60);
+    77→  if (m < 60) return `${m} mnt`;
+    78→  const h = Math.floor(m / 60);
+    79→  if (h < 24) return `${h} j ${m % 60} mnt`;
+    80→  const d = Math.floor(h / 24);
+    81→  return `${d} hr ${h % 24} j`;
+    82→}
+    83→
+    84→function normalizeStats(v: unknown): ServiceStats | null {
+    85→  if (!v || typeof v !== "object") return null;
+    86→  const s = v as Partial<ServiceStats>;
+    87→  if (typeof s.uptimeMs !== "number" || typeof s.activeRooms !== "number") return null;
+    88→  return {
+    89→    startedAt: typeof s.startedAt === "string" ? s.startedAt : "",
+    90→    uptimeMs: s.uptimeMs,
+    91→    activeRooms: s.activeRooms,
+    92→    totalEmits: typeof s.totalEmits === "number" ? s.totalEmits : 0,
+    93→    pollCount: typeof s.pollCount === "number" ? s.pollCount : 0,
+    94→    pollErrorCount: typeof s.pollErrorCount === "number" ? s.pollErrorCount : 0,
+    95→    lastPollAt: typeof s.lastPollAt === "string" ? s.lastPollAt : null,
+    96→  };
+    97→}
+    98→
+    99→/** Minta statistik layanan via socket "stats" (ack + fallback event "service:stats").
+   100→ * Koneksi sekali pakai (forceNew, tanpa reconnect) agar TIDAK mengganggu socket
+   101→ * notifikasi milik useNotifSocket — hanya dipanggil saat panel preferensi dibuka. */
+   102→function fetchServiceStats(): Promise<ServiceStats | null> {
+   103→  return new Promise((resolve) => {
+   104→    let done = false;
+   105→    let socket: ReturnType<typeof io> | null = null;
+   106→    const finish = (v: ServiceStats | null) => {
+   107→      if (done) return;
+   108→      done = true;
+   109→      try {
+   110→        socket?.close();
+   111→      } catch {
+   112→        /* abaikan */
+   113→      }
+   114→      resolve(v);
+   115→    };
+   116→    try {
+   117→      socket = io("/?XTransformPort=3005", {
+   118→        path: "/",
+   119→        transports: ["polling", "websocket"],
+   120→        forceNew: true,
+   121→        reconnection: false,
+   122→        timeout: 4000,
+   123→      });
+   124→      socket.on("connect", () => {
+   125→        socket?.once("service:stats", (s: unknown) => finish(normalizeStats(s)));
+   126→        socket?.emit("stats", (s: unknown) => finish(normalizeStats(s)));
+   127→      });
+   128→      socket.on("connect_error", () => finish(null));
+   129→      window.setTimeout(() => finish(null), 4500);
+   130→    } catch {
+   131→      finish(null);
+   132→    }
+   133→  });
+   134→}
+   135→
+   136→export default function NotificationCenter() {
+   137→  const user = useCrmStore((s) => s.user);
+   138→  const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
+   139→  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+   140→
+   141→  const [open, setOpen] = useState(false);
+   142→  // items = data mentah dari server; tampilan & unread diturunkan via useMemo (prefs + filter)
+   143→  const [items, setItems] = useState<NotificationDTO[]>([]);
+   144→  const [loading, setLoading] = useState(false);
+   145→  const [filter, setFilter] = useState<FilterKey>("all");
+   146→  const [acting, setActing] = useState(false);
+   147→  const [showPrefs, setShowPrefs] = useState(false);
+   148→  const { prefs, update, toggleMuted } = useNotifPrefs(user?.email);
+   149→
+   150→  // Status sistem (ronde 17-d) — diisi saat panel preferensi dibuka
+   151→  const [serviceStats, setServiceStats] = useState<ServiceStats | null>(null);
+   152→  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
+   153→  const [healthFailed, setHealthFailed] = useState(false);
+   154→
+   155→  // Ref terbaru agar polling tidak dobel & closure selalu segar
+   156→  const brandRef = useRef(activeBrandFilter);
+   157→  const openRef = useRef(open);
+   158→  const inFlightRef = useRef(false);
+   159→  const firstLoadDoneRef = useRef(false);
+   160→  const realtimeRef = useRef(false);
+   161→
+   162→  useEffect(() => {
+   163→    brandRef.current = activeBrandFilter;
+   164→    openRef.current = open;
+   165→  });
+   166→
+   167→  const load = useCallback(async (silent = false) => {
+   168→    const u = user;
+   169→    if (!u || inFlightRef.current) return;
+   170→    inFlightRef.current = true;
+   171→    try {
+   172→      if (!silent) setLoading(true);
+   173→      const res = await api.notifications(u.email, brandRef.current);
+   174→      setItems(res.items);
+   175→      // Reset filter saat re-fetch — hanya saat popover tertutup agar tidak mengganggu yang sedang membaca
+   176→      if (!openRef.current) setFilter("all");
+   177→      firstLoadDoneRef.current = true;
+   178→    } catch {
+   179→      if (!silent) toast.error("Gagal memuat notifikasi");
+   180→    } finally {
+   181→      inFlightRef.current = false;
+   182→      setLoading(false);
+   183→    }
+   184→  }, [user]);
+   185→
+   186→  // Turunan tampilan: preferensi mute/hideRead + filter segmented + hitung unread
+   187→  const { visible, unread, hasDangerUnread } = useMemo(() => {
+   188→    const applied = applyNotifPrefs(items, prefs);
+   189→    const shown = filter === "unread" ? applied.items.filter((i) => !i.read) : applied.items;
+   190→    const danger = applied.unread > 0 && applied.items.some((i) => !i.read && i.severity === "danger");
+   191→    return { visible: shown, unread: applied.unread, hasDangerUnread: danger };
+   192→  }, [items, prefs, filter]);
+   193→
+   194→  // Event global: buka popover dari luar (widget dashboard)
+   195→  useEffect(() => {
+   196→    const onOpen = () => {
+   197→      setOpen(true);
+   198→      setFilter("all");
+   199→      setShowPrefs(false);
+   200→      void load();
+   201→    };
+   202→    window.addEventListener(OPEN_NOTIF_EVENT, onOpen);
+   203→    return () => window.removeEventListener(OPEN_NOTIF_EVENT, onOpen);
+   204→  }, [load]);
+   205→
+   206→  // Fetch awal saat user login + refetch saat filter brand global berubah
+   207→  useEffect(() => {
+   208→    if (!user) return;
+   209→    void load();
+   210→  }, [user, activeBrandFilter, load]);
+   211→
+   212→  // Polling 60 detik untuk refresh unread — skip saat tab tidak terlihat atau realtime aktif.
+   213→  // Ronde 16-c: polling fallback JUGA men-dispatch crm:notif-changed agar preferensi notifikasi
+   214→  // (UserPreference) & widget dashboard tetap tersinkron antar perangkat walau socket tidak aktif.
+   215→  useEffect(() => {
+   216→    if (!user) return;
+   217→    const id = setInterval(() => {
+   218→      if (document.hidden) return;
+   219→      if (realtimeRef.current) return; // push realtime menang — hindari fetch dobel
+   220→      void load(true);
+   221→      window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
+   222→    }, 60_000);
+   223→    return () => clearInterval(id);
+   224→  }, [user, load]);
+   225→
+   226→  // Push realtime via mini service socket.io (port 3005) — onChanged memakai refetch yang sama.
+   227→  const { connected: realtimeConnected } = useNotifSocket({
+   228→    email: user?.email ?? null,
+   229→    brandId: activeBrandFilter,
+   230→    enabled: !!user,
+   231→    onChanged: () => {
+   232→      void load(true);
+   233→      window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
+   234→    },
+   235→  });
+   236→
+   237→  useEffect(() => {
+   238→    realtimeRef.current = realtimeConnected;
+   239→  }, [realtimeConnected]);
+   240→
+   241→  // "Status sistem" (ronde 17-d): refresh SETIAP panel preferensi dibuka — tanpa interval.
+   242→  // Kesehatan server via GET /api/health; statistik realtime service via socket "stats"
+   243→  // (hanya saat socket browser konek — saat fallback, status layanan dicek dari server).
+   244→  useEffect(() => {
+   245→    if (!open || !showPrefs) return;
+   246→    let cancelled = false;
+   247→    setServiceStats(null);
+   248→    setSystemHealth(null);
+   249→    setHealthFailed(false);
+   250→    api
+   251→      .getSystemHealth()
+   252→      .then((h) => {
+   253→        if (!cancelled) setSystemHealth(h);
+   254→      })
+   255→      .catch(() => {
+   256→        if (!cancelled) setHealthFailed(true);
+   257→      });
+   258→    if (realtimeConnected) {
+   259→      void fetchServiceStats().then((s) => {
+   260→        if (!cancelled && s) setServiceStats(s);
+   261→      });
+   262→    }
+   263→    return () => {
+   264→      cancelled = true;
+   265→    };
+   266→  }, [open, showPrefs, realtimeConnected]);
+   267→
+   268→  function handleOpenChange(next: boolean) {
+   269→    setOpen(next);
+   270→    if (next) {
+   271→      setFilter("all");
+   272→      void load();
+   273→    }
+   274→  }
+   275→
+   276→  function handleItemClick(n: NotificationDTO) {
+   277→    const u = user;
+   278→    if (!u) return;
+   279→    if (!n.read) {
+   280→      setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: true } : i)));
+   281→      // Ronde 36 (audit FIX): optimistic read kini di-revert bila request gagal
+   282→      // (dulu tetap "terbaca" di UI sampai poll berikutnya).
+   283→      api.markNotifications({ user: u.email, action: "read", keys: [n.key] }).catch(() => {
+   284→        setItems((prev) => prev.map((i) => (i.key === n.key ? { ...i, read: false } : i)));
+   285→      });
+   286→    }
+   287→    if (NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
+   288→    setOpen(false);
+   289→  }
+   290→
+   291→  function handleDismiss(e: React.MouseEvent, n: NotificationDTO) {
+   292→    e.stopPropagation();
+   293→    const u = user;
+   294→    if (!u) return;
+   295→    setItems((prev) => prev.filter((i) => i.key !== n.key));
+   296→    api.markNotifications({ user: u.email, action: "dismiss", keys: [n.key] }).catch(() => {
+   297→      toast.error("Gagal menghapus notifikasi");
+   298→      void load(true);
+   299→    });
+   300→  }
+   301→
+   302→  async function handleMarkAll() {
+   303→    const u = user;
+   304→    if (!u) return;
+   305→    const keys = items.filter((i) => !i.read).map((i) => i.key);
+   306→    if (keys.length === 0) return;
+   307→    setActing(true);
+   308→    setItems((prev) => prev.map((i) => ({ ...i, read: true })));
+   309→    try {
+   310→      await api.markNotifications({ user: u.email, action: "read", keys });
+   311→      void load(true);
+   312→    } catch {
+   313→      toast.error("Gagal menandai semua notifikasi");
+   314→      void load(true);
+   315→    } finally {
+   316→      setActing(false);
+   317→    }
+   318→  }
+   319→
+   320→  if (!user) return null;
+   321→
+   322→  const showSkeleton = loading && items.length === 0;
+   323→
+   324→  // Baris "Status sistem": kesehatan database dari GET /api/health (ronde 17-d)
+   325→  const dbLine = (() => {
+   326→    if (healthFailed) return { dot: "bg-red-600", text: "Server tidak terjangkau" };
+   327→    if (!systemHealth) return { dot: "bg-zinc-400", text: "Memeriksa server…" };
+   328→    if (systemHealth.db.status !== "up" || systemHealth.db.ms === null) {
+   329→      return { dot: "bg-red-600", text: "Database tidak responsif" };
+   330→    }
+   331→    if (systemHealth.db.ms > 500) {
+   332→      return { dot: "bg-amber-500", text: `Database lambat · ${systemHealth.db.ms} ms` };
+   333→    }
+   334→    return { dot: "bg-emerald-500", text: `Database responsif · ${systemHealth.db.ms} ms` };
+   335→  })();
+   336→  // Probe layanan dari server — hanya tampil saat socket browser tidak konek (fallback)
+   337→  const serviceLine = (() => {
+   338→    if (healthFailed) return { dot: "bg-zinc-400", text: "Kesehatan layanan tidak diketahui" };
+   339→    if (!systemHealth) return { dot: "bg-zinc-400", text: "Memeriksa layanan dari server…" };
+   340→    return systemHealth.notifService.status === "up"
+   341→      ? { dot: "bg-emerald-500", text: "Layanan notifikasi terjangkau dari server" }
+   342→      : { dot: "bg-red-600", text: "Layanan notifikasi mati (dari server)" };
+   343→  })();
+   344→
+   345→  return (
+   346→    <Popover open={open} onOpenChange={handleOpenChange}>
+   347→      <PopoverTrigger asChild>
+   348→        <Button
+   349→          variant="ghost"
+   350→          size="icon"
+   351→          className="relative"
+   352→          aria-label="Buka pusat notifikasi"
+   353→          title={unread > 0 ? `${unread} notifikasi belum dibaca` : "Notifikasi"}
+   354→        >
+   355→          <Bell className="h-4 w-4" aria-hidden />
+   356→          {hasDangerUnread && (
+   357→            <span className="absolute right-1.5 top-1.5 flex h-2 w-2" aria-hidden>
+   358→              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500 opacity-75" />
+   359→              <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-600" />
+   360→            </span>
+   361→          )}
+   362→          {unread > 0 && (
+   363→            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white" aria-hidden>
+   364→              {unread > 9 ? "9+" : unread}
+   365→            </span>
+   366→          )}
+   367→        </Button>
+   368→      </PopoverTrigger>
+   369→      <PopoverContent align="end" className="w-[380px] max-w-[calc(100vw-2rem)] p-0" aria-label="Pusat notifikasi">
+   370→        {/* Header */}
+   371→        <div className="flex items-center justify-between gap-2 border-b border-zinc-200 px-4 py-3">
+   372→          <div className="flex min-w-0 items-center gap-2">
+   373→            <h2 className="text-sm font-semibold text-zinc-900">Notifikasi</h2>
+   374→            {unread > 0 && (
+   375→              <span className="shrink-0 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+   376→                {unread} belum dibaca
+   377→              </span>
+   378→            )}
+   379→          </div>
+   380→          <Button
+   381→            variant="ghost"
+   382→            size="icon"
+   383→            className="h-7 w-7 shrink-0 text-zinc-500 hover:text-zinc-900"
+   384→            onClick={() => setShowPrefs((v) => !v)}
+   385→            aria-expanded={showPrefs}
+   386→            aria-label="Preferensi notifikasi"
+   387→            title="Preferensi notifikasi"
+   388→          >
+   389→            <SlidersHorizontal className={cn("h-4 w-4", showPrefs && "text-zinc-900")} aria-hidden />
+   390→          </Button>
+   391→          <Button
+   392→            variant="ghost"
+   393→            size="icon"
+   394→            className="h-7 w-7 shrink-0 text-zinc-500 hover:text-zinc-900"
+   395→            disabled={unread === 0 || acting}
+   396→            onClick={handleMarkAll}
+   397→            aria-label="Tandai semua dibaca"
+   398→            title="Tandai semua dibaca"
+   399→          >
+   400→            <CheckCheck className="h-4 w-4" aria-hidden />
+   401→          </Button>
+   402→        </div>
+   403→
+   404→        {/* Panel preferensi (mute per tipe) */}
+   405→        {showPrefs ? (
+   406→          <div className="border-b border-zinc-200 bg-zinc-50/60 px-4 py-3" role="region" aria-label="Preferensi notifikasi">
+   407→            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Tipe notifikasi</p>
+   408→            <p className="mt-0.5 text-[10px] text-zinc-400">Tipe yang dimatikan tidak tampil & tidak dihitung sebagai belum dibaca. Tersimpan per pengguna & tersinkron antar perangkat.</p>
+   409→            <ul className="mt-2 space-y-1">
+   410→              {NOTIF_TYPES.map((t) => {
+   411→                const muted = prefs.muted.includes(t.key);
+   412→                return (
+   413→                  <li key={t.key} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5">
+   414→                    <span className="min-w-0">
+   415→                      <span className={cn("block text-xs font-medium", muted ? "text-zinc-400" : "text-zinc-900")}>{t.label}</span>
+   416→                      <span className="block truncate text-[10px] text-zinc-400">{t.hint}</span>
+   417→                    </span>
+   418→                    <span className="flex shrink-0 items-center gap-1.5">
+   419→                      <span className={cn("text-[10px] font-medium", muted ? "text-rose-500" : "text-emerald-600")}>
+   420→                        {muted ? "Mute" : "Aktif"}
+   421→                      </span>
+   422→                      <Switch
+   423→                        checked={!muted}
+   424→                        onCheckedChange={() => toggleMuted(t.key)}
+   425→                        aria-label={`${muted ? "Aktifkan" : "Matikan"} notifikasi ${t.label}`}
+   426→                      />
+   427→                    </span>
+   428→                  </li>
+   429→                );
+   430→              })}
+   431→            </ul>
+   432→            <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5">
+   433→              <span className="text-xs font-medium text-zinc-900">Sembunyikan yang sudah dibaca</span>
+   434→              <Switch
+   435→                checked={prefs.hideRead}
+   436→                onCheckedChange={(v) => update({ hideRead: v })}
+   437→                aria-label="Sembunyikan notifikasi yang sudah dibaca"
+   438→              />
+   439→            </label>
+   440→            {/* Status sinkronisasi antar perangkat (ronde 16-c) */}
+   441→            <p
+   442→              className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500"
+   443→              aria-live="polite"
+   444→              data-testid="prefs-sync-status"
+   445→            >
+   446→              <span
+   447→                className={cn(
+   448→                  "h-1.5 w-1.5 shrink-0 rounded-full",
+   449→                  realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+   450→                )}
+   451→                aria-hidden
+   452→              />
+   453→              {realtimeConnected ? "Tersinkron antar perangkat" : "Sinkron antar perangkat menunggu koneksi realtime"}
+   454→            </p>
+   455→            {/* Status sistem (ronde 17-d) — realtime service + kesehatan server; dimuat tiap panel dibuka */}
+   456→            <div
+   457→              className="mt-3 border-t border-zinc-200 pt-2"
+   458→              role="region"
+   459→              aria-label="Status sistem"
+   460→              data-testid="status-sistem"
+   461→            >
+   462→              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Status sistem</p>
+   463→              <ul className="mt-1 space-y-1">
+   464→                <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-realtime">
+   465→                  <span
+   466→                    className={cn(
+   467→                      "h-1.5 w-1.5 shrink-0 rounded-full",
+   468→                      realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+   469→                    )}
+   470→                    aria-hidden
+   471→                  />
+   472→                  {realtimeConnected
+   473→                    ? serviceStats
+   474→                      ? `Layanan realtime aktif · ${formatUptimeShort(serviceStats.uptimeMs)} · ${serviceStats.activeRooms} ruangan`
+   475→                      : "Layanan realtime aktif"
+   476→                    : "Layanan realtime tidak terjangkau dari browser — dicek dari server"}
+   477→                </li>
+   478→                {!realtimeConnected && (
+   479→                  <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-service-server">
+   480→                    <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", serviceLine.dot)} aria-hidden />
+   481→                    {serviceLine.text}
+   482→                  </li>
+   483→                )}
+   484→                <li className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite" data-testid="health-server">
+   485→                  <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dbLine.dot)} aria-hidden />
+   486→                  {dbLine.text}
+   487→                </li>
+   488→              </ul>
+   489→            </div>
+   490→          </div>
+   491→        ) : null}
+   492→
+   493→        {/* Filter segmented */}
+   494→        <div className="border-b border-zinc-200 px-4 py-2">
+   495→          <div className="inline-flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5" aria-label="Filter notifikasi">
+   496→            <button
+   497→              type="button"
+   498→              aria-pressed={filter === "all"}
+   499→              onClick={() => setFilter("all")}
+   500→              className={cn(
+   501→                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+   502→                filter === "all" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+   503→              )}
+   504→            >
+   505→              Semua
+   506→            </button>
+   507→            <button
+   508→              type="button"
+   509→              aria-pressed={filter === "unread"}
+   510→              onClick={() => setFilter("unread")}
+   511→              className={cn(
+   512→                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+   513→                filter === "unread" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+   514→              )}
+   515→            >
+   516→              Belum dibaca
+   517→            </button>
+   518→          </div>
+   519→        </div>
+   520→
+   521→        {/* List / skeleton / empty */}
+   522→        {showSkeleton ? (
+   523→          <div className="space-y-4 px-4 py-4" aria-hidden>
+   524→            {[0, 1, 2].map((i) => (
+   525→              <div key={i} className="flex items-start gap-3">
+   526→                <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-zinc-200" />
+   527→                <div className="flex-1 space-y-1.5 pt-0.5">
+   528→                  <div className="h-3 w-3/4 animate-pulse rounded bg-zinc-200" />
+   529→                  <div className="h-3 w-1/2 animate-pulse rounded bg-zinc-100" />
+   530→                </div>
+   531→              </div>
+   532→            ))}
+   533→          </div>
+   534→        ) : visible.length === 0 ? (
+   535→          <div className="flex flex-col items-center justify-center gap-1.5 px-6 py-10 text-center">
+   536→            <BellOff className="h-10 w-10 text-zinc-300" aria-hidden />
+   537→            <p className="text-sm font-medium text-zinc-600">Tidak ada notifikasi</p>
+   538→            <p className="text-xs text-zinc-400">
+   539→              {filter === "all" ? "Semua tugas & lead dalam kendali" : "Semua notifikasi sudah dibaca"}
+   540→            </p>
+   541→          </div>
+   542→        ) : (
+   543→          <div className="max-h-[380px] divide-y divide-zinc-100 overflow-y-auto crm-scroll">
+   544→            {visible.map((n) => {
+   545→              const Icon = TYPE_ICON[n.type] ?? Bell;
+   546→              return (
+   547→                <div
+   548→                  key={n.key}
+   549→                  role="button"
+   550→                  tabIndex={0}
+   551→                  onClick={() => handleItemClick(n)}
+   552→                  onKeyDown={(e) => {
+   553→                    if (e.key === "Enter" || e.key === " ") {
+   554→                      e.preventDefault();
+   555→                      handleItemClick(n);
+   556→                    }
+   557→                  }}
+   558→                  aria-label={n.title}
+   559→                  className={cn(
+   560→                    "group relative flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-zinc-100/60 focus-visible:bg-zinc-100/60 focus-visible:outline-none",
+   561→                    !n.read && "bg-zinc-50/80"
+   562→                  )}
+   563→                >
+   564→                  {!n.read && (
+   565→                    <span className="absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-rose-600" aria-hidden />
+   566→                  )}
+   567→                  <span className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full", SEVERITY_STYLE[n.severity])}>
+   568→                    <Icon className="h-4 w-4" aria-hidden />
+   569→                  </span>
+   570→                  <div className="min-w-0 flex-1">
+   571→                    <p className={cn("line-clamp-2 text-[13px] font-medium text-zinc-900", n.read && "font-normal text-zinc-500")}>
+   572→                      {n.title}
+   573→                    </p>
+   574→                    <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{n.description}</p>
+   575→                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-zinc-400">
+   576→                      {n.brandColor && (
+   577→                        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: n.brandColor }} aria-hidden />
+   578→                      )}
+   579→                      {n.brandName && <span className="font-medium text-zinc-500">{n.brandName}</span>}
+   580→                      {n.entityLabel && <span className="font-mono">{n.entityLabel}</span>}
+   581→                      <span>{timeAgo(n.at)}</span>
+   582→                    </div>
+   583→                  </div>
+   584→                  <button
+   585→                    type="button"
+   586→                    onClick={(e) => handleDismiss(e, n)}
+   587→                    aria-label="Hapus notifikasi"
+   588→                    title="Hapus notifikasi"
+   589→                    className="rounded-md p-1 text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-700 focus-visible:opacity-100 group-hover:opacity-100"
+   590→                  >
+   591→                    <X className="h-3.5 w-3.5" aria-hidden />
+   592→                  </button>
+   593→                </div>
+   594→              );
+   595→            })}
+   596→          </div>
+   597→        )}
+   598→
+   599→        {/* Footer */}
+   600→        <div className="border-t border-zinc-200 px-4 py-2">
+   601→          <p className="flex items-center gap-1.5 text-xs text-zinc-500" aria-live="polite">
+   602→            <span
+   603→              className={cn(
+   604→                "h-2 w-2 shrink-0 rounded-full",
+   605→                realtimeConnected ? "animate-pulse bg-emerald-500" : "bg-zinc-400"
+   606→              )}
+   607→              aria-hidden
+   608→            />
+   609→            {realtimeConnected ? "Realtime aktif" : "Mode fallback · polling 60 dtk"}
+   610→          </p>
+   611→        </div>
+   612→      </PopoverContent>
+   613→    </Popover>
+   614→  );
+   615→}
+   616→

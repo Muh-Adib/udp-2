@@ -1,0 +1,562 @@
+     1→   537→                    <Label htmlFor="bs-ig" className="text-xs flex items-center gap-1"><Instagram className="h-3 w-3 text-pink-600" aria-hidden /> Instagram</Label>
+     2→   538→                    <Input id="bs-ig" className="h-9" value={identity.instagramHandle}
+     3→   539→                      onChange={(e) => setIdentity({ ...identity, instagramHandle: e.target.value })}
+     4→   540→                      placeholder="@brand" />
+     5→   541→                  </div>
+     6→   542→                  <div className="space-y-1.5">
+     7→   543→                    <Label htmlFor="bs-threads" className="text-xs flex items-center gap-1"><AtSign className="h-3 w-3 text-zinc-700" aria-hidden /> Threads</Label>
+     8→   544→                    <Input id="bs-threads" className="h-9" value={identity.threadsHandle}
+     9→   545→                      onChange={(e) => setIdentity({ ...identity, threadsHandle: e.target.value })}
+    10→   546→                      placeholder="@brand" />
+    11→   547→                  </div>
+    12→   548→                  <div className="space-y-1.5">
+    13→   549→                    <Label htmlFor="bs-email" className="text-xs flex items-center gap-1"><Mail className="h-3 w-3 text-zinc-500" aria-hidden /> Email bisnis</Label>
+    14→   550→                    <Input id="bs-email" type="email" className="h-9" value={identity.email}
+    15→   551→                      onChange={(e) => setIdentity({ ...identity, email: e.target.value })}
+    16→   552→                      placeholder="info@brand.com" />
+    17→   553→                  </div>
+    18→   554→                  <div className="space-y-1.5">
+    19→   555→                    <Label htmlFor="bs-web" className="text-xs flex items-center gap-1"><Globe className="h-3 w-3 text-zinc-400" aria-hidden /> Website</Label>
+    20→   556→                    <Input id="bs-web" className="h-9" value={identity.website}
+    21→   557→                      onChange={(e) => setIdentity({ ...identity, website: e.target.value })}
+    22→   558→                      placeholder="https://…" />
+    23→   559→                  </div>
+    24→   560→                </div>
+    25→   561→                <div className="flex justify-end border-t pt-4">
+    26→   562→                  <Button type="button" className="h-9" onClick={() => void saveIdentity()} disabled={savingIdentity}>
+    27→   563→                    {savingIdentity ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />}
+    28→   564→                    Simpan identitas
+    29→   565→                  </Button>
+    30→   566→                </div>
+    31→   567→              </div>
+    32→   568→            ) : null}
+    33→   569→          </TabsContent>
+    34→   570→
+    35→   571→          {/* ===== TAB 2: LAYANAN & WORKFLOW ===== */}
+    36→   572→          <TabsContent value="services" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
+    37→   573→            {catalogLoading && !catalog ? (
+    38→   574→              <div className="flex h-40 items-center justify-center gap-2 text-sm text-zinc-500">
+    39→   575→                <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memuat katalog…
+    40→   576→              </div>
+    41→   577→            ) : catalog ? (
+    42→   578→              <CatalogEditor
+    43→   579→                catalog={catalog}
+    44→   580→                busyKey={busyKey}
+    45→   581→                onAddCategory={addCategory}
+    46→   582→                onAddService={addService}
+    47→   583→                onAddStage={addStage}
+    48→   584→                onToggleMilestone={toggleMilestone}
+    49→   585→                onRemove={removeCatalog}
+    50→   586→                onSaveCost={saveServiceCost}
+    51→   587→              />
+    52→   588→            ) : (
+    53→   589→              <p className="text-sm text-zinc-500">Katalog belum termuat.</p>
+    54→   590→            )}
+    55→   591→          </TabsContent>
+    56→   592→
+    57→   593→          {/* ===== TAB 3: SURAT ===== */}
+    58→   594→          <TabsContent value="letter" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
+    59→   595→            {letter ? (
+    60→   596→              <div className="space-y-5">
+    61→   597→                <div className="grid gap-4 sm:grid-cols-2">
+    62→   598→                  {/* Kop surat */}
+    63→   599→                  <div className="space-y-2 rounded-xl border p-4">
+    64→   600→                    <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+    65→   601→                      <ImageIcon className="h-4 w-4 text-zinc-400" aria-hidden /> Kop surat (header)
+    66→   602→                    </p>
+    67→   603→                    <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg border bg-zinc-50">
+    68→   604→                      {headerImg ? (
+    69→   605→                        <img src={headerImg} alt={`Kop surat ${brand.name}`} className="max-h-full max-w-full object-contain" />
+    70→   606→                      ) : (
+    71→   607→                        <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar kop — dipakai logo + alamat brand</p>
+    72→   608→                      )}
+    73→   609→                    </div>
+    74→   610→                    <div className="flex flex-wrap gap-2">
+    75→   611→                      <input
+    76→   612→                        ref={headerInputRef} type="file" accept="image/png,image/jpeg,image/webp"
+    77→   613→                        className="hidden" onChange={(e) => { void pickLetterImage("header", e.target.files?.[0]); e.currentTarget.value = ""; }}
+    78→   614→                      />
+    79→   615→                      <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => headerInputRef.current?.click()}>
+    80→   616→                        <ImageIcon className="h-3.5 w-3.5" aria-hidden /> Unggah
+    81→   617→                      </Button>
+    82→   618→                      {headerImg ? (
+    83→   619→                        <Button type="button" size="sm" variant="ghost" className="h-8 text-rose-600 hover:text-rose-700" onClick={() => setHeaderImg("")}>
+    84→   620→                          <Trash2 className="h-3.5 w-3.5" aria-hidden /> Hapus
+    85→   621→                        </Button>
+    86→   622→                      ) : null}
+    87→   623→                    </div>
+    88→   624→                  </div>
+    89→   625→                  {/* Kaki surat */}
+    90→   626→                  <div className="space-y-2 rounded-xl border p-4">
+    91→   627→                    <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+    92→   628→                      <ImageIcon className="h-4 w-4 text-zinc-400" aria-hidden /> Kaki surat (footer)
+    93→   629→                    </p>
+    94→   630→                    <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg border bg-zinc-50">
+    95→   631→                      {footerImg ? (
+    96→   632→                        <img src={footerImg} alt={`Kaki surat ${brand.name}`} className="max-h-full max-w-full object-contain" />
+    97→   633→                      ) : (
+    98→   634→                        <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar footer</p>
+    99→   635→                      )}
+   100→   636→                    </div>
+   101→   637→                    <div className="flex flex-wrap gap-2">
+   102→   638→                      <input
+   103→   639→                        ref={footerInputRef} type="file" accept="image/png,image/jpeg,image/webp"
+   104→   640→                        className="hidden" onChange={(e) => { void pickLetterImage("footer", e.target.files?.[0]); e.currentTarget.value = ""; }}
+   105→   641→                      />
+   106→   642→                      <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => footerInputRef.current?.click()}>
+   107→   643→                        <ImageIcon className="h-3.5 w-3.5" aria-hidden /> Unggah
+   108→   644→                      </Button>
+   109→   645→                      {footerImg ? (
+   110→   646→                        <Button type="button" size="sm" variant="ghost" className="h-8 text-rose-600 hover:text-rose-700" onClick={() => setFooterImg("")}>
+   111→   647→                          <Trash2 className="h-3.5 w-3.5" aria-hidden /> Hapus
+   112→   648→                        </Button>
+   113→   649→                      ) : null}
+   114→   650→                    </div>
+   115→   651→                  </div>
+   116→   652→                </div>
+   117→   653→
+   118→   654→                {/* Gaya template */}
+   119→   655→                <div className="grid gap-4 rounded-xl border p-4 sm:grid-cols-2">
+   120→   656→                  <p className="text-sm font-semibold text-zinc-900 sm:col-span-2">Gaya template surat</p>
+   121→   657→                  <div className="space-y-1.5">
+   122→   658→                    <Label className="text-xs">Font surat</Label>
+   123→   659→                    <Select value={letter.fontFamily} onValueChange={(v) => setLetter({ ...letter, fontFamily: v })}>
+   124→   660→                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+   125→   661→                      <SelectContent>
+   126→   662→                        {LETTER_FONTS.map((f) => <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>)}
+   127→   663→                      </SelectContent>
+   128→   664→                    </Select>
+   129→   665→                  </div>
+   130→   666→                  <div className="space-y-1.5">
+   131→   667→                    <Label className="text-xs">Tata letak kop</Label>
+   132→   668→                    <Select value={letter.headerStyle} onValueChange={(v) => setLetter({ ...letter, headerStyle: v })}>
+   133→   669→                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+   134→   670→                      <SelectContent>
+   135→   671→                        {LETTER_HEADER_STYLES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+   136→   672→                      </SelectContent>
+   137→   673→                    </Select>
+   138→   674→                  </div>
+   139→   675→                  <div className="space-y-1.5">
+   140→   676→                    <Label htmlFor="bs-accent" className="text-xs">Warna aksen surat</Label>
+   141→   677→                    <div className="flex items-center gap-2">
+   142→   678→                      <input
+   143→   679→                        id="bs-accent" type="color" value={letter.accentColor}
+   144→   680→                        onChange={(e) => setLetter({ ...letter, accentColor: e.target.value })}
+   145→   681→                        className="h-9 w-12 cursor-pointer rounded-md border border-zinc-200 bg-white p-1"
+   146→   682→                      />
+   147→   683→                      <span className="font-mono text-xs text-zinc-500">{letter.accentColor}</span>
+   148→   684→                    </div>
+   149→   685→                  </div>
+   150→   686→                  <div className="flex items-center justify-between gap-3 rounded-lg border bg-zinc-50/60 px-3 py-2">
+   151→   687→                    <Label htmlFor="bs-showlogo" className="text-xs">Tampilkan logo di surat</Label>
+   152→   688→                    <Switch id="bs-showlogo" checked={letter.showLogo} onCheckedChange={(v) => setLetter({ ...letter, showLogo: v })} />
+   153→   689→                  </div>
+   154→   690→                  <div className="space-y-1.5 sm:col-span-2">
+   155→   691→                    <Label htmlFor="bs-footnote" className="text-xs">Catatan footer surat</Label>
+   156→   692→                    <Input id="bs-footnote" className="h-9" value={letter.footerNote}
+   157→   693→                      onChange={(e) => setLetter({ ...letter, footerNote: e.target.value })}
+   158→   694→                      placeholder="mis. Alamat kantor · Telp · Email · Website" />
+   159→   695→                  </div>
+   160→   696→                </div>
+   161→   697→
+   162→   698→                {/* Pratinjau mini */}
+   163→   699→                <div className="overflow-hidden rounded-xl border">
+   164→   700→                  <div className="border-b-2 px-4 py-3" style={{ borderColor: letter.accentColor }}>
+   165→   701→                    {headerImg && letter.headerStyle === "letterhead-image" ? (
+   166→   702→                      <img src={headerImg} alt="" className="h-10 object-contain" />
+   167→   703→                    ) : (
+   168→   704→                      <div className={`flex items-center gap-3 ${letter.headerStyle === "logo-center" ? "justify-center text-center" : ""}`}>
+   169→   705→                        {letter.showLogo && effectiveLogo ? (
+   170→   706→                           
+   171→   707→                          <img src={effectiveLogo} alt="" className="h-8 object-contain" />
+   172→   708→                        ) : null}
+   173→   709→                        <div>
+   174→   710→                          <p className="text-sm font-bold" style={{ color: letter.accentColor }}>{brand.name}</p>
+   175→   711→                          <p className="text-[10px] text-zinc-500">{identity?.address || brand.address || brand.city || ""}</p>
+   176→   712→                        </div>
+   177→   713→                      </div>
+   178→   714→                    )}
+   179→   715→                  </div>
+   180→   716→                  <div className="space-y-1.5 px-4 py-3" style={{ fontFamily: letter.fontFamily }}>
+   181→   717→                    <p className="text-[10px] uppercase tracking-widest text-zinc-400">Pratinjau</p>
+   182→   718→                    <div className="h-2 w-3/4 rounded bg-zinc-100" />
+   183→   719→                    <div className="h-2 w-full rounded bg-zinc-100" />
+   184→   720→                    <div className="h-2 w-5/6 rounded bg-zinc-100" />
+   185→   721→                  </div>
+   186→   722→                  <div className="border-t px-4 py-2.5 text-center text-[10px] text-zinc-500" style={{ backgroundColor: `${letter.accentColor}0d` }}>
+   187→   723→                    {letter.footerNote || `${brand.name} · ${brand.email || ""} · ${brand.phone || ""}`}
+   188→   724→                  </div>
+   189→   725→                </div>
+   190→   726→
+   191→   727→                <div className="flex justify-end border-t pt-4">
+   192→   728→                  <Button type="button" className="h-9" onClick={() => void saveLetter()} disabled={savingLetter}>
+   193→   729→                    {savingLetter ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />}
+   194→   730→                    Simpan template surat
+   195→   731→                  </Button>
+   196→   732→                </div>
+   197→   733→              </div>
+   198→   734→            ) : null}
+   199→   735→          </TabsContent>
+   200→   736→
+   201→   737→          {/* ===== TAB 4: INTEGRASI ===== */}
+   202→   738→          <TabsContent value="integrasi" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
+   203→   739→            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5 text-xs leading-relaxed text-emerald-900">
+   204→   740→              <p className="font-semibold">Integrasi milik {brand.name} sendiri</p>
+   205→   741→              <p className="mt-0.5 text-emerald-800">
+   206→   742→                Pesan yang masuk lewat kanal brand ini otomatis menjadi lead di Inbox dan dapat dibalas atas nama {brand.name}.
+   207→   743→                Akun resmi brand: {brand.whatsappNumber ?? "-"} · {brand.instagramHandle ?? "-"} · {brand.email ?? "-"}.
+   208→   744→              </p>
+   209→   745→            </div>
+   210→   746→
+   211→   747→            {!channels ? (
+   212→   748→              <div className="flex h-32 items-center justify-center gap-2 text-sm text-zinc-500">
+   213→   749→                <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memuat kanal…
+   214→   750→              </div>
+   215→   751→            ) : (
+   216→   752→              <div className="space-y-3">
+   217→   753→                {/* Ringkasan koneksi */}
+   218→   754→                <div className="rounded-xl border bg-white p-3.5">
+   219→   755→                  <div className="flex flex-wrap items-center gap-2">
+   220→   756→                    <p className="min-w-0 flex-1 text-sm font-semibold text-zinc-900">
+   221→   757→                      {connectedCount} dari {CHANNEL_TYPE_KEYS.length} kanal terhubung
+   222→   758→                    </p>
+   223→   759→                    {connectedCount === CHANNEL_TYPE_KEYS.length ? (
+   224→   760→                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+   225→   761→                        <BadgeCheck className="h-3 w-3" aria-hidden /> Semua kanal utama terhubung
+   226→   762→                      </Badge>
+   227→   763→                    ) : null}
+   228→   764→                  </div>
+   229→   765→                  <div
+   230→   766→                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100"
+   231→   767→                    role="progressbar"
+   232→   768→                    aria-label="Kanal terhubung"
+   233→   769→                    aria-valuemin={0}
+   234→   770→                    aria-valuemax={CHANNEL_TYPE_KEYS.length}
+   235→   771→                    aria-valuenow={connectedCount}
+   236→   772→                  >
+   237→   773→                    <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${connectedPct}%` }} />
+   238→   774→                  </div>
+   239→   775→                  <p className="mt-1.5 text-[11px] text-zinc-500">
+   240→   776→                    Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, gunakan Setup berpandu di modul Kanal.
+   241→   777→                  </p>
+   242→   778→                </div>
+   243→   779→
+   244→   780→                {/* Semua tipe kanal + status koneksi */}
+   245→   781→                {CHANNEL_TYPE_KEYS.map((key) => {
+   246→   782→                  const meta = CHANNEL_TYPES[key];
+   247→   783→                  const Icon = CHANNEL_ICON[key] ?? Link2;
+   248→   784→                  const color = CHANNEL_COLOR[key] ?? "#52525b";
+   249→   785→                  const label = channelLabel(key);
+   250→   786→                  const cfg = cfgByChannel.get(key);
+   251→   787→                  return (
+   252→   788→                    <div key={key} className="rounded-xl border bg-white p-3.5">
+   253→   789→                      <div className="flex flex-wrap items-center gap-3">
+   254→   790→                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${color}1a` }} aria-hidden>
+   255→   791→                          <Icon className="h-4.5 w-4.5" style={{ color }} />
+   256→   792→                        </span>
+   257→   793→                        <div className="min-w-0 flex-1">
+   258→   794→                          <p className="flex items-center gap-1.5 truncate text-sm font-medium text-zinc-900">
+   259→   795→                            <span className="truncate">{label}</span>
+   260→   796→                            {cfg?.isDemo ? <Badge variant="outline" className="shrink-0 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Demo</Badge> : null}
+   261→   797→                          </p>
+   262→   798→                          <p className="truncate font-mono text-xs text-zinc-500">
+   263→   799→                            {cfg?.accountRef ?? (meta?.accountRefPlaceholder ? `mis. ${meta.accountRefPlaceholder}` : "—")}
+   264→   800→                          </p>
+   265→   801→                          {cfg?.status === "error" && cfg.statusNote ? (
+   266→   802→                            <p className="truncate text-[11px] text-amber-700">{cfg.statusNote}</p>
+   267→   803→                          ) : null}
+   268→   804→                          {cfg ? (
+   269→   805→                            <p className="truncate text-[11px] text-zinc-400">
+   270→   806→                              {cfg.lastTestedAt ? `Diuji ${fmtWhen(cfg.lastTestedAt)}` : cfg.connectedAt ? `Terhubung sejak ${fmtWhen(cfg.connectedAt)}` : "—"}
+   271→   807→                            </p>
+   272→   808→                          ) : null}
+   273→   809→                        </div>
+   274→   810→                        {cfg ? (
+   275→   811→                          cfg.status === "connected" ? (
+   276→   812→                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-50 text-emerald-700">
+   277→   813→                              <BadgeCheck className="h-3 w-3" aria-hidden /> Terhubung
+   278→   814→                            </Badge>
+   279→   815→                          ) : cfg.status === "error" ? (
+   280→   816→                            <Badge variant="outline" className="shrink-0 border-transparent bg-amber-50 text-amber-700">
+   281→   817→                              <TriangleAlert className="h-3 w-3" aria-hidden /> Error
+   282→   818→                            </Badge>
+   283→   819→                          ) : (
+   284→   820→                            <Badge variant="outline" className="shrink-0 border-transparent bg-zinc-100 text-zinc-600">Terputus</Badge>
+   285→   821→                          )
+   286→   822→                        ) : (
+   287→   823→                          <Badge variant="outline" className="shrink-0 border-zinc-200 bg-zinc-50 text-zinc-500">Belum terhubung</Badge>
+   288→   824→                        )}
+   289→   825→                        <div className="flex shrink-0 items-center gap-2">
+   290→   826→                          {cfg ? (
+   291→   827→                            <>
+   292→   828→                              {cfg.status !== "connected" ? (
+   293→   829→                                <Button
+   294→   830→                                  type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+   295→   831→                                  disabled={reconnectingId !== null || connectingKey !== null}
+   296→   832→                                  onClick={() => void reconnectChannel(cfg.id, label)}
+   297→   833→                                >
+   298→   834→                                  {reconnectingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+   299→   835→                                  Sambungkan ulang
+   300→   836→                                </Button>
+   301→   837→                              ) : null}
+   302→   838→                              <Button
+   303→   839→                                type="button" size="sm" variant="ghost" className="h-9 text-zinc-500 hover:text-rose-600"
+   304→   840→                                onClick={() => void disconnectChannel(cfg.id, cfg.displayName)}
+   305→   841→                              >
+   306→   842→                                Putuskan
+   307→   843→                              </Button>
+   308→   844→                            </>
+   309→   845→                          ) : (
+   310→   846→                            <Button
+   311→   847→                              type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+   312→   848→                              disabled={connectingKey !== null || reconnectingId !== null}
+   313→   849→                              onClick={() => void connectDemo(key)}
+   314→   850→                            >
+   315→   851→                              {connectingKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
+   316→   852→                              Hubungkan (Demo)
+   317→   853→                            </Button>
+   318→   854→                          )}
+   319→   855→                        </div>
+   320→   856→                      </div>
+   321→   857→                      {!cfg ? (
+   322→   858→                        <p className="mt-2 border-t pt-2 text-[11px] text-zinc-400">Setup kredensial nyata via modul Kanal.</p>
+   323→   859→                      ) : null}
+   324→   860→                    </div>
+   325→   861→                  );
+   326→   862→                })}
+   327→   863→              </div>
+   328→   864→            )}
+   329→   865→          </TabsContent>
+   330→   866→        </Tabs>
+   331→   867→      </DialogContent>
+   332→   868→    </Dialog>
+   333→   869→  );
+   334→   870→}
+   335→   871→
+   336→   872→// ============ BrandLogo (dipakai lintas modul) ============
+   337→   873→export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "color">; size?: "sm" | "md" | "lg" }) {
+   338→   874→  const dim = size === "sm" ? "h-8 w-8 text-sm" : size === "lg" ? "h-14 w-14 text-2xl" : "h-10 w-10 text-lg";
+   339→   875→  return (
+   340→   876→    <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-white`} aria-hidden>
+   341→   877→      {brand.logoUrl ? (
+   342→   878→         
+   343→   879→        <img src={brand.logoUrl} alt="" className="max-h-full max-w-full object-contain p-1" />
+   344→   880→      ) : (
+   345→   881→        <span className="font-bold" style={{ color: brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
+   346→   882→      )}
+   347→   883→    </span>
+   348→   884→  );
+   349→   885→}
+   350→   886→
+   351→   887→// ============ Editor katalog layanan & workflow ============
+   352→   888→
+   353→   889→function CatalogEditor({
+   354→   890→  catalog, busyKey, onAddCategory, onAddService, onAddStage, onToggleMilestone, onRemove, onSaveCost,
+   355→   891→}: {
+   356→   892→  catalog: BrandServiceCatalog;
+   357→   893→  busyKey: string | null;
+   358→   894→  onAddCategory: (name: string) => Promise<boolean>;
+   359→   895→  onAddService: (categoryId: string, name: string, unit: string, basePrice: string) => Promise<boolean>;
+   360→   896→  onAddStage: (serviceId: string, phase: string, name: string, isMilestone: boolean) => Promise<boolean>;
+   361→   897→  onToggleMilestone: (stage: { id: string; isMilestone: boolean; name: string }, serviceId: string) => Promise<boolean>;
+   362→   898→  onRemove: (kind: "category" | "service" | "stage", id: string, label: string) => Promise<boolean>;
+   363→   899→  onSaveCost: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+   364→   900→}) {
+   365→   901→  const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
+   366→   902→  const [openSvc, setOpenSvc] = useState<Record<string, boolean>>({});
+   367→   903→  const [newCatName, setNewCatName] = useState("");
+   368→   904→  const [catForms, setCatForms] = useState<Record<string, { name: string; unit: string; price: string }>>({});
+   369→   905→  const [stageForms, setStageForms] = useState<Record<string, { phase: string; name: string; milestone: boolean }>>({});
+   370→   906→
+   371→   907→  const servicesByCat = useMemo(() => {
+   372→   908→    const map = new Map<string | null, ServiceDTO[]>();
+   373→   909→    for (const s of catalog.services) {
+   374→   910→      const key = s.categoryId ?? null;
+   375→   911→      const list = map.get(key) ?? [];
+   376→   912→      list.push(s);
+   377→   913→      map.set(key, list);
+   378→   914→    }
+   379→   915→    return map;
+   380→   916→  }, [catalog.services]);
+   381→   917→
+   382→   918→  const uncategorized = servicesByCat.get(null) ?? [];
+   383→   919→
+   384→   920→  return (
+   385→   921→    <div className="space-y-4">
+   386→   922→      <p className="text-xs leading-relaxed text-zinc-500">
+   387→   923→        Kategori & layanan khas brand ini. Tiap layanan punya <span className="font-medium text-zinc-700">workflow produksi</span> sendiri
+   388→   924→        (fase → langkah, sebagian ditandai <span className="font-medium text-zinc-700">milestone</span> yang menjadi tahapan project).
+   389→   925→      </p>
+   390→   926→
+   391→   927→      {catalog.categories.map((cat: ServiceCategoryDTO) => {
+   392→   928→        const svcs = servicesByCat.get(cat.id) ?? [];
+   393→   929→        const open = openCat[cat.id] ?? true;
+   394→   930→        return (
+   395→   931→          <div key={cat.id} className="overflow-hidden rounded-xl border">
+   396→   932→            <div className="flex items-center gap-2 bg-zinc-50/80 px-4 py-3">
+   397→   933→              <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenCat((m) => ({ ...m, [cat.id]: !open }))}>
+   398→   934→                <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform ${open ? "" : "-rotate-90"}`} aria-hidden />
+   399→   935→                <span className="truncate text-sm font-bold text-zinc-900">{cat.name}</span>
+   400→   936→                <Badge variant="outline" className="border-transparent bg-zinc-200/70 px-1.5 text-[10px] text-zinc-600">{svcs.length} layanan</Badge>
+   401→   937→                {cat.description ? <span className="hidden truncate text-xs text-zinc-500 sm:inline">— {cat.description}</span> : null}
+   402→   938→              </button>
+   403→   939→              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+   404→   940→                aria-label={`Hapus kategori ${cat.name}`} onClick={() => void onRemove("category", cat.id, cat.name)}>
+   405→   941→                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   406→   942→              </Button>
+   407→   943→            </div>
+   408→   944→            {open ? (
+   409→   945→              <div className="divide-y">
+   410→   946→                {svcs.map((svc) => {
+   411→   947→                  const svcOpen = openSvc[svc.id] ?? false;
+   412→   948→                  const form = stageForms[svc.id] ?? { phase: "", name: "", milestone: false };
+   413→   949→                  return (
+   414→   950→                    <div key={svc.id} className="px-4 py-3">
+   415→   951→                      <div className="flex items-start gap-2">
+   416→   952→                        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenSvc((m) => ({ ...m, [svc.id]: !svcOpen }))}>
+   417→   953→                          <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${svcOpen ? "" : "-rotate-90"}`} aria-hidden />
+   418→   954→                          <div className="min-w-0">
+   419→   955→                            <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
+   420→   956→                            <p className="text-xs text-zinc-500">
+   421→   957→                              {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
+   422→   958→                            </p>
+   423→   959→                          </div>
+   424→   960→                        </button>
+   425→   961→                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-rose-600"
+   426→   962→                          aria-label={`Hapus layanan ${svc.name}`} onClick={() => void onRemove("service", svc.id, svc.name)}>
+   427→   963→                          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   428→   964→                        </Button>
+   429→   965→                      </div>
+   430→   966→
+   431→   967→                      {/* Rincian biaya (template harga) — Ronde 29-b */}
+   432→   968→                      <ServiceCostEditor service={svc} onSave={onSaveCost} />
+   433→   969→
+   434→   970→                      {svcOpen ? (
+   435→   971→                        <div className="mt-3 space-y-2.5 pl-6">
+   436→   972→                          {/* Workflow */}
+   437→   973→                          {svc.workflow.length > 0 ? (
+   438→   974→                            <ol className="space-y-1.5">
+   439→   975→                              {svc.workflow.map((w, idx) => (
+   440→   976→                                <li key={w.id} className="flex items-center gap-2 rounded-lg border bg-zinc-50/60 px-3 py-2">
+   441→   977→                                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white" aria-hidden>{idx + 1}</span>
+   442→   978→                                  <div className="min-w-0 flex-1">
+   443→   979→                                    <p className="truncate text-xs font-medium text-zinc-800">
+   444→   980→                                      {w.name}
+   445→   981→                                      {w.isMilestone ? (
+   446→   982→                                        <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
+   447→   983→                                      ) : null}
+   448→   984→                                    </p>
+   449→   985→                                    <p className="truncate text-[11px] text-zinc-500">{w.phase}</p>
+   450→   986→                                  </div>
+   451→   987→                                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
+   452→   988→                                    disabled={busyKey === `stg:${svc.id}`}
+   453→   989→                                    onClick={() => void onToggleMilestone(w, svc.id)}>
+   454→   990→                                    {w.isMilestone ? "Lepas" : "Jadikan milestone"}
+   455→   991→                                  </Button>
+   456→   992→                                  <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+   457→   993→                                    aria-label={`Hapus langkah ${w.name}`} onClick={() => void onRemove("stage", w.id, `${w.phase} · ${w.name}`)}>
+   458→   994→                                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   459→   995→                                  </Button>
+   460→   996→                                </li>
+   461→   997→                              ))}
+   462→   998→                            </ol>
+   463→   999→                          ) : (
+   464→  1000→                            <p className="text-xs italic text-zinc-400">Belum ada workflow — tambahkan fase produksi di bawah.</p>
+   465→  1001→                          )}
+   466→  1002→
+   467→  1003→                          {/* Form tambah langkah */}
+   468→  1004→                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed p-2.5">
+   469→  1005→                            <div className="w-32 space-y-1">
+   470→  1006→                              <Label className="text-[11px]">Fase</Label>
+   471→  1007→                              <Input className="h-8 text-xs" value={form.phase} placeholder="mis. Production"
+   472→  1008→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, phase: e.target.value } }))} />
+   473→  1009→                            </div>
+   474→  1010→                            <div className="min-w-[160px] flex-1 space-y-1">
+   475→  1011→                              <Label className="text-[11px]">Langkah</Label>
+   476→  1012→                              <Input className="h-8 text-xs" value={form.name} placeholder="mis. Creative Concept & Story Board"
+   477→  1013→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, name: e.target.value } }))} />
+   478→  1014→                            </div>
+   479→  1015→                            <label className="flex items-center gap-1.5 pb-2 text-xs text-zinc-600">
+   480→  1016→                              <input type="checkbox" className="accent-zinc-900" checked={form.milestone}
+   481→  1017→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, milestone: e.target.checked } }))} />
+   482→  1018→                              Milestone
+   483→  1019→                            </label>
+   484→  1020→                            <Button type="button" size="sm" variant="outline" className="h-8"
+   485→  1021→                              disabled={busyKey === `stg:${svc.id}` || !form.name.trim()}
+   486→  1022→                              onClick={() => void onAddStage(svc.id, form.phase, form.name, form.milestone)
+   487→  1023→                                .then(() => setStageForms((m) => ({ ...m, [svc.id]: { phase: "", name: "", milestone: false } })))}>
+   488→  1024→                              <Plus className="h-3.5 w-3.5" aria-hidden /> Langkah
+   489→  1025→                            </Button>
+   490→  1026→                          </div>
+   491→  1027→                        </div>
+   492→  1028→                      ) : null}
+   493→  1029→                    </div>
+   494→  1030→                  );
+   495→  1031→                })}
+   496→  1032→
+   497→  1033→                {/* Form tambah layanan */}
+   498→  1034→                <ServiceAddForm
+   499→  1035→                  busy={busyKey === `svc:${cat.id}`}
+   500→  1036→                  form={catForms[cat.id] ?? { name: "", unit: "", price: "" }}
+   501→  1037→                  onChange={(form) => setCatForms((m) => ({ ...m, [cat.id]: form }))}
+   502→  1038→                  onSubmit={(f) =>
+   503→  1039→                    onAddService(cat.id, f.name, f.unit, f.price)
+   504→  1040→                      .then((res) => {
+   505→  1041→                        if (res) setCatForms((m) => ({ ...m, [cat.id]: { name: "", unit: "", price: "" } }));
+   506→  1042→                        return res;
+   507→  1043→                      })
+   508→  1044→                  }
+   509→  1045→                />
+   510→  1046→              </div>
+   511→  1047→            ) : null}
+   512→  1048→          </div>
+   513→  1049→        );
+   514→  1050→      })}
+   515→  1051→
+   516→  1052→      {/* Tanpa kategori */}
+   517→  1053→      {uncategorized.length > 0 ? (
+   518→  1054→        <div className="rounded-xl border border-dashed p-3">
+   519→  1055→          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Tanpa kategori</p>
+   520→  1056→          <div className="flex flex-wrap gap-1.5">
+   521→  1057→            {uncategorized.map((s) => (
+   522→  1058→              <span key={s.id} className="group inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs text-zinc-600">
+   523→  1059→                {s.name}
+   524→  1060→                <button type="button" className="text-zinc-300 hover:text-rose-600" aria-label={`Hapus ${s.name}`} onClick={() => void onRemove("service", s.id, s.name)}>
+   525→  1061→                  <X className="h-3 w-3" aria-hidden />
+   526→  1062→                </button>
+   527→  1063→              </span>
+   528→  1064→            ))}
+   529→  1065→          </div>
+   530→  1066→        </div>
+   531→  1067→      ) : null}
+   532→  1068→
+   533→  1069→      {/* Form kategori baru */}
+   534→  1070→      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-dashed p-3.5">
+   535→  1071→        <div className="min-w-[180px] flex-1 space-y-1">
+   536→  1072→          <Label className="text-xs">Kategori layanan baru</Label>
+   537→  1073→          <Input className="h-9" value={newCatName} placeholder="mis. Animasi 3D"
+   538→  1074→            onChange={(e) => setNewCatName(e.target.value)} />
+   539→  1075→        </div>
+   540→  1076→        <Button type="button" size="sm" className="h-9" disabled={busyKey === "cat:new" || !newCatName.trim()}
+   541→  1077→          onClick={() => void onAddCategory(newCatName).then((res) => { if (res) setNewCatName(""); return res; })}>
+   542→  1078→          <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah kategori
+   543→  1079→        </Button>
+   544→  1080→      </div>
+   545→  1081→    </div>
+   546→  1082→  );
+   547→  1083→}
+   548→  1084→
+   549→  1085→function ServiceAddForm({
+   550→  1086→  busy, form, onChange, onSubmit,
+   551→  1087→}: {
+   552→  1088→  busy: boolean;
+   553→  1089→  form: { name: string; unit: string; price: string };
+   554→  1090→  onChange: (form: { name: string; unit: string; price: string }) => void;
+   555→  1091→  onSubmit: (form: { name: string; unit: string; price: string }) => Promise<boolean>;
+   556→  1092→}) {
+   557→  1093→  return (
+   558→  1094→    <div className="flex flex-wrap items-end gap-2 bg-zinc-50/60 px-4 py-3">
+   559→  1095→      <div className="min-w-[160px] flex-1 space-y-1">
+   560→  1096→        <Label className="text-[11px]">Layanan baru</Label>
+   561→
+   562→[showing lines 537-1096 of 1323; use offset=1097 with limit to continue reading]

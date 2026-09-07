@@ -1570,3 +1570,25 @@ Stage Summary:
 - Detail project kini bisa edit PM/deadline/budget (bukan cuma status+progress)
 - Tidak ada skema DB baru; semua perubahan backward-compatible
 - Backlog (dari explore, tidak diubah): milestone tak bisa dihapus/reorder; invoice fetch per company + filter klien (belum projectId param); estimasi cost breakdown belum dibawa ke budgetInternal; notif center tak loncat ke project spesifik
+
+---
+Task ID: 39-main
+Agent: Z.ai Code (main)
+Task: 3 permintaan user — edit layanan/workflow & modal brand, integrasi pipeline (revisi + edit per-user), notifikasi nyata VAPID
+
+Work Log:
+- Explore 2 agent paralel: brand-settings-dialog (UI edit gap — API PATCH sudah lengkap sejak r29-b tapi UI tak punya tombol edit), notifikasi (bell REAL dari DB 7 jenis tapi TANPA push keluar-aplikasi: tak ada sw/web-push/VAPID/subscription), pipeline (quotation rejected jalan buntu, opportunity tak bisa diedit sama sekali, PATCH tanpa gate owner/role)
+- BRAND SETTINGS: edit inline layanan (nama/satuan/harga dasar) & langkah workflow (fase/nama) via PATCH existing + tombol Pencil per baris; modal max-w-3xl→max-w-5xl + PENTING: sm:max-w-5xl wajib karena sm:max-w-lg base shadcn menang cascade (512px→1024px terverifikasi)
+- VAPID PUSH: bun add web-push + @types/web-push; generate keys → .env; model PushSubscription (userKey/endpoint unique/p256dh/auth/userAgent) + db push; src/lib/crm/push.ts (sendPushToRoles/sendPushToUserKeys, cleanup 404/410, fail-closed tanpa env); public/sw.js (push + notificationclick focus/navigate); route /api/push/public-key (session-gated), subscribe (upsert by endpoint, userKey dari SESI), unsubscribe; 5 hook event: deal Won (director+super_admin), quotation sent/accepted/rejected, CR baru, review klien (revisi/approve — production+director), milestone done; deep-link /?modul=<key> di page.tsx (validasi canAccess + history.replaceState); UI toggle Push Browser di panel preferensi notification-center (status: unsupported/unavailable/prompt/subscribed/denied)
+- PIPELINE: schema Quotation +revisionOfId (self-relation SetNull)+revisionNo; POST /api/quotations menerima revisionOfId (validasi opportunity sama, revisionNo=src+1); QuotationFormDialog mode reviseOf (prefill items/diskon/pajak + catatan revisi otomatis); QuotationCard: tombol "Revisi & Kirim Ulang" untuk status rejected + badge "Revisi ke-N"; OpportunityFormDialog mode edit (editData prop: prefill, brand/kontak disabled, PATCH field updatable saja, label tombol dinamis, disabled mode-aware); server gate PATCH opportunity: pemilik atau super_admin/director (403 selain itu), ganti ownerName hanya pimpinan, DELETE hanya pimpinan; tombol "Edit Peluang" di drawer (canEditOpp)
+- auth.ts: ResolvedActor +email (additive)
+- QA browser (Sari/direktur): dialog brand 1024px ✓; edit SEO Optimization 5jt→6jt→API verify→revert ✓; rename stage "Deploy & SEO Setup"→"v2"→verify→revert ✓; form edit ter-prefill ✓; QUO-2026-0004 reject via API → kartu Ditolak + tombol Revisi → dialog prefill "Revisi dari QUO-2026-0004" → buat QUO-2026-0006 draft + badge "Revisi ke-1" ✓; Edit Peluang: dialog prefill + brand/kontak disabled + ubah 185jt→190jt→API verify→revert ✓; gate 403: dewi edit opp Andi 403 ✓, dewi ganti owner 403 ✓, Andi edit sendiri 200 ✓; push: public-key 200 + key, subscribe 201, toggle UI tampil "Belum aktif", headless permission denied → UI tampil "Izin diblokir" (graceful), milestone done→push path 200 (gagal kirim ke endpoint fake ditelan silent) ✓
+- CLEANUP: sub QA + QUO-2026-0006 dihapus, QUO-2026-0004 kembali sent, milestone kembali in_progress, prob Andi 85 restored; skrip temp terhapus
+- INSIDEN: dev server mati saat db push (bun regen) — restart aman; false alarm "file korup" (artefak tampilan sed, od -c bukti utuh)
+- lint 0, tsc 0, dev.log bersih; commit 8a6b08f push origin/main
+
+Stage Summary:
+- Layanan & workflow kini penuh CRUD dari UI; modal brand 2x lebih lebar
+- Notifikasi push VAPID nyata (dev): subscribe dari UI, 7 jenis notifikasi bell tetap + 5 event push baru; penyampaian nyata butuh izin browser di perangkat user (di headless diblokir — normal)
+- Quotation ditolak kini punya jalur revisi ber-riwayat; peluang kini bisa diedit sesuai hak user (pemilik/pimpinan) dengan gate server
+- Catatan user (paling penting): push VAPID dev-ready; kunci di .env (VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT) — produksi wajib regenerasi & simpan aman
