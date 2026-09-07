@@ -1041,6 +1041,9 @@ export default function PipelineModule() {
   const { user, brands, activeBrandFilter, setActiveBrandFilter } = useCrmStore();
   const pendingFocus = useCrmStore((s) => s.pendingFocus);
   const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
+  // Ronde 38 — toast Won bisa melompat ke detail project produksi.
+  const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
 
   const [opps, setOpps] = useState<OpportunityDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1204,10 +1207,22 @@ export default function PipelineModule() {
         actorRole: user?.role ?? "system",
       });
       if (stage === "won") {
+        // Ronde 38 — tombol aksi di toast: langsung buka detail project produksi.
         toast.success(
           res.createdProject
             ? `Deal Won! Project ${res.createdProject.code} otomatis dibuat beserta invoice DP`
-            : "Deal ditandai Won"
+            : "Deal ditandai Won",
+          res.createdProject
+            ? {
+                action: {
+                  label: "Buka Project",
+                  onClick: () => {
+                    setPendingFocus({ module: "projects", id: res.createdProject!.id });
+                    setActiveModule("projects");
+                  },
+                },
+              }
+            : undefined
         );
       } else {
         toast.success(`Stage "${opp.title}" diubah ke ${stageLabel(stage)}`);

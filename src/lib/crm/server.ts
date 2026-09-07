@@ -177,7 +177,14 @@ export async function handleWonTransition(oppId: string) {
     const year = new Date().getFullYear();
     const count = await tx.project.count();
     const prefix = opp.brand.slug.slice(0, 3).toUpperCase().replace("_", "");
-    const code = `${prefix}-${year}-${String(count + 1).padStart(3, "0")}`;
+    // Ronde 38 — jaminan unik kode project (retry): bila pola counter sudah dipakai project
+    // manual, Won tidak lagi gagal 500 (pola identik dengan POST /api/projects).
+    let counter = count + 1;
+    let code = `${prefix}-${year}-${String(counter).padStart(3, "0")}`;
+    while (await tx.project.findUnique({ where: { code } })) {
+      counter += 1;
+      code = `${prefix}-${year}-${String(counter).padStart(3, "0")}`;
+    }
 
     const project = await tx.project.create({
       data: {

@@ -68,7 +68,7 @@ export const api = {
   createOpportunity: (payload: Record<string, unknown>) =>
     request<{ opportunity: OpportunityDTO }>("/api/opportunities", { method: "POST", body: JSON.stringify(payload) }),
   updateOpportunity: (id: string, payload: Record<string, unknown>) =>
-    request<{ opportunity: OpportunityDTO; createdProject?: { code: string } | null }>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    request<{ opportunity: OpportunityDTO; createdProject?: { code: string; id: string } | null }>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   aiSummary: (id: string) =>
     request<{ summary: string }>(`/api/opportunities/${id}/summary`, { method: "POST" }),
 

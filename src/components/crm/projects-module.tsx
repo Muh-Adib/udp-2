@@ -1179,6 +1179,11 @@ export default function ProjectsModule() {
   const [detail, setDetail] = useState<ProjectDTO | null>(null);
   const [editStatus, setEditStatus] = useState("planning");
   const [editProgress, setEditProgress] = useState("0");
+  // Ronde 38 — detail kini juga bisa mengedit PM, deadline & budget internal
+  // (API PATCH sudah mendukung ketiganya sejak r26, UI-nya yang belum ada).
+  const [editPm, setEditPm] = useState("");
+  const [editDue, setEditDue] = useState("");
+  const [editBudget, setEditBudget] = useState("");
   const [savingDetail, setSavingDetail] = useState(false);
 
   // Change request (Fase 2 — Produksi)
@@ -1363,6 +1368,9 @@ export default function ProjectsModule() {
     setDetail(p);
     setEditStatus(p.status);
     setEditProgress(String(p.progress));
+    setEditPm(p.pmName ?? "");
+    setEditDue(p.dueDate ? toDateInputValue(new Date(p.dueDate)) : "");
+    setEditBudget(p.budgetInternal != null ? String(p.budgetInternal) : "");
     setDfOpen(false);
     resetDf();
   }
@@ -1370,13 +1378,24 @@ export default function ProjectsModule() {
   // Global search (ronde 26) — buka sheet detail project hasil pencarian (⌘K).
   // Bila daftar belum termuat (null), pendingFocus dipertahankan — effect berjalan lagi
   // saat data tiba; sudah termuat tapi id tak ketemu → cukup pindah modul (clear).
+  // Ronde 38 — bila id TIDAK ketemu karena filter aktif (status/brand), reset filter
+  // ke "all" dan tunggu reload — dulu fokus diam-diam dibuang dan detail tak terbuka.
   useEffect(() => {
     if (!pendingFocus || pendingFocus.module !== "projects") return;
     if (!projects) return; // menunggu load pertama selesai
     const target = projects.find((p) => p.id === pendingFocus.id);
-    if (target) openDetail(target);
+    if (target) {
+      openDetail(target);
+      clearPendingFocus();
+      return;
+    }
+    if (statusFilter !== "all" || brandFilter !== "all") {
+      setStatusFilter("all");
+      setBrandFilter("all");
+      return; // load() berjalan via effect filter — effect ini berjalan lagi setelah data tiba
+    }
     clearPendingFocus();
-  }, [pendingFocus, projects, clearPendingFocus]);
+  }, [pendingFocus, projects, clearPendingFocus, statusFilter, brandFilter]);
 
   function resetDf() {
     setDfName("");
@@ -1780,9 +1799,22 @@ export default function ProjectsModule() {
     if (!detail) return;
     const progress = Math.max(0, Math.min(100, Number(editProgress)));
     if (!Number.isFinite(progress)) { toast.error("Progress harus angka 0–100"); return; }
+    // Ronde 38 — validasi budget internal (boleh kosong → 0).
+    const budgetNum = Number(editBudget);
+    if (editBudget.trim() !== "" && !Number.isFinite(budgetNum)) {
+      toast.error("Budget internal harus angka");
+      return;
+    }
     setSavingDetail(true);
     try {
-      const res = await api.updateProject({ id: detail.id, status: editStatus, progress });
+      const res = await api.updateProject({
+        id: detail.id,
+        status: editStatus,
+        progress,
+        pmName: editPm.trim() || null,
+        budgetInternal: editBudget.trim() === "" ? 0 : Math.round(budgetNum),
+        dueDate: editDue ? editDue : null,
+      });
       setProjects((prev) => (prev ?? []).map((p) => (p.id === res.project.id ? { ...p, ...res.project } : p)));
       setDetail((d) => (d ? { ...d, ...res.project, status: editStatus, progress } : d));
       toast.success(`Project ${res.project.code} diperbarui`);
@@ -1911,8 +1943,16 @@ export default function ProjectsModule() {
         actorName: user.name,
         actorRole: user.role,
       });
-      toast.success("Proyek dibuat", { description: `${res.project.code} — muncul di daftar project` });
+      // Ronde 38 — API kini mengembalikan project lengkap (brand/company/milestone/
+      // changeRequests) + milestone otomatis dari template workflow layanan;
+      // detail langsung dibuka agar alur "buat → isi detail" tersambung.
+      const created = res.project as ProjectDTO;
+      toast.success("Proyek dibuat", {
+        description: `${created.code} — ${created.milestones?.length ? `${created.milestones.length} milestone dari template workflow` : "tambahkan milestone & detail produksi di panel ini"}`,
+      });
       setNpOpen(false);
+      setProjects((prev) => (prev ? [created, ...prev] : [created]));
+      openDetail(created);
       await load(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal membuat project");
@@ -2563,7 +2603,7 @@ export default function ProjectsModule() {
                   )}
                 </div>
 
-                {/* Update status & progress */}
+                {/* Update status, progress & detail produksi */}
                 <form onSubmit={saveDetail} className="space-y-3 rounded-xl border bg-zinc-50 p-4">
                   <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
                     <Factory className="h-3.5 w-3.5" aria-hidden /> Update Produksi
@@ -2587,6 +2627,29 @@ export default function ProjectsModule() {
                         id="proj-progress" type="number" min={0} max={100}
                         value={editProgress}
                         onChange={(e) => setEditProgress(e.target.value)}
+                      />
+                    </div>
+                    {/* Ronde 38 — edit PM, deadline & budget internal langsung dari detail */}
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="proj-pm">Project Manager</Label>
+                      <Input
+                        id="proj-pm" value={editPm} placeholder="Nama PM"
+                        onChange={(e) => setEditPm(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="proj-due">Deadline</Label>
+                      <Input
+                        id="proj-due" type="date" value={editDue}
+                        onChange={(e) => setEditDue(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1.5 sm:col-span-2">
+                      <Label htmlFor="proj-budget">Budget Internal (Rp)</Label>
+                      <Input
+                        id="proj-budget" type="number" min={0} step={100000} value={editBudget}
+                        placeholder="Misal 27500000"
+                        onChange={(e) => setEditBudget(e.target.value)}
                       />
                     </div>
                   </div>

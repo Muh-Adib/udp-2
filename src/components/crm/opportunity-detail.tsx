@@ -1836,10 +1836,22 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     try {
       const res = await api.updateOpportunity(activeId, { stage, ...extra, ...actorMeta });
       if (stage === "won") {
+        // Ronde 38 — tombol aksi di toast: langsung buka detail project produksi.
         toast.success(
           res.createdProject
             ? `Deal Won! Project ${res.createdProject.code} otomatis dibuat beserta invoice DP`
-            : "Stage diubah ke Won"
+            : "Stage diubah ke Won",
+          res.createdProject
+            ? {
+                action: {
+                  label: "Buka Project",
+                  onClick: () => {
+                    setPendingFocus({ module: "projects", id: res.createdProject!.id });
+                    setActiveModule("projects");
+                  },
+                },
+              }
+            : undefined
         );
       } else {
         toast.success(`Stage diubah ke ${stageLabel(stage)}`);

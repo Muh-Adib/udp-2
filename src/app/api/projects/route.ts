@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody, clampNum } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { workflowFor, achievementFor } from "@/lib/crm/constants";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -29,7 +30,10 @@ export async function GET(req: NextRequest) {
  * Kode project dibuat dengan pola yang sama persis dengan handleWonTransition
  * (src/lib/crm/server.ts): PREFIX dari slug brand (3 char pertama, uppercase,
  * underscore di-strip) + tahun + counter 3 digit, dengan retry bila code sudah dipakai.
- * Milestone/invoice TIDAK dibuat otomatis (hanya alur Won).
+ * Ronde 38 — milestone kini OTOMATIS dibuat dari template workflow layanan
+ * (workflowFor) seperti alur Won, sehingga project manual punya Alur Produksi;
+ * project + milestone ditulis dalam SATU transaksi (atomic).
+ * Invoice DP TETAP hanya untuk alur Won.
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
@@ -62,23 +66,45 @@ export async function POST(req: NextRequest) {
   const serviceCategory = body.serviceCategory ? String(body.serviceCategory) : null;
   const startDate = body.startDate ? new Date(String(body.startDate)) : null;
   const dueDate = body.dueDate ? new Date(String(body.dueDate)) : null;
+  const safeStart = startDate && !Number.isNaN(startDate.getTime()) ? startDate : null;
+  const safeDue = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null;
 
-  const project = await db.project.create({
-    data: {
-      code,
-      name,
-      brandId,
-      companyId,
-      serviceCategory,
-      status,
-      progress: 0,
-      pmName,
-      startDate: startDate && !Number.isNaN(startDate.getTime()) ? startDate : null,
-      dueDate: dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null,
-      budgetInternal: Number(body.budgetInternal) || 0,
-      contractValue: Number(body.contractValue) || 0,
-    },
-    include: { brand: true, company: true },
+  // Ronde 38 — project + milestone dalam satu transaksi (atomic, pola handleWonTransition).
+  const project = await db.$transaction(async (tx) => {
+    const created = await tx.project.create({
+      data: {
+        code,
+        name,
+        brandId,
+        companyId,
+        serviceCategory,
+        status,
+        progress: 0,
+        pmName,
+        startDate: safeStart,
+        dueDate: safeDue,
+        budgetInternal: Number(body.budgetInternal) || 0,
+        contractValue: Number(body.contractValue) || 0,
+      },
+    });
+
+    // Milestone dari template workflow layanan — bila layanan dikenal.
+    const flow = workflowFor(serviceCategory);
+    if (flow.length > 0) {
+      const startMs = safeStart?.getTime() ?? Date.now();
+      const span = safeDue ? safeDue.getTime() - startMs : 60 * 24 * 60 * 60 * 1000;
+      await tx.milestone.createMany({
+        data: flow.map((mName, i) => ({
+          projectId: created.id,
+          name: mName,
+          order: i,
+          status: i === 0 ? "in_progress" : "pending",
+          dueDate: new Date(startMs + ((i + 1) * span) / flow.length),
+          achievement: achievementFor(mName),
+        })),
+      });
+    }
+    return created;
   });
 
   await logAudit({
@@ -88,11 +114,19 @@ export async function POST(req: NextRequest) {
     entity: "project",
     entityId: project.id,
     entityLabel: name,
-    newValue: JSON.stringify({ code: project.code, brand: brand.name, company: company.name, status }),
+    newValue: JSON.stringify({ code: project.code, brand: brand.name, company: company.name, status, milestones: workflowFor(serviceCategory).length }),
     req,
   });
 
-  return ok({ project }, 201);
+  // Include paritas dengan GET agar UI bisa langsung membuka detail tanpa fetch ulang.
+  const full = await db.project.findUnique({
+    where: { id: project.id },
+    include: {
+      brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
+      changeRequests: { orderBy: { createdAt: "desc" } },
+    },
+  });
+  return ok({ project: full }, 201);
 }
 
 export async function PATCH(req: NextRequest) {
