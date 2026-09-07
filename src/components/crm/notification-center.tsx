@@ -238,6 +238,95 @@ export default function NotificationCenter() {
     realtimeRef.current = realtimeConnected;
   }, [realtimeConnected]);
 
+  // ===== Ronde 39 — Web Push (VAPID) =====
+  // status: unsupported (browser tak dukung) | unavailable (server tanpa VAPID) | prompt | subscribed | denied
+  const [pushStatus, setPushStatus] = useState<"checking" | "unsupported" | "unavailable" | "prompt" | "subscribed" | "denied">("checking");
+  const [pushBusy, setPushBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    let alive = true;
+    (async () => {
+      try {
+        if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+          if (alive) setPushStatus("unsupported");
+          return;
+        }
+        const { publicKey } = await api.pushPublicKey();
+        if (!publicKey) {
+          if (alive) setPushStatus("unavailable");
+          return;
+        }
+        if (Notification.permission === "denied") {
+          if (alive) setPushStatus("denied");
+          return;
+        }
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = reg ? await reg.pushManager.getSubscription() : null;
+        if (alive) setPushStatus(sub ? "subscribed" : Notification.permission === "granted" ? "prompt" : "prompt");
+      } catch {
+        if (alive) setPushStatus("unavailable");
+      }
+    })();
+    return () => { alive = false; };
+  }, [user]);
+
+  const enablePush = useCallback(async () => {
+    if (!user || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        setPushStatus(perm === "denied" ? "denied" : "prompt");
+        toast.info("Izin notifikasi belum diberikan");
+        return;
+      }
+      const { publicKey } = await api.pushPublicKey();
+      if (!publicKey) {
+        setPushStatus("unavailable");
+        toast.error("Server belum dikonfigurasi VAPID");
+        return;
+      }
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      const sub = existing ?? await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: publicKey,
+      });
+      const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+      if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) throw new Error("Langganan tidak lengkap");
+      await api.pushSubscribe({ endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } });
+      setPushStatus("subscribed");
+      toast.success("Notifikasi push aktif — pemberitahuan akan tampil walau tab tertutup");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengaktifkan push");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [user, pushBusy]);
+
+  const disablePush = useCallback(async () => {
+    if (!user || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      if (sub) {
+        await api.pushUnsubscribe(sub.endpoint);
+        await sub.unsubscribe().catch(() => {});
+      } else {
+        await api.pushUnsubscribe();
+      }
+      setPushStatus("prompt");
+      toast.success("Notifikasi push dimatikan untuk perangkat ini");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mematikan push");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [user, pushBusy]);
+
   // "Status sistem" (ronde 17-d): refresh SETIAP panel preferensi dibuka — tanpa interval.
   // Kesehatan server via GET /api/health; statistik realtime service via socket "stats"
   // (hanya saat socket browser konek — saat fallback, status layanan dicek dari server).
@@ -486,6 +575,27 @@ export default function NotificationCenter() {
                   {dbLine.text}
                 </li>
               </ul>
+              {/* Ronde 39 — Web Push (VAPID): pemberitahuan sistem walau tab tertutup */}
+              {pushStatus !== "checking" && pushStatus !== "unsupported" && pushStatus !== "unavailable" && (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2" data-testid="push-toggle">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-zinc-700">Push Browser</p>
+                    <p className="truncate text-[11px] text-zinc-500">
+                      {pushStatus === "subscribed"
+                        ? "Aktif di perangkat ini — notifikasi tampil walau tab tertutup"
+                        : pushStatus === "denied"
+                          ? "Izin diblokir — ubah izin notifikasi di browser"
+                          : "Belum aktif — izinkan notifikasi di perangkat ini"}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={pushStatus === "subscribed"}
+                    disabled={pushBusy || pushStatus === "denied"}
+                    onCheckedChange={(checked) => void (checked ? enablePush() : disablePush())}
+                    aria-label={pushStatus === "subscribed" ? "Matikan notifikasi push" : "Aktifkan notifikasi push"}
+                  />
+                </div>
+              )}
             </div>
           </div>
         ) : null}

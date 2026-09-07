@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, fail, logAudit } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -97,6 +98,19 @@ export async function POST(req: NextRequest) {
     metadata: `Change request diajukan untuk project ${project.code}: +Rp ${cr.additionalCost.toLocaleString("id-ID")}, +${cr.additionalDays} hari`,
     req,
   });
+
+  // Ronde 39 — push VAPID: CR baru menunggu persetujuan direktur
+  void sendPushToRoles(
+    ["director", "super_admin"],
+    {
+      title: "Change Request baru",
+      body: `${cr.number} — ${cr.title} · +Rp ${cr.additionalCost.toLocaleString("id-ID")} · +${cr.additionalDays} hari (menunggu persetujuan)`,
+      url: "/?modul=projects",
+      tag: `cr-${cr.id}`,
+      type: "cr",
+    },
+    actor.email
+  ).catch(() => {});
 
   return ok({ changeRequest: cr }, 201);
 }

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, handleWonTransition, numOrNull, clampNum, dateOrNull } from "@/lib/crm/server";
 import { computeLeadScore } from "@/lib/crm/scoring";
 import { resolveActor } from "@/lib/crm/auth";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 /** Hitung skor lead + sisipkan score/scoreReasons/_count ke row opportunity Prisma. */
 function enrichScore<
@@ -82,6 +83,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const current = await db.opportunity.findUnique({ where: { id }, include: { brand: true } });
   if (!current) return fail("Opportunity tidak ditemukan", 404);
+
+  // Ronde 39 — editing sesuai user: hanya pemilik opportunity atau pimpinan
+  // (super_admin/director) yang boleh mengubah; role lain (finance/production) read-only.
+  const isLeadership = actorRole === "super_admin" || actorRole === "director";
+  if (!isLeadership && current.ownerName !== actorName) {
+    return fail("Hanya pemilik opportunity atau pimpinan yang dapat mengubah opportunity ini", 403);
+  }
+  // Ganti pemilik (ownerName) hanya boleh oleh pimpinan — anti self-assign oleh non-pimpinan.
+  if (!isLeadership && "ownerName" in body && body.ownerName !== current.ownerName) {
+    return fail("Hanya pimpinan yang dapat mengganti pemilik opportunity", 403);
+  }
 
   const updatable = [
     "title", "serviceCategory", "serviceName", "leadSource", "brief", "requirements",
@@ -163,6 +175,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       metadata: "Project otomatis dibuat dari opportunity Won beserta milestone & invoice DP",
       req,
     });
+    // Ronde 39 — push VAPID: direktur & super admin tahu deal baru Won
+    void sendPushToRoles(
+      ["director", "super_admin"],
+      {
+        title: "Deal Won 🎉",
+        body: `${opportunity.title} — project ${createdProject?.code ?? "?"} dibuat beserta invoice DP`,
+        url: "/?modul=projects",
+        tag: `won-${id}`,
+        type: "opportunity",
+      },
+      actor.email
+    ).catch(() => {});
   }
 
   return ok({ opportunity, createdProject });
@@ -172,6 +196,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   // Ronde 27: identitas aktor diambil dari sesi (cookie).
   const actor = await resolveActor(req);
   if (actor.denied) return fail(actor.reason, 401);
+  // Ronde 39 — hapus opportunity hanya boleh pimpinan (dulu semua role bisa).
+  if (actor.role !== "super_admin" && actor.role !== "director") {
+    return fail("Hanya pimpinan yang dapat menghapus opportunity", 403);
+  }
   const { id } = await params;
   const current = await db.opportunity.findUnique({ where: { id } });
   if (!current) return fail("Opportunity tidak ditemukan", 404);

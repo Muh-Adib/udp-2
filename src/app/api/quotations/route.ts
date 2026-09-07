@@ -95,6 +95,18 @@ export async function POST(req: NextRequest) {
   }
   if (!number) return fail("Gagal menyusun nomor quotation unik — coba sekali lagi", 409);
 
+  // Ronde 39 — revisi quotation: quotation baru menunjuk quotation yang direvisi
+  // (riwayat versi tersambung — dulu quotation ditolak = jalan buntu).
+  let revisionOfId: string | null = null;
+  let revisionNo = 0;
+  if (body.revisionOfId) {
+    const src = await db.quotation.findUnique({ where: { id: String(body.revisionOfId) } });
+    if (!src) return fail("Quotation sumber revisi tidak ditemukan", 404);
+    if (src.opportunityId !== opp.id) return fail("Quotation sumber revisi bukan milik opportunity ini", 400);
+    revisionOfId = src.id;
+    revisionNo = src.revisionNo + 1;
+  }
+
   const quotation = await db.quotation.create({
     data: {
       number,
@@ -107,6 +119,8 @@ export async function POST(req: NextRequest) {
       taxPct,
       currency: opp.currency,
       status: "draft",
+      revisionOfId,
+      revisionNo,
       // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini fallback 14 hari (sebelumnya 500)
       validUntil: dateOrNull(body.validUntil) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       notes: body.notes ? String(body.notes) : null,
@@ -116,7 +130,11 @@ export async function POST(req: NextRequest) {
 
   await logAudit({
     actorName, actorRole, action: "create", entity: "quotation", entityId: quotation.id,
-    entityLabel: quotation.number, metadata: `Quotation ${number} — ${opp.title} (total ${totals.total})`, req,
+    entityLabel: quotation.number,
+    metadata: revisionOfId
+      ? `Revisi ke-${revisionNo} dari quotation sebelumnya — ${opp.title} (total ${totals.total})`
+      : `Quotation ${number} — ${opp.title} (total ${totals.total})`,
+    req,
   });
 
   return ok({ quotation }, 201);

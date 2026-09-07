@@ -475,12 +475,19 @@ model Quotation {
   total          Float       @default(0)
   currency       String      @default("IDR")
   status         String      @default("draft") // draft, sent, accepted, rejected, expired
+  // Ronde 39 — riwayat revisi: quotation revisi menunjuk quotation yang direvisi
+  revisionOfId   String?
+  revisionOf     Quotation?  @relation("QuotationRevision", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions      Quotation[] @relation("QuotationRevision")
+  revisionNo     Int         @default(0) // 0 = bukan revisi; N = revisi ke-N dari quotation sumber
   validUntil     DateTime?
   notes          String?
   sentAt         DateTime?
   respondedAt    DateTime?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
+
+  @@index([revisionOfId])
 }
 
 model ApprovalRequest {
@@ -514,6 +521,21 @@ model NotificationState {
   updatedAt   DateTime  @updatedAt
 
   @@unique([userKey, notifKey])
+  @@index([userKey])
+}
+
+// Ronde 39 — langganan Web Push (VAPID) per pengguna & perangkat.
+// Satu pengguna bisa punya beberapa subscription (laptop + HP).
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userKey   String // email user dari sesi (bukan dari body)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userKey])
 }
 

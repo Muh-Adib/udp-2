@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, clampNum, dateOrNull, isUniqueViolation } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -50,6 +51,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       actorName, actorRole, action: "update", entity: "quotation", entityId: id,
       entityLabel: quotation.number, field: "status", oldValue: "draft", newValue: "sent", req,
     });
+    // Ronde 39 — push VAPID: quotation terkirim ke klien
+    void sendPushToRoles(
+      ["director", "super_admin"],
+      {
+        title: "Quotation terkirim",
+        body: `${quotation.number} — ${updated.company?.name ?? "klien"} · total ${updated.total.toLocaleString("id-ID")} ${updated.currency}`,
+        url: "/?modul=pipeline",
+        tag: `quo-${id}-sent`,
+        type: "quotation",
+      },
+      actor.email
+    ).catch(() => {});
     return ok({ quotation: updated });
   }
 
@@ -70,6 +83,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       actorName, actorRole, action: "update", entity: "quotation", entityId: id,
       entityLabel: quotation.number, field: "status", oldValue: quotation.status, newValue: newStatus, req,
     });
+    // Ronde 39 — push VAPID: klien menerima/menolak quotation (ditolak = sinyal revisi)
+    void sendPushToRoles(
+      ["director", "super_admin"],
+      {
+        title: action === "accept" ? "Quotation diterima klien" : "Quotation ditolak klien",
+        body: action === "accept"
+          ? `${quotation.number} diterima — siap dikonversi jadi invoice`
+          : `${quotation.number} ditolak — pertimbangkan revisi & kirim ulang`,
+        url: "/?modul=pipeline",
+        tag: `quo-${id}-${newStatus}`,
+        type: "quotation",
+      },
+      actor.email
+    ).catch(() => {});
     return ok({ quotation: updated });
   }
 

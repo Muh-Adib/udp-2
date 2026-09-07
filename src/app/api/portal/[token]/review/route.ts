@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody } from "@/lib/crm/server";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 /**
  * Task 23-d — POST /api/portal/[token]/review (PUBLIK — tanpa login, kunci = token URL).
@@ -68,6 +69,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     newValue: JSON.stringify({ status: decision, reviewComment: comment || null, label: portal.label }),
     req,
   });
+
+  // Ronde 39 — push VAPID: tim produksi & direktur tahu keputusan review klien
+  // (revision = permintaan revisi dari klien — dulu tidak ada pemberitahuan sama sekali)
+  void sendPushToRoles(
+    ["production", "director", "super_admin"],
+    {
+      title: decision === "revision" ? "Permintaan revisi dari klien" : "Deliverable disetujui klien",
+      body: `${existing.project.code} · ${existing.name}${comment ? ` — "${comment}"` : ""}`,
+      url: "/?modul=projects",
+      tag: `dlv-${deliverable.id}`,
+      type: "portal",
+    }
+  ).catch(() => {});
 
   // Bentuk respons sama dgn kontrak: { deliverable: ProjectDeliverableDTO } (Date → string saat diserialisasi JSON).
   return ok({ deliverable });

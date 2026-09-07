@@ -318,6 +318,14 @@ export const api = {
       "/api/notif-prefs", { method: "PUT", body: JSON.stringify({ user: email, ...prefs }) }
     ),
 
+  // Ronde 39 — Web Push (VAPID): kunci publik, simpan/hapus langganan per perangkat
+  pushPublicKey: () =>
+    request<{ publicKey: string | null }>("/api/push/public-key"),
+  pushSubscribe: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ subscription: { id: string } }>("/api/push/subscribe", { method: "POST", body: JSON.stringify({ subscription }) }),
+  pushUnsubscribe: (endpoint?: string) =>
+    request<{ deleted: number }>("/api/push/unsubscribe", { method: "POST", body: JSON.stringify(endpoint ? { endpoint } : {}) }),
+
   // Audit
   auditLogs: (params?: { limit?: number; entity?: string; action?: string }) => {
     const sp = new URLSearchParams();

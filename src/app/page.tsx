@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useCrmStore } from "@/lib/crm/store";
+import { useCrmStore, MODULE_META, type ModuleKey, canAccess } from "@/lib/crm/store";
 import { api } from "@/lib/crm/api-client";
 import LoginScreen from "@/components/crm/login-screen";
 import AppShell from "@/components/crm/app-shell";
@@ -20,9 +20,21 @@ function PortalGate() {
   const user = useCrmStore((s) => s.user);
   const setUser = useCrmStore((s) => s.setUser);
   const setBrands = useCrmStore((s) => s.setBrands);
+  const setActiveModule = useCrmStore((s) => s.setActiveModule);
   // Ronde 27: sesi server = sumber kebenaran identitas. Tampilkan splash sampai
   // introspeksi selesai supaya tidak ada kedipan login-screen / sesi basi.
   const [sessionChecked, setSessionChecked] = useState(false);
+
+  // Ronde 39 — deep-link modul dari Web Push: /?modul=projects → buka modul itu
+  // (divalidasi terhadap akses role; URL lalu dibersihkan agar refresh tetap normal).
+  useEffect(() => {
+    if (portal || !user) return;
+    const modul = sp.get("modul");
+    if (!modul || !(modul in MODULE_META)) return;
+    if (!canAccess(modul as ModuleKey, user.role)) return;
+    setActiveModule(modul as ModuleKey);
+    window.history.replaceState({}, "", "/");
+  }, [portal, user, sp, setActiveModule]);
 
   useEffect(() => {
     if (portal) return; // mode portal klien — bootstrap CRM tidak diperlukan

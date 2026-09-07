@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { sendPushToRoles } from "@/lib/crm/push";
 import { achievementFor } from "@/lib/crm/constants";
 
 /**
@@ -116,6 +117,21 @@ export async function PATCH(req: NextRequest) {
     data,
     include: { project: { include: { brand: true } } },
   });
+
+  // Ronde 39 — push VAPID: milestone selesai → tim produksi & pimpinan
+  if ((data as { status?: string }).status === "done") {
+    void sendPushToRoles(
+      ["production", "director", "super_admin"],
+      {
+        title: "Milestone selesai",
+        body: `${milestone.name} — ${milestone.project.code} (${milestone.project.name})`,
+        url: "/?modul=projects",
+        tag: `ms-${milestone.id}`,
+        type: "deadline",
+      },
+      actor.email
+    ).catch(() => {});
+  }
 
   const actorName = actor.name;
   await logAudit({

@@ -397,6 +397,9 @@ export interface QuotationDTO {
   total: number;
   currency: string;
   status: string;
+  /** Ronde 39 — riwayat revisi: quotation ini revisi ke-N dari quotation sumber. */
+  revisionOfId?: string | null;
+  revisionNo?: number;
   validUntil?: string | null;
   notes?: string | null;
   sentAt?: string | null;

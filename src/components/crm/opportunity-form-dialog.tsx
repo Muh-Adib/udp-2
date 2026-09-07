@@ -27,7 +27,7 @@ import {
   BRAND_SERVICES, LEAD_SOURCES, PRIORITIES, SERVICE_CATEGORIES,
 } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { ContactRef } from "@/lib/crm/types";
+import type { ContactRef, OpportunityDTO } from "@/lib/crm/types";
 
 const PRIORITY_LABELS: Record<string, string> = { low: "Rendah", medium: "Sedang", high: "Tinggi", urgent: "Urgent" };
 
@@ -51,11 +51,14 @@ export default function OpportunityFormDialog({
   open,
   onOpenChange,
   onSaved,
+  editData,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** Dipanggil setelah opportunity berhasil dibuat. */
   onSaved?: () => void;
+  /** Ronde 39 — bila terisi → mode EDIT (prefill + PATCH); brand/kontak tidak bisa diubah. */
+  editData?: OpportunityDTO | null;
 }) {
   const brands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
@@ -89,9 +92,28 @@ export default function OpportunityFormDialog({
       });
   }, [open]);
 
-  // Reset setiap kali dialog dibuka.
+  // Reset setiap kali dialog dibuka — Ronde 39: mode edit prefill dari editData.
   useEffect(() => {
     if (!open) return;
+    if (editData) {
+      const d = (iso: string | null | undefined) => {
+        try { return iso ? new Date(iso).toISOString().slice(0, 10) : ""; } catch { return ""; }
+      };
+      setBrandId(editData.brandId);
+      setContactId(editData.contactId);
+      setTitle(editData.title);
+      setServiceCategory(editData.serviceCategory ?? "none");
+      setServiceName(editData.serviceName ?? "");
+      setPriority(editData.priority || "medium");
+      setEstimatedValue(editData.estimatedValue != null ? String(editData.estimatedValue) : "");
+      setOwnerName(editData.ownerName ?? user?.name ?? "");
+      setLeadSource(editData.leadSource ?? "none");
+      setExpectedCloseDate(d(editData.expectedCloseDate));
+      setTargetDeadline(d(editData.targetDeadline));
+      setBrief(editData.brief ?? "");
+      setContactQuery("");
+      return;
+    }
     setBrandId("");
     setContactId("");
     setTitle("");
@@ -105,7 +127,7 @@ export default function OpportunityFormDialog({
     setTargetDeadline("");
     setBrief("");
     setContactQuery("");
-  }, [open, user?.name]);
+  }, [open, editData, user?.name]);
 
   const serviceNameOptions = useMemo(() => {
     const brand = brands.find((b) => b.id === brandId);
@@ -125,6 +147,33 @@ export default function OpportunityFormDialog({
   async function submit() {
     if (!user) {
       toast.error("Sesi tidak ditemukan — muat ulang halaman");
+      return;
+    }
+    // Ronde 39 — mode EDIT: brand & kontak tidak diubah (bukan field updatable server).
+    if (editData) {
+      if (!title.trim()) { toast.error("Judul opportunity wajib diisi"); return; }
+      setSaving(true);
+      try {
+        const res = await api.updateOpportunity(editData.id, {
+          title: title.trim(),
+          serviceCategory: serviceCategory === "none" ? null : serviceCategory,
+          serviceName: serviceName.trim() || null,
+          priority,
+          estimatedValue: estimatedValue.trim() !== "" && Number(estimatedValue) > 0 ? Number(estimatedValue) : null,
+          ownerName: ownerName.trim() || null,
+          leadSource: leadSource === "none" ? null : leadSource,
+          expectedCloseDate: expectedCloseDate || null,
+          targetDeadline: targetDeadline || null,
+          brief: brief.trim() || null,
+        });
+        toast.success("Opportunity diperbarui", { description: res.opportunity.title });
+        onOpenChange(false);
+        onSaved?.();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Gagal menyimpan perubahan");
+      } finally {
+        setSaving(false);
+      }
       return;
     }
     if (!brandId) { toast.error("Pilih brand untuk opportunity ini"); return; }
@@ -165,9 +214,11 @@ export default function OpportunityFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Peluang Baru</DialogTitle>
+          <DialogTitle>{editData ? "Edit Peluang" : "Peluang Baru"}</DialogTitle>
           <DialogDescription>
-            Form sama seperti konversi lead di Inbox — opportunity langsung masuk pipeline stage New.
+            {editData
+              ? "Perbarui detail peluang — brand & kontak tidak dapat diubah setelah dibuat."
+              : "Form sama seperti konversi lead di Inbox — opportunity langsung masuk pipeline stage New."}
           </DialogDescription>
         </DialogHeader>
 
@@ -175,7 +226,7 @@ export default function OpportunityFormDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Brand <span className="text-rose-600">*</span></Label>
-              <Select value={brandId} onValueChange={(v) => { setBrandId(v); setServiceName(""); }}>
+              <Select value={brandId} onValueChange={(v) => { setBrandId(v); setServiceName(""); }} disabled={!!editData}>
                 <SelectTrigger className="w-full" aria-label="Brand opportunity">
                   <SelectValue placeholder="Pilih brand" />
                 </SelectTrigger>
@@ -213,7 +264,7 @@ export default function OpportunityFormDialog({
             <Select
               value={contactId}
               onValueChange={setContactId}
-              disabled={contacts === null}
+              disabled={contacts === null || !!editData}
             >
               <SelectTrigger className="w-full" aria-label="Pilih kontak">
                 <SelectValue placeholder={contacts === null ? "Memuat kontak…" : "Pilih kontak"} />
@@ -339,9 +390,9 @@ export default function OpportunityFormDialog({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Batal</Button>
-          <Button onClick={() => void submit()} disabled={saving || !brandId || !contactId || !title.trim()}>
+          <Button onClick={() => void submit()} disabled={saving || !title.trim() || (!editData && (!brandId || !contactId))}>
             {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Plus className="size-4" aria-hidden="true" />}
-            {saving ? "Menyimpan…" : "Buat Opportunity"}
+            {saving ? "Menyimpan…" : editData ? "Simpan Perubahan" : "Buat Opportunity"}
           </Button>
         </DialogFooter>
       </DialogContent>

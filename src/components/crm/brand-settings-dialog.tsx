@@ -16,8 +16,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AtSign, BadgeCheck, Building2, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, Loader2, Mail, MessageCircle, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
+  AtSign, BadgeCheck, Building2, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
+  Layers, Link2, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -354,6 +354,32 @@ export default function BrandSettingsDialog({
     return okDone;
   }
 
+  // Ronde 39 — EDIT layanan (nama/unit/harga dasar) — API PATCH sudah mendukung sejak r29-b.
+  async function editService(serviceId: string, name: string, unit: string, basePrice: string): Promise<boolean> {
+    if (!name.trim()) return false;
+    setBusyKey(`svc-edit:${serviceId}`);
+    const okDone = await mutateCatalog({
+      kind: "service", id: serviceId, name: name.trim(),
+      unit: unit.trim() || null,
+      basePrice: basePrice.trim() === "" ? null : Number(basePrice.replace(/[^\d]/g, "")),
+    }, "PATCH");
+    setBusyKey(null);
+    if (okDone) toast.success("Layanan diperbarui");
+    return okDone;
+  }
+
+  // Ronde 39 — EDIT langkah workflow (fase/nama).
+  async function editStage(stageId: string, serviceId: string, phase: string, name: string): Promise<boolean> {
+    if (!name.trim()) return false;
+    setBusyKey(`stg:${serviceId}`);
+    const okDone = await mutateCatalog({
+      kind: "stage", id: stageId, phase: phase.trim() || "Production", name: name.trim(),
+    }, "PATCH");
+    setBusyKey(null);
+    if (okDone) toast.success("Langkah workflow diperbarui");
+    return okDone;
+  }
+
   async function toggleMilestone(stage: { id: string; isMilestone: boolean; name: string }, serviceId: string): Promise<boolean> {
     setBusyKey(`stg:${serviceId}`);
     const okDone = await mutateCatalog({ kind: "stage", id: stage.id, isMilestone: !stage.isMilestone }, "PATCH");
@@ -441,7 +467,7 @@ export default function BrandSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-[calc(100vw-1.5rem)] max-w-3xl flex-col overflow-hidden gap-0 p-0 sm:w-[92%]">
+      <DialogContent className="flex max-h-[92vh] w-[calc(100vw-1.5rem)] max-w-5xl flex-col overflow-hidden gap-0 p-0 sm:w-[94%] sm:max-w-5xl">
         <DialogHeader className="shrink-0 border-b bg-zinc-50/80 px-5 py-4">
           <div className="flex items-center gap-3">
             <BrandLogo brand={brand} size="sm" />
@@ -584,6 +610,8 @@ export default function BrandSettingsDialog({
                 onToggleMilestone={toggleMilestone}
                 onRemove={removeCatalog}
                 onSaveCost={saveServiceCost}
+                onEditService={editService}
+                onEditStage={editStage}
               />
             ) : (
               <p className="text-sm text-zinc-500">Katalog belum termuat.</p>
@@ -888,6 +916,7 @@ export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | 
 
 function CatalogEditor({
   catalog, busyKey, onAddCategory, onAddService, onAddStage, onToggleMilestone, onRemove, onSaveCost,
+  onEditService, onEditStage,
 }: {
   catalog: BrandServiceCatalog;
   busyKey: string | null;
@@ -897,12 +926,17 @@ function CatalogEditor({
   onToggleMilestone: (stage: { id: string; isMilestone: boolean; name: string }, serviceId: string) => Promise<boolean>;
   onRemove: (kind: "category" | "service" | "stage", id: string, label: string) => Promise<boolean>;
   onSaveCost: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+  onEditService: (serviceId: string, name: string, unit: string, basePrice: string) => Promise<boolean>;
+  onEditStage: (stageId: string, serviceId: string, phase: string, name: string) => Promise<boolean>;
 }) {
   const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
   const [openSvc, setOpenSvc] = useState<Record<string, boolean>>({});
   const [newCatName, setNewCatName] = useState("");
   const [catForms, setCatForms] = useState<Record<string, { name: string; unit: string; price: string }>>({});
   const [stageForms, setStageForms] = useState<Record<string, { phase: string; name: string; milestone: boolean }>>({});
+  // Ronde 39 — state edit inline layanan & langkah workflow
+  const [svcEdit, setSvcEdit] = useState<Record<string, { name: string; unit: string; price: string }>>({});
+  const [stgEdit, setStgEdit] = useState<Record<string, { phase: string; name: string }>>({});
 
   const servicesByCat = useMemo(() => {
     const map = new Map<string | null, ServiceDTO[]>();
@@ -949,15 +983,60 @@ function CatalogEditor({
                   return (
                     <div key={svc.id} className="px-4 py-3">
                       <div className="flex items-start gap-2">
-                        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenSvc((m) => ({ ...m, [svc.id]: !svcOpen }))}>
-                          <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${svcOpen ? "" : "-rotate-90"}`} aria-hidden />
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
-                            <p className="text-xs text-zinc-500">
-                              {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
-                            </p>
+                        {svcEdit[svc.id] ? (
+                          /* Ronde 39 — mode edit layanan: nama/unit/harga dasar inline */
+                          <div className="min-w-0 flex-1 space-y-2 rounded-lg border border-zinc-300 bg-white p-2.5">
+                            <div className="grid gap-2 sm:grid-cols-[1fr_120px_150px]">
+                              <div className="space-y-1">
+                                <Label className="text-[11px]">Nama layanan</Label>
+                                <Input className="h-8 text-xs" value={svcEdit[svc.id].name}
+                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], name: e.target.value } }))} />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[11px]">Satuan</Label>
+                                <Input className="h-8 text-xs" value={svcEdit[svc.id].unit} placeholder="mis. video"
+                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], unit: e.target.value } }))} />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[11px]">Harga dasar (Rp)</Label>
+                                <Input className="h-8 text-xs" inputMode="numeric" value={svcEdit[svc.id].price} placeholder="mis. 25000000"
+                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], price: e.target.value } }))} />
+                              </div>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
+                                onClick={() => setSvcEdit((m) => { const { [svc.id]: _drop, ...rest } = m; return rest; })}>
+                                Batal
+                              </Button>
+                              <Button type="button" size="sm" className="h-7 text-xs"
+                                disabled={busyKey === `svc-edit:${svc.id}` || !svcEdit[svc.id].name.trim()}
+                                onClick={() => void onEditService(svc.id, svcEdit[svc.id].name, svcEdit[svc.id].unit, svcEdit[svc.id].price)
+                                  .then((res) => { if (res) setSvcEdit((m) => { const { [svc.id]: _drop, ...rest } = m; return rest; }); return res; })}>
+                                {busyKey === `svc-edit:${svc.id}` ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
+                                Simpan
+                              </Button>
+                            </div>
                           </div>
-                        </button>
+                        ) : (
+                          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenSvc((m) => ({ ...m, [svc.id]: !svcOpen }))}>
+                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${svcOpen ? "" : "-rotate-90"}`} aria-hidden />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
+                              <p className="text-xs text-zinc-500">
+                                {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
+                              </p>
+                            </div>
+                          </button>
+                        )}
+                        {svcEdit[svc.id] ? null : (
+                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
+                            aria-label={`Edit layanan ${svc.name}`}
+                            onClick={() => setSvcEdit((m) => ({ ...m, [svc.id]: {
+                              name: svc.name, unit: svc.unit ?? "", price: svc.basePrice != null ? String(svc.basePrice) : "",
+                            } }))}>
+                            <Pencil className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                        )}
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-rose-600"
                           aria-label={`Hapus layanan ${svc.name}`} onClick={() => void onRemove("service", svc.id, svc.name)}>
                           <Trash2 className="h-3.5 w-3.5" aria-hidden />
@@ -973,26 +1052,64 @@ function CatalogEditor({
                           {svc.workflow.length > 0 ? (
                             <ol className="space-y-1.5">
                               {svc.workflow.map((w, idx) => (
-                                <li key={w.id} className="flex items-center gap-2 rounded-lg border bg-zinc-50/60 px-3 py-2">
-                                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white" aria-hidden>{idx + 1}</span>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-xs font-medium text-zinc-800">
-                                      {w.name}
-                                      {w.isMilestone ? (
-                                        <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
-                                      ) : null}
-                                    </p>
-                                    <p className="truncate text-[11px] text-zinc-500">{w.phase}</p>
-                                  </div>
-                                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
-                                    disabled={busyKey === `stg:${svc.id}`}
-                                    onClick={() => void onToggleMilestone(w, svc.id)}>
-                                    {w.isMilestone ? "Lepas" : "Jadikan milestone"}
-                                  </Button>
-                                  <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
-                                    aria-label={`Hapus langkah ${w.name}`} onClick={() => void onRemove("stage", w.id, `${w.phase} · ${w.name}`)}>
-                                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                                  </Button>
+                                <li key={w.id} className="rounded-lg border bg-zinc-50/60 px-3 py-2">
+                                  {stgEdit[w.id] ? (
+                                    /* Ronde 39 — mode edit langkah: fase + nama inline */
+                                    <div className="space-y-2">
+                                      <div className="grid gap-2 sm:grid-cols-[160px_1fr]">
+                                        <div className="space-y-1">
+                                          <Label className="text-[11px]">Fase</Label>
+                                          <Input className="h-8 text-xs" value={stgEdit[w.id].phase} placeholder="mis. Production"
+                                            onChange={(e) => setStgEdit((m) => ({ ...m, [w.id]: { ...stgEdit[w.id], phase: e.target.value } }))} />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <Label className="text-[11px]">Nama langkah</Label>
+                                          <Input className="h-8 text-xs" value={stgEdit[w.id].name}
+                                            onChange={(e) => setStgEdit((m) => ({ ...m, [w.id]: { ...stgEdit[w.id], name: e.target.value } }))} />
+                                        </div>
+                                      </div>
+                                      <div className="flex justify-end gap-2">
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
+                                          onClick={() => setStgEdit((m) => { const { [w.id]: _drop, ...rest } = m; return rest; })}>
+                                          Batal
+                                        </Button>
+                                        <Button type="button" size="sm" className="h-7 text-xs"
+                                          disabled={busyKey === `stg:${svc.id}` || !stgEdit[w.id].name.trim()}
+                                          onClick={() => void onEditStage(w.id, svc.id, stgEdit[w.id].phase, stgEdit[w.id].name)
+                                            .then((res) => { if (res) setStgEdit((m) => { const { [w.id]: _drop, ...rest } = m; return rest; }); return res; })}>
+                                          {busyKey === `stg:${svc.id}` ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
+                                          Simpan
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white" aria-hidden>{idx + 1}</span>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="truncate text-xs font-medium text-zinc-800">
+                                          {w.name}
+                                          {w.isMilestone ? (
+                                            <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
+                                          ) : null}
+                                        </p>
+                                        <p className="truncate text-[11px] text-zinc-500">{w.phase}</p>
+                                      </div>
+                                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
+                                        aria-label={`Edit langkah ${w.name}`}
+                                        onClick={() => setStgEdit((m) => ({ ...m, [w.id]: { phase: w.phase, name: w.name } }))}>
+                                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+                                      </Button>
+                                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
+                                        disabled={busyKey === `stg:${svc.id}`}
+                                        onClick={() => void onToggleMilestone(w, svc.id)}>
+                                        {w.isMilestone ? "Lepas" : "Jadikan milestone"}
+                                      </Button>
+                                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+                                        aria-label={`Hapus langkah ${w.name}`} onClick={() => void onRemove("stage", w.id, `${w.phase} · ${w.name}`)}>
+                                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                                      </Button>
+                                    </div>
+                                  )}
                                 </li>
                               ))}
                             </ol>

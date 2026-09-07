@@ -22,7 +22,7 @@ export { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySessionToken, getSes
 export type { SessionPayload, SessionUser } from "@/lib/crm/session";
 
 export type ResolvedActor =
-  | { name: string; role: string | null; id: string | null; fromSession: boolean; denied: false }
+  | { name: string; role: string | null; id: string | null; email?: string | null; fromSession: boolean; denied: false }
   | { denied: true; reason: string };
 
 /**
@@ -43,7 +43,7 @@ export async function resolveActor(
       select: { name: true, role: true, active: true, email: true },
     });
     if (!fresh?.active) return { denied: true, reason: "Pengguna tidak aktif — hubungi administrator" };
-    return { name: fresh.name, role: fresh.role, id: s.id, fromSession: true, denied: false };
+    return { name: fresh.name, role: fresh.role, id: s.id, email: fresh.email, fromSession: true, denied: false };
   }
   if (opts.allowBodyFallback) {
     const name = String(body.actorName ?? "").trim() || "System";

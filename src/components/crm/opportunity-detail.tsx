@@ -93,6 +93,7 @@ import { api } from "@/lib/crm/api-client";
 import { BRIEF_STATUS_META } from "@/lib/crm/brief";
 import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
+import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import { useCrmStore } from "@/lib/crm/store";
 import type { Brand, BriefStatus, EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
@@ -974,6 +975,7 @@ function QuotationFormDialog({
   opportunityId,
   defaultCurrency,
   editing,
+  reviseOf,
   actorName,
   actorRole,
   estimation,
@@ -985,6 +987,8 @@ function QuotationFormDialog({
   opportunityId: string;
   defaultCurrency: string;
   editing: QuotationDTO | null;
+  /** Ronde 39 — mode revisi: buat quotation BARU menyalin isi quotation sumber (tertolak). */
+  reviseOf?: QuotationDTO | null;
   actorName: string;
   actorRole: string;
   /** Ronde 35 — estimasi detail sebagai sumber prefill item quotation. */
@@ -1002,7 +1006,7 @@ function QuotationFormDialog({
   /** Ronde 35 — true bila item terisi otomatis dari estimasi detail. */
   const prefilledFromEstimation = useRef(false);
 
-  // Prefill setiap kali dialog dibuka (mode buat / edit draft).
+  // Prefill setiap kali dialog dibuka (mode buat / edit draft / revisi).
   useEffect(() => {
     if (!open) return;
     if (editing) {
@@ -1017,6 +1021,20 @@ function QuotationFormDialog({
       setTaxPct(String(editing.taxPct ?? 11));
       setNotes(editing.notes ?? "");
       setValidUntil(editing.validUntil ? editing.validUntil.slice(0, 10) : defaultValidUntil());
+    } else if (reviseOf) {
+      // Ronde 39 — revisi: salin isi quotation sumber + catatan revisi otomatis.
+      prefilledFromEstimation.current = false;
+      const items = parseQuotationItems(reviseOf.items);
+      setRows(
+        items.length > 0
+          ? items.map((it) => ({ description: it.description, qty: String(it.qty), unitPrice: String(it.unitPrice) }))
+          : [{ description: "", qty: "1", unitPrice: "" }]
+      );
+      setDiscountPct(String(reviseOf.discountPct ?? 0));
+      setTaxPct(String(reviseOf.taxPct ?? 11));
+      const revNote = `Revisi ke-${reviseOf.revisionNo ? reviseOf.revisionNo + 1 : 1} dari ${reviseOf.number}${reviseOf.notes ? ` — ${reviseOf.notes}` : ""}`;
+      setNotes(revNote);
+      setValidUntil(defaultValidUntil());
     } else {
       // Ronde 35 — estimasi detail (approved/pending) dengan revenue > 0 →
       // item quotation terisi otomatis: sales tidak mengetik ulang angka estimasi.
@@ -1038,7 +1056,7 @@ function QuotationFormDialog({
       setNotes("");
       setValidUntil(defaultValidUntil());
     }
-  }, [open, editing, estimation, serviceName]);
+  }, [open, editing, reviseOf, estimation, serviceName]);
 
   const totals = useMemo(() => {
     const items = rows.map((r) => {
@@ -1091,10 +1109,12 @@ function QuotationFormDialog({
           taxPct: taxPctNum,
           notes: notes.trim() || undefined,
           validUntil: validUntil || undefined,
+          // Ronde 39 — kaitkan quotation baru sebagai revisi dari quotation sumber
+          ...(reviseOf ? { revisionOfId: reviseOf.id } : {}),
           actorName,
           actorRole,
         });
-        toast.success("Quotation draft dibuat");
+        toast.success(reviseOf ? `Revisi quotation dibuat (menyusul ${reviseOf.number})` : "Quotation draft dibuat");
       }
       onOpenChange(false);
       onSaved();
@@ -1109,11 +1129,13 @@ function QuotationFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit Quotation ${editing.number}` : "Quotation Baru"}</DialogTitle>
+          <DialogTitle>{editing ? `Edit Quotation ${editing.number}` : reviseOf ? `Revisi dari ${reviseOf.number}` : "Quotation Baru"}</DialogTitle>
           <DialogDescription>
             {editing
               ? "Perubahan hanya dapat dilakukan selama quotation masih berstatus draft."
-              : "Susun item penawaran. Quotation dibuat sebagai draft — kirim ke klien setelah selesai."}
+              : reviseOf
+                ? `Isi tersalin dari ${reviseOf.number} yang ditolak — sesuaikan penawaran lalu kirim ke klien sebagai versi baru.`
+                : "Susun item penawaran. Quotation dibuat sebagai draft — kirim ke klien setelah selesai."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1323,6 +1345,7 @@ function QuotationCard({
   expanded,
   onToggle,
   onEdit,
+  onRevise,
   onPrint,
   onAction,
 }: {
@@ -1332,6 +1355,8 @@ function QuotationCard({
   expanded: boolean;
   onToggle: () => void;
   onEdit: () => void;
+  /** Ronde 39 — revisi & kirim ulang (quotation ditolak). */
+  onRevise?: () => void;
   onPrint: () => void;
   onAction: (action: QuotationAction) => void;
 }) {
@@ -1345,6 +1370,9 @@ function QuotationCard({
         <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: brandColor ?? "#a1a1aa" }} aria-hidden="true" />
         <span className="font-mono text-sm font-semibold text-zinc-800">{q.number}</span>
         <Badge className={cn("border-transparent text-[10px]", meta.cls)}>{meta.label}</Badge>
+        {(q.revisionNo ?? 0) > 0 ? (
+          <Badge className="border-transparent bg-amber-100 text-[10px] text-amber-800 hover:bg-amber-100">Revisi ke-{q.revisionNo}</Badge>
+        ) : null}
         <span className="ml-auto text-sm font-semibold tabular-nums text-zinc-900">
           {formatCurrencyFull(q.total, q.currency)}
         </span>
@@ -1383,6 +1411,12 @@ function QuotationCard({
                 Edit
               </Button>
             </>
+          ) : null}
+          {q.status === "rejected" && onRevise ? (
+            <Button size="sm" variant="outline" className="border-amber-300 text-amber-800 hover:bg-amber-50" onClick={onRevise} disabled={busy}>
+              <Pencil className="size-4" aria-hidden="true" />
+              Revisi & Kirim Ulang
+            </Button>
           ) : null}
           {q.status === "sent" ? (
             <>
@@ -1451,6 +1485,8 @@ function QuotationTab({
 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<QuotationDTO | null>(null);
+  // Ronde 39 — quotation sumber saat mode revisi
+  const [reviseOf, setReviseOf] = useState<QuotationDTO | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -1477,6 +1513,14 @@ function QuotationTab({
 
   function openEdit(q: QuotationDTO) {
     setEditing(q);
+    setReviseOf(null);
+    setFormOpen(true);
+  }
+
+  // Ronde 39 — revisi: buat quotation BARU tersalin dari quotation yang ditolak.
+  function openRevise(q: QuotationDTO) {
+    setEditing(null);
+    setReviseOf(q);
     setFormOpen(true);
   }
 
@@ -1510,6 +1554,7 @@ function QuotationTab({
               expanded={expandedId === q.id}
               onToggle={() => setExpandedId((v) => (v === q.id ? null : q.id))}
               onEdit={() => openEdit(q)}
+              onRevise={() => openRevise(q)}
               onPrint={() => onPrint(q)}
               onAction={(a) => void runAction(q, a)}
             />
@@ -1523,6 +1568,7 @@ function QuotationTab({
         opportunityId={opportunityId}
         defaultCurrency={defaultCurrency}
         editing={editing}
+        reviseOf={reviseOf}
         actorName={actorName}
         actorRole={actorRole}
         estimation={estimation}
@@ -1540,12 +1586,17 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   // Ronde 32 — tombol "Buka Percakapan di Inbox" dari drawer opportunity
   const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
   const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  // Ronde 39 — edit peluang dari drawer (pemilik/pimpinan)
+  const [editOpen, setEditOpen] = useState(false);
 
   const [activeId, setActiveId] = useState<string | null>(opportunityId);
   const [data, setData] = useState<DetailData | null>(null);
   const [related, setRelated] = useState<RelatedOpp[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Ronde 39 — editing sesuai user: pemilik opportunity atau pimpinan (super_admin/director)
+  const canEditOpp = !!data && !!user && (user.role === "super_admin" || user.role === "director" || data.ownerName === user.name);
 
   // AI summary
   const [aiLoading, setAiLoading] = useState(false);
@@ -1980,6 +2031,20 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                   {data.company?.name ?? "Tanpa perusahaan"} · {data.contact?.fullName ?? "Tanpa contact"}
                   {data.serviceName ? ` · ${data.serviceName}` : ""}
                 </SheetDescription>
+                {/* Ronde 39 — edit peluang sesuai user: pemilik atau pimpinan */}
+                {canEditOpp ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-8 w-fit gap-1.5"
+                    onClick={() => setEditOpen(true)}
+                    aria-label={`Edit peluang ${data.title}`}
+                  >
+                    <Pencil className="size-3.5" aria-hidden="true" />
+                    Edit Peluang
+                  </Button>
+                ) : null}
                 {/* Ronde 32 — pintasan bolak-balik Pipeline → Inbox: buka thread chat
                     opportunity ini di Lead Inbox (tab Semua Percakapan). */}
                 {data.interactions.length > 0 ? (
@@ -2553,6 +2618,16 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Ronde 39 — dialog edit peluang (mode EDIT: prefill + PATCH) */}
+      {data ? (
+        <OpportunityFormDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          editData={data}
+          onSaved={() => { void load(); onChanged?.(); }}
+        />
+      ) : null}
     </>
   );
 }
