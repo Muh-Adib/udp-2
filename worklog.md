@@ -1508,3 +1508,23 @@ Stage Summary:
 - Laporan kesehatan: 🟡→🟢-ish — 4 CRITICAL (token portal & dokumen klien terbaca anonim; secret sesi bawaan repo; GET CRM terbuka total) + 7 HIGH + puluhan MEDIUM DITEMUKAN; yang aman-diperbaiki TUNTAS (24 perubahan minimal lintas 20 file) tanpa mengubah fitur yang dipakai user — seluruh alur utama terbukti jalan di browser pasca-perubahan.
 - PERLU KEPUTUSAN USER (tidak diubah otomatis): (1) PIN demo 1234 + hint di layar login — WAJIB diganti sebelum dipakai user nyata; (2) kredensial kanal (SMTP/Meta) tersimpan plaintext di DB; (3) /api/users & /api/notifications tetap terbuka (dependensi arsitektur login persona & notif-service) — data minimal saja; (4) workflow db push --accept-data-loss tanpa migrations (risiko kehilangan kolom saat ganti skema); (5) duplikasi Contact.email/whatsapp tak diberi unique (data demo sudah ada duplikat — perlu pembersihan dulu); (6) race stale-response loader frontend (butuh refactor AbortController menyeluruh); (7) endpoint AI summary tanpa kuota per user.
 - Backlog tetap: SMTP verify berkala/IMAP pull WA-IG, dashboard groupBy, letter template editor, notif web-push.
+
+---
+Task ID: 37-main
+Agent: Z.ai Code (main)
+Task: Cek versi repo terbaru + rotasi GitHub token yang expired + push commit tertahan
+
+Work Log:
+- Cek git status: lokal ahead 2 commit dari origin/main (d0aa04f)
+- Verifikasi 2 commit tertahan (27174b7 auto-snapshot QA, 1a081b6 dev.pid) = 0 perubahan kode fungsional (hanya screenshot QA + file runtime + mode changes)
+- Percobaan push gagal: "Invalid username or token" — PAT lama di remote URL expired/revoked (mengkonfirmasi temuan audit Ronde 36 tentang PAT di URL remote)
+- User memberi PAT baru; update remote URL via git remote set-url origin
+- Push berhasil: d0aa04f..1a081b6 HEAD -> main
+- Verifikasi final: HEAD lokal = origin/main = 1a081b64, working tree bersih
+- Dev server tetap berjalan normal (tidak di-restart)
+
+Stage Summary:
+- Repo kini 100% sinkron dengan GitHub (commit 1a081b6 di kedua sisi)
+- Token GitHub baru sudah tersimpan di remote URL (pola lama dipertahankan)
+- Risiko tercatat: token tetap tertanam di URL remote .git/config — jika kedaluwarsa lagi, push akan gagal diam-diam; sarankan rotasi berkala / credential helper di masa depan
+- Tidak ada perubahan kode aplikasi pada ronde ini; tidak perlu regresi
