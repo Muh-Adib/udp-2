@@ -18,6 +18,7 @@ const DEMO_USERS = [
   { email: "rian@grup.co.id", role: "super_admin" },
   { email: "sari@grup.co.id", role: "director" },
   { email: "dewi@grup.co.id", role: "marketing" },
+  { email: "andi@grup.co.id", role: "marketing" },
   { email: "maya@grup.co.id", role: "finance" },
   { email: "budi@grup.co.id", role: "production" },
   { email: "hendra@nusantaranet.com", role: "client" },
