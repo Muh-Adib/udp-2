@@ -1528,3 +1528,22 @@ Stage Summary:
 - Token GitHub baru sudah tersimpan di remote URL (pola lama dipertahankan)
 - Risiko tercatat: token tetap tertanam di URL remote .git/config — jika kedaluwarsa lagi, push akan gagal diam-diam; sarankan rotasi berkala / credential helper di masa depan
 - Tidak ada perubahan kode aplikasi pada ronde ini; tidak perlu regresi
+
+---
+Task ID: 37-b
+Agent: Z.ai Code (main)
+Task: Laporan user "nama akun demo belum sesuai & sepertinya hilang" — investigasi perubahan sebelumnya
+
+Work Log:
+- Rotasi token GitHub (PAT baru dari user) → remote set-url → push tertahan sukses (1a081b6), repo sinkron; cron webDevReview 15 menit dibuat ulang (job 365159) karena hilang saat sesi berakhir
+- Investigasi laporan user: DB berisi 7 user seed (Rian/Sari/Dewi/Andi/Maya/Budi/Hendra) semua aktif & login PIN 1234 terverifikasi via curl 7/7 OK
+- Telusuri git history (follow seed.ts + login-screen.tsx sejak commit awal, reflog, fsck dangling, diff 46e428c vs 7df9673 rekonsiliasi): TIDAK ada perubahan yang hilang/terlepas — daftar seed stabil sejak awal
+- Akar masalah: const DEMO_USERS di login-screen.tsx sejak desain awal hanya memuat 6 email — Andi Saputra (andi@grup.co.id, marketing) tidak pernah masuk daftar, sehingga tombol quick-select-nya tak pernah tampil (6 dari 7)
+- FIX minimal (regresi UX, bukan fitur baru): tambah andi@grup.co.id ke DEMO_USERS → login kini menampilkan 7/7 persona
+- QA agent-browser: snapshot 7 tombol akun ✓, klik Andi mengisi form ✓, login Masuk → Command Center persona "Andi Saputra · Marketing" ✓, window.__errs = none, dev.log bersih; lint 0, tsc 0
+- Commit aa50b1a push origin/main sukses; repo sinkron
+
+Stage Summary:
+- Keluhan user terjawab: yang "hilang" = tombol akun demo Andi Saputra (terlewat sejak desain awal, bukan regresi perubahan terbaru); kini 7 akun demo tampil lengkap di layar login
+- Semua 7 akun demo (PIN 1234) login normal; tidak ada data/perubahan lain yang hilang dari history git
+- Catatan: jika user maksud nama persona demo harus DIGANTI (bukan sekadar tombol hilang), itu keputusan konten — minta nama yang diinginkan, perubahan seed+login mudah diterapkan
