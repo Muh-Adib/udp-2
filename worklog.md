@@ -1793,3 +1793,23 @@ Stage Summary:
 - Form opportunity/kontak/task kini punya tooltip info di tiap input, validasi format email & nomor, dan nomor WA/telepon konsisten kode-negara + klik-ke-WhatsApp utk marketing.
 - Brand/kontak peluang satu pintu (Direktur/Admin) dgn tooltip otorisasi; kategori/layanan bisa ditambah dari form mana pun; estimasi menyesuaikan saran harga katalog; workflow terlihat di setting layanan.
 - Risiko/backlog: wa.me hanya di detail kontak (list kontak belum); Web Push VAPID butuh env keys untuk pengiriman nyata (belum diset di sandbox); "QA Ronde 35" masih demo lama.
+
+---
+Task ID: 43-main
+Agent: Z.ai Code (main)
+Task: Laporan regresi user ("merasa terjadi regresi") + sinkronisasi repo lokal dengan origin/main + verifikasi fitur R40-42 + perbaikan visual hierarchy setting layanan
+
+Work Log:
+- Investigasi: git log/fetch/ls-remote menunjukkan origin/main sudah di d49c745 (Ronde 40: 4546a56, Ronde 41: bb0a6f1, Ronde 42: d49c745 — dikerjakan sesi paralel/cron), sedangkan sandbox lokal TERSELONGKOR di snapshot 31709e1/b8acc78 (7 Sep, baseline Ronde 39) — inilah "regresi" yang dirasakan user: aplikasi lokal menjalankan kode lama tanpa fitur R40-42
+- Verifikasi keamanan reset: diff b8acc78 vs twin remote 94041ca = hanya mode change; worklog lokal identik byte-per-byte dengan remote (Task 40-A..42-main lengkap di remote); TIDAK ada konten lokal unik → aman hard reset
+- Sinkronisasi: pkill dev server → git reset --hard origin/main (HEAD=d49c745) → bun run db:push ("database already in sync" + Prisma Client v6.19.2 regenerated utk schema baru Tax/PushSubscription dll) → restart dev server (Ready 955ms, HTTP 200)
+- QA BROWSER fitur yang "hilang" kini terbukti hidup: (1) sidebar minify — tombol "Minify sidebar" ada, w-64→w-16, label ikon tersembunyi, tombol jadi "Perluas sidebar" ✓; (2) modal Peluang Baru — kategori/layanan dari katalog DB brand (Segia Tech → Website/AI Apps/Digital Marketing; layanan Website → 3 layanan DB) ✓; (3) Konversi Lead (Inbox @rani.creativehouse, Unicam Studio) — kategori = Video Production/AI Video/Immersive dari katalog DB Unicam ✓; (4) task modal "Detail & Edit Tugas" di Follow-up Center (judul/tipe/assignee/Simpan) ✓; (5) pusat notifikasi per-user ("19 belum dibaca", notifikasi task terlambat dgn assignee) ✓
+- UX FIX (keluhan user: "pengaturan layanan sulit dilihat, perbaiki visual hierarchy"): brand-settings-dialog.tsx tab Layanan & Workflow dirombak — tiap layanan kini punya 2 section berheader jelas: "Rincian Biaya & Saran Harga" (ikon Calculator + badge ringkasan: N butir / Total Rp / Saran Rp oranye) dan "Workflow Produksi" (ikon ListOrdered + badge jumlah langkah & milestone + hint "Milestone menjadi tahapan project otomatis") dgn langkah berbentuk TIMELINE: garis vertikal penghubung, node nomor (amber utk milestone), chip fase (Pre Production dst), badge Milestone, aksi edit/toggle/hapus rata kanan; form tambah langkah diberi latar dashed lembut
+- Catatan QA tooling: kartu thread Inbox = div[role=button] (bukan <button>) — query [aria-label^=Buka] bisa salah sasaran ke tombol bell "Buka pusat notifikasi"; Radix Tabs butuh klik via ref agent-browser (eval .click() tak selalu aktif)
+- lint 0, tsc 0, dev.log bersih, window.__errs = 0; screenshot tool-results/qa43-service-settings.png
+- TIDAK ada data QA tertinggal (round ini hanya navigasi/buka dialog, tanpa tulis data)
+
+Stage Summary:
+- Regresi terjawab: BUKAN kehilangan kode — sandbox lokal tertinggal 3 rilis di belakang origin/main; kini sinkron 100% (HEAD=d49c745) dan seluruh fitur Ronde 40-42 terverifikasi hidup di browser (sidebar minify+tooltip, katalog live di Peluang Baru & Konversi Lead, task modal, notifikasi per-user, meeting reminder, pajak parametrik, dll.)
+- Setting layanan kini punya hierarki visual jelas: dua section berheader per layanan + workflow timeline — menjawab keluhan "kesulitan melihat"
+- Sisa backlog tercatat (dari R40-42, tidak diubah): wa.me belum di list kontak (baru detail); Web Push VAPID butuh env keys produksi; invoice KPI campuran kurs belum dikonversi; "QA Ronde 35" masih demo lama

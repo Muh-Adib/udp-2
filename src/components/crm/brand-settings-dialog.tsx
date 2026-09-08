@@ -16,8 +16,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AtSign, BadgeCheck, Building2, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
+  AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
+  Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -1066,13 +1066,23 @@ function CatalogEditor({
                       {/* Rincian biaya (template harga) — Ronde 29-b */}
                       <ServiceCostEditor service={svc} onSave={onSaveCost} />
 
-                      {/* Workflow produksi — Ronde 42: selalu tampil (sebelumnya tersembunyi
-                          di balik collapse, sehingga yang tampak hanya rincian biaya) */}
-                      <div className="mt-3 space-y-2.5 pl-6">
+                      {/* Workflow produksi — Ronde 43: section berheader + timeline langkah
+                          (hierarki visual: satu kotak per topik, header ikon + ringkasan) */}
+                      <div className="mt-2.5 overflow-hidden rounded-lg border border-zinc-200 bg-white">
+                        <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 bg-zinc-50/70 px-3 py-2">
+                          <ListOrdered className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden />
+                          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Workflow Produksi</span>
+                          <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">{svc.workflow.length} langkah</Badge>
+                          {svc.workflow.some((w) => w.isMilestone) ? (
+                            <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1.5 py-0 text-[10px] font-medium text-amber-700">{svc.workflow.filter((w) => w.isMilestone).length} milestone</Badge>
+                          ) : null}
+                          <span className="ml-auto hidden text-[10px] text-zinc-400 sm:inline">Milestone menjadi tahapan project otomatis</span>
+                        </div>
+                        <div className="space-y-2.5 px-3 py-3">
                           {svc.workflow.length > 0 ? (
-                            <ol className="space-y-1.5">
+                            <ol className="relative space-y-1.5 before:absolute before:bottom-3 before:left-[9px] before:top-3 before:w-px before:bg-zinc-200">
                               {svc.workflow.map((w, idx) => (
-                                <li key={w.id} className="rounded-lg border bg-zinc-50/60 px-3 py-2">
+                                <li key={w.id} className="relative pl-7">
                                   {stgEdit[w.id] ? (
                                     /* Ronde 39 — mode edit langkah: fase + nama inline */
                                     <div className="space-y-2">
@@ -1103,17 +1113,15 @@ function CatalogEditor({
                                       </div>
                                     </div>
                                   ) : (
-                                    <div className="flex items-center gap-2">
-                                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white" aria-hidden>{idx + 1}</span>
-                                      <div className="min-w-0 flex-1">
-                                        <p className="truncate text-xs font-medium text-zinc-800">
-                                          {w.name}
-                                          {w.isMilestone ? (
-                                            <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
-                                          ) : null}
-                                        </p>
-                                        <p className="truncate text-[11px] text-zinc-500">{w.phase}</p>
-                                      </div>
+                                    <div className="flex items-center gap-2 rounded-lg border bg-zinc-50/60 px-2.5 py-2">
+                                      <span className={`absolute left-0 top-1/2 flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-bold text-white ring-4 ring-white ${w.isMilestone ? "bg-amber-500" : "bg-zinc-900"}`} aria-hidden>{idx + 1}</span>
+                                      <Badge variant="outline" className="shrink-0 border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-500">{w.phase || "Tanpa fase"}</Badge>
+                                      <p className="min-w-0 flex-1 truncate text-xs font-semibold text-zinc-800">
+                                        {w.name}
+                                        {w.isMilestone ? (
+                                          <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
+                                        ) : null}
+                                      </p>
                                       <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
                                         aria-label={`Edit langkah ${w.name}`}
                                         onClick={() => setStgEdit((m) => ({ ...m, [w.id]: { phase: w.phase, name: w.name } }))}>
@@ -1138,7 +1146,7 @@ function CatalogEditor({
                           )}
 
                           {/* Form tambah langkah */}
-                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed p-2.5">
+                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-zinc-300 bg-zinc-50/50 p-2.5">
                             <div className="w-32 space-y-1">
                               <Label className="text-[11px]">Fase</Label>
                               <Input className="h-8 text-xs" value={form.phase} placeholder="mis. Production"
@@ -1161,6 +1169,7 @@ function CatalogEditor({
                               <Plus className="h-3.5 w-3.5" aria-hidden /> Langkah
                             </Button>
                           </div>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1347,11 +1356,14 @@ function ServiceCostEditor({
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
           )}
-          <span className="shrink-0 text-xs font-semibold text-zinc-700">Rincian Biaya</span>
+          <Calculator className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+          <span className="shrink-0 text-xs font-semibold text-zinc-700">Rincian Biaya &amp; Saran Harga</span>
           {!open ? (
             hasItems ? (
-              <span className="min-w-0 truncate text-[11px] text-zinc-500">
-                {service.costItems?.length} butir · Total biaya {fmtIDR(serverTotal)} · Saran harga {fmtIDR(serverSaran)}
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">{service.costItems?.length} butir</Badge>
+                <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">Total {fmtIDR(serverTotal)}</Badge>
+                <Badge variant="outline" className="border-orange-200 bg-orange-50 px-1.5 py-0 text-[10px] font-medium text-orange-700">Saran {fmtIDR(serverSaran)}</Badge>
               </span>
             ) : (
               <span className="text-[11px] italic text-zinc-400">Belum ada rincian biaya</span>
