@@ -49,6 +49,7 @@ import {
   UserPlus,
   Users,
   Video,
+  Wallet,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -92,6 +93,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -104,7 +106,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
-import { COUNTRIES, findCountry, type Country } from "@/lib/crm/countries";
+import { COUNTRIES } from "@/lib/crm/countries";
 import { CHANNELS } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
@@ -158,6 +160,8 @@ interface ContactFormValues {
   companyId: string;
   city: string;
   country: string;
+  /** Ronde 41 — mata uang preferensi kontak (ISO 4217); otomatis mengikuti negara, bisa dioverride. */
+  currency: string;
   preferredChannel: string;
   instagram: string;
   facebook: string;
@@ -256,6 +260,7 @@ const EMPTY_CONTACT_FORM: ContactFormValues = {
   companyId: "none",
   city: "",
   country: "",
+  currency: "",
   preferredChannel: "whatsapp",
   instagram: "",
   facebook: "",
@@ -658,74 +663,7 @@ function FormField({
   );
 }
 
-// ---------- Ronde 40-B — combobox negara & kode dial (Popover + Command) ----------
-
-/** Combobox negara searchable: tampil kode telepon + badge mata uang; onSelect memberi objek negara. */
-function CountryCombobox({
-  value,
-  onSelect,
-  disabled,
-}: {
-  value: string;
-  onSelect: (country: Country) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = useMemo(
-    () => (value ? (COUNTRIES.find((c) => c.name === value) ?? findCountry(value)) : undefined),
-    [value]
-  );
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Pilih negara"
-          disabled={disabled}
-          className="w-full justify-between px-3 font-normal"
-        >
-          <span className={cn("min-w-0 truncate text-left", !selected && !value && "text-zinc-400")}>
-            {selected ? selected.name : value || "Pilih negara…"}
-          </span>
-          <ChevronDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[min(20rem,calc(100vw-2rem))] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Cari negara…" />
-          <CommandList className="crm-scroll max-h-64">
-            <CommandEmpty>Negara tidak ditemukan.</CommandEmpty>
-            <CommandGroup>
-              {COUNTRIES.map((c) => (
-                <CommandItem
-                  key={c.iso2}
-                  value={`${c.name} ${c.dial} ${c.currency}`}
-                  onSelect={() => {
-                    onSelect(c);
-                    setOpen(false);
-                  }}
-                >
-                  <Check
-                    className={cn("size-4 shrink-0", selected?.iso2 === c.iso2 ? "opacity-100" : "opacity-0")}
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                  <span className="shrink-0 text-xs tabular-nums text-zinc-400">{c.dial}</span>
-                  <Badge variant="secondary" className="shrink-0 text-[10px] font-normal">
-                    {c.currency}
-                  </Badge>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
+// ---------- Ronde 40-B — combobox kode dial (Popover + Command); negara & mata uang pindah ke country-combobox.tsx (Ronde 41) ----------
 
 /** Combobox kode negara (dial) utk nomor WhatsApp. Value = "+62" | "" (tanpa kode). */
 function DialCodeCombobox({
@@ -880,7 +818,22 @@ function ContactFormFields({
           <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
         </FormField>
         <FormField label="Negara">
-          <CountryCombobox value={values.country} onSelect={(c) => setField("country")(c.name)} disabled={disabled} />
+          {/* Ronde 41 — pilih negara sekaligus menyarankan mata uangnya (bisa dioverride di field berikutnya). */}
+          <CountryCombobox
+            value={values.country}
+            onSelect={(c) => {
+              setField("country")(c.name);
+              setField("currency")(c.currency);
+            }}
+            disabled={disabled}
+          />
+        </FormField>
+        <FormField label="Mata uang">
+          <CurrencySelect
+            value={values.currency}
+            onValueChange={setField("currency")}
+            disabled={disabled}
+          />
         </FormField>
         <FormField label="Kanal preferensi">
           <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
@@ -1155,6 +1108,7 @@ function ContactDetailBody({
     companyId: contact.companyId || NO_VALUE,
     city: contact.city ?? "",
     country: contact.country ?? "",
+    currency: contact.currency ?? "",
     preferredChannel: contact.preferredChannel || "whatsapp",
     instagram: contact.instagram ?? "",
     facebook: contact.facebook ?? "",
@@ -1191,6 +1145,7 @@ function ContactDetailBody({
         phone: form.phone.trim() || null,
         city: form.city.trim() || null,
         country: form.country.trim() || null,
+        currency: form.currency.trim() || null,
         preferredChannel: form.preferredChannel,
         instagram: form.instagram.trim() || null,
         facebook: form.facebook.trim() || null,
@@ -1328,6 +1283,7 @@ function ContactDetailBody({
               <InfoRow icon={MessageCircle} label="WhatsApp" value={contact.whatsapp} />
               <InfoRow icon={Phone} label="Telepon" value={contact.phone} />
               <InfoRow icon={MapPin} label="Lokasi" value={locationText(contact.city, contact.country)} />
+              {contact.currency ? <InfoRow icon={Wallet} label="Mata uang" value={contact.currency} /> : null}
               <InfoRow icon={Clock} label="Zona waktu" value={contact.timezone} />
               <InfoRow icon={Languages} label="Bahasa" value={LANGUAGE_LABELS[contact.language] ?? contact.language} />
               <InfoRow icon={PreferredIcon} label="Kanal preferensi" value={channelLabel(contact.preferredChannel)} />
@@ -1708,6 +1664,7 @@ function CreateContactDialog({
         companyName: values.companyName.trim() || undefined,
         city: values.city.trim() || undefined,
         country: values.country.trim() || undefined,
+        currency: values.currency.trim() || undefined,
         preferredChannel: values.preferredChannel,
         instagram: values.instagram.trim() || undefined,
         facebook: values.facebook.trim() || undefined,

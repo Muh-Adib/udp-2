@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { extractEmailFromText } from "@/lib/crm/utils";
+import { findCountry } from "@/lib/crm/countries";
 import { contactIdentityTokens, threadKeyForWithContact } from "@/lib/crm/thread";
 import { resolveActor } from "@/lib/crm/auth";
 
@@ -14,6 +15,11 @@ import { resolveActor } from "@/lib/crm/auth";
  * menyisakan contact yatim / opportunity tanpa lead tertaut, dan dua konversi
  * bersamaan atas lead yang sama tidak lagi menghasilkan opportunity ganda
  * (cek ulang opportunityId di dalam transaksi).
+ *
+ * Ronde 41: (1) contact baru menyimpan mata uang (body ?? turunan negara);
+ * (2) mata uang opportunity mengalir dari kontak → brand → IDR;
+ * (3) konversi kini membentuk DRAFT BRIEF AWAL (ClientBrief status draft)
+ * berisi pesan lead sbg tujuan awal + layanan terpilih — bisa diedit di tab Brief.
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
@@ -43,6 +49,8 @@ export async function POST(req: NextRequest) {
     companyId: string | null;
     contactName: string;
     createdContact: boolean;
+    /** Ronde 41 — kode draft brief awal bila berhasil dibentuk otomatis. */
+    briefCode: string | null;
   };
 
   let result: ConvertResult;
@@ -93,6 +101,11 @@ export async function POST(req: NextRequest) {
         } else {
           // Company
           const companyName = c.companyName ? String(c.companyName).trim() : "";
+          // Ronde 41 — mata uang kontak: body ?? turunan negara (peta COUNTRIES)
+          const contactCountry = c.country ? String(c.country) : null;
+          const contactCurrency = c.currency
+            ? String(c.currency).toUpperCase()
+            : (contactCountry ? (findCountry(contactCountry)?.currency ?? null) : null);
           if (companyName) {
             let company = await tx.company.findFirst({ where: { name: companyName, deletedAt: null } });
             if (!company) {
@@ -100,8 +113,10 @@ export async function POST(req: NextRequest) {
                 data: {
                   name: companyName,
                   industry: c.industry ? String(c.industry) : null,
-                  country: c.country ? String(c.country) : null,
+                  country: contactCountry,
                   city: c.city ? String(c.city) : null,
+                  // Ronde 41 — mata uang default perusahaan mengikuti mata uang kontak
+                  defaultCurrency: contactCurrency ?? "IDR",
                 },
               });
             }
@@ -116,7 +131,8 @@ export async function POST(req: NextRequest) {
               // agar scanner duplikat lintas sumber tetap mengenali lead dari IG.
               socialProfile: socialHandle,
               instagram: c.instagram ? String(c.instagram).trim() : null,
-              country: c.country ? String(c.country) : "Indonesia",
+              country: contactCountry ?? "Indonesia",
+              currency: contactCurrency ?? (contactCountry ? (findCountry(contactCountry)?.currency ?? null) : null),
               city: c.city ? String(c.city) : null,
               preferredChannel: interaction.channel,
               companyId,
@@ -138,8 +154,10 @@ export async function POST(req: NextRequest) {
           leadSource: interaction.channel,
           brief: interaction.content,
           estimatedValue: oppData.estimatedValue ? Number(oppData.estimatedValue) : null,
-          // Ronde 40 — mata uang: body ?? mata uang utama brand ?? IDR
-          currency: oppData.currency ? String(oppData.currency) : (oppBrand.primaryCurrency ?? "IDR"),
+          // Ronde 41 — mata uang: body ?? mata uang kontak (negara asal klien) ?? mata uang utama brand ?? IDR
+          currency: oppData.currency
+            ? String(oppData.currency)
+            : (contact.currency ?? oppBrand.primaryCurrency ?? "IDR"),
           // Ronde 40 — owner default dari sesi (actorName), body hanya bila eksplisit
           ownerName: oppData.ownerName ? String(oppData.ownerName).trim() : actorName,
           stage: String(oppData.stage ?? "new"),
@@ -167,15 +185,50 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      // ===== Ronde 41 — DRAFT BRIEF AWAL =====
+      // Konversi lead kini membentuk draft brief (ClientBrief status "draft"):
+      // tujuan awal = pesan lead, layanan = layanan terpilih, mata uang = mata uang opportunity.
+      // Best-effort: gagal membentuk brief tidak menggagalkan konversi (brief bisa dibuat manual di tab Brief).
+      let briefCode: string | null = null;
+      try {
+        const briefYear = new Date().getFullYear();
+        for (let attempt = 0; attempt < 5 && !briefCode; attempt++) {
+          const count = await tx.clientBrief.count();
+          const candidate = `BRF-${briefYear}-${String(count + attempt + 1).padStart(4, "0")}`;
+          const exists = await tx.clientBrief.findUnique({ where: { code: candidate } });
+          if (!exists) briefCode = candidate;
+        }
+        if (briefCode) {
+          await tx.clientBrief.create({
+            data: {
+              code: briefCode,
+              opportunityId: opportunity.id,
+              brandId: requestedBrandId,
+              title: opportunity.title,
+              serviceTypes: JSON.stringify(opportunity.serviceName ? [opportunity.serviceName] : []),
+              objectives: interaction.content ? interaction.content.slice(0, 2000) : null,
+              currency: opportunity.currency,
+              status: "draft",
+              createdBy: actorName,
+            },
+          });
+        }
+      } catch {
+        briefCode = null; // brief draft best-effort
+      }
+
       return {
         opportunity,
         contactId,
         companyId,
         contactName: contact.fullName,
         createdContact,
+        briefCode,
       };
     });
   } catch (e) {
+    // Ronde 41: error asali dicatat ke log (sebelumnya tertelan → 500 generik tanpa jejak)
+    console.error("[convert] transaction error:", e);
     const msg = e instanceof Error ? e.message : "";
     if (msg === "LEAD_GONE") return fail("Lead tidak ditemukan", 404);
     if (msg === "ALREADY_CONVERTED") return fail("Lead sudah dikonversi");
@@ -183,7 +236,7 @@ export async function POST(req: NextRequest) {
     return fail("Konversi gagal — tidak ada perubahan tersimpan", 500);
   }
 
-  const { opportunity, contactId, companyId, contactName, createdContact } = result;
+  const { opportunity, contactId, companyId, contactName, createdContact, briefCode } = result;
 
   // Audit SETELAH transaksi commit (gagal audit tidak membatalkan konversi).
   if (createdContact) {
@@ -250,5 +303,5 @@ export async function POST(req: NextRequest) {
     req,
   });
 
-  return ok({ opportunity, contactId, unifiedCount }, 201);
+  return ok({ opportunity, contactId, briefCode, unifiedCount }, 201);
 }

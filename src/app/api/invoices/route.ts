@@ -173,7 +173,8 @@ export async function POST(req: NextRequest) {
           taxRate,
           taxAmount,
           total: amount + taxAmount,
-          currency: project.brand.primaryCurrency ?? "IDR",
+          // Ronde 41 — mata uang invoice mengalir dari opportunity (yang berasal dari kontak) → brand → IDR
+          currency: project.opportunity?.currency ?? project.brand.primaryCurrency ?? "IDR",
           status: "draft",
           dueDate,
         },

@@ -94,8 +94,10 @@ export async function POST(req: NextRequest) {
         leadSource: body.leadSource ? String(body.leadSource) : "manual",
         brief: body.brief ? String(body.brief) : null,
         estimatedValue,
-        // Ronde 40 — mata uang: body ?? mata uang utama brand ?? IDR
-        currency: body.currency ? String(body.currency) : (brand.primaryCurrency ?? "IDR"),
+        // Ronde 41 — mata uang: body ?? mata uang kontak (negara asal klien) ?? mata uang utama brand ?? IDR
+        currency: body.currency
+          ? String(body.currency)
+          : (contact.currency ?? brand.primaryCurrency ?? "IDR"),
         probability: body.probability ? Number(body.probability) : 20,
         // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
         expectedCloseDate: dateOrNull(body.expectedCloseDate),

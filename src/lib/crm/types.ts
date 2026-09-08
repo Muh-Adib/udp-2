@@ -59,6 +59,8 @@ export interface ContactRef {
   whatsapp?: string | null;
   phone?: string | null;
   country?: string | null;
+  /** Ronde 41 — mata uang preferensi kontak (ISO 4217); fallback mata uang opportunity/brief/quotation/invoice. */
+  currency?: string | null;
   city?: string | null;
   preferredChannel: string;
   language: string;
@@ -411,7 +413,8 @@ export interface EstimationDTO {
   /** Ronde 40 — nama pajak bebas (PPN, PPh 21, dll); null = tanpa pajak (taxPct 0). */
   taxName?: string | null;
   totalCost: number; contingency: number; managementFee: number;
-  revenue: number; discountAmount: number; netRevenue: number; taxAmount: number; grandTotal: number;
+  /** Ronde 41 — nullable: harga penawaran bisa "belum diketahui" (null). */
+  revenue: number | null; discountAmount: number; netRevenue: number; taxAmount: number; grandTotal: number;
   margin: number; marginPct: number;
   notes?: string | null;
   status: string;

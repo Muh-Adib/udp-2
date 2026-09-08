@@ -15,8 +15,9 @@ import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES, stageLabel } 
 import { CHANNEL_TYPES } from "@/lib/crm/channels";
 import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
 import type {
-  Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ThreadMessageDTO,
+  Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ServiceCategoryDTO, ServiceDTO, ThreadMessageDTO,
 } from "@/lib/crm/types";
+import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,8 @@ interface ContactFormState {
   firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
   /** Ronde 23 — jabatan di perusahaan + handle Instagram (lead kerap datang dari IG). */
   position: string; instagram: string;
+  /** Ronde 41 — negara + mata uang kontak (mata uang otomatis mengikuti negara, bisa dioverride). */
+  country: string; currency: string;
 }
 interface OpportunityFormState {
   brandId: string; title: string; serviceCategory: string; serviceName: string;
@@ -115,6 +118,7 @@ interface OpportunityFormState {
 
 const EMPTY_CONTACT_FORM: ContactFormState = {
   firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
+  country: "", currency: "",
 };
 const EMPTY_OPP_FORM: OpportunityFormState = {
   brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", priority: "medium",
@@ -733,6 +737,8 @@ function contactToForm(c: ContactRef): ContactFormState {
     city: c.city?.trim() ?? "",
     position: c.position?.trim() ?? "",
     instagram: c.instagram?.trim() ?? "",
+    country: c.country?.trim() ?? "",
+    currency: c.currency?.trim() ?? "",
   };
 }
 
@@ -1707,7 +1713,69 @@ function ConvertModal({
 }) {
   const brandOptions = lead ? (brands.length > 0 ? brands : lead.brand ? [lead.brand] : []) : [];
   const selectedOppBrand = brandOptions.find((b) => b.id === oppForm.brandId);
-  const serviceNameOptions = selectedOppBrand ? BRAND_SERVICES[selectedOppBrand.slug] ?? [] : [];
+
+  // Ronde 41 — katalog layanan LIVE dari DB brand (pola sama dgn OpportunityFormDialog):
+  // state menyimpan brandId pemiliknya; catalog "aktif" diderive — mismatch brand → null
+  // (fallback konstanta statis) TANPA setState sinkron di dalam effect.
+  const [catalogState, setCatalogState] = useState<{ brandId: string; categories: ServiceCategoryDTO[]; services: ServiceDTO[] } | null>(null);
+  useEffect(() => {
+    if (!oppForm.brandId) return;
+    let cancelled = false;
+    const brandId = oppForm.brandId;
+    api.brandServices(brandId)
+      .then((res) => {
+        if (!cancelled) setCatalogState({ brandId, categories: res.categories, services: res.services });
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogState((prev) => (prev?.brandId === brandId ? null : prev));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [oppForm.brandId]);
+  const catalog = catalogState && catalogState.brandId === oppForm.brandId ? catalogState : null;
+
+  // Kategori: nama kategori live dari katalog brand; fallback konstanta statis.
+  const kategoriOptions = useMemo(() => {
+    const live = catalog && catalog.categories.length > 0
+      ? catalog.categories.map((c) => c.name)
+      : [...SERVICE_CATEGORIES];
+    if (oppForm.serviceCategory && !live.includes(oppForm.serviceCategory)) live.unshift(oppForm.serviceCategory);
+    return live;
+  }, [catalog, oppForm.serviceCategory]);
+
+  // Layanan: filter per kategori bila kategori cocok dgn katalog; fallback statis per brand slug.
+  const serviceNameOptions = useMemo(() => {
+    if (catalog) {
+      const cat = catalog.categories.find((c) => c.name === oppForm.serviceCategory);
+      const list = (cat
+        ? catalog.services.filter((s) => s.categoryId === cat.id)
+        : catalog.services
+      ).map((s) => s.name);
+      return oppForm.serviceName && !list.includes(oppForm.serviceName)
+        ? [oppForm.serviceName, ...list]
+        : list;
+    }
+    return selectedOppBrand ? BRAND_SERVICES[selectedOppBrand.slug] ?? [] : [];
+  }, [catalog, oppForm.serviceCategory, oppForm.serviceName, selectedOppBrand]);
+
+  // Ronde 41 — ganti kategori: reset layanan hanya bila nilai lama tak cocok dgn katalog
+  function handleConvertCategoryChange(v: string) {
+    let nextServiceName = "";
+    if (catalog) {
+      const cat = catalog.categories.find((c) => c.name === v);
+      const list = (cat
+        ? catalog.services.filter((s) => s.categoryId === cat.id)
+        : catalog.services
+      ).map((s) => s.name);
+      if (oppForm.serviceName && list.includes(oppForm.serviceName)) nextServiceName = oppForm.serviceName;
+    }
+    onOppFormChange({ ...oppForm, serviceCategory: v, serviceName: nextServiceName });
+  }
+
+  // Ronde 41 — mata uang estimasi mengikuti kontak (bila diisi) atau brand
+  const estimasiCurrency = contactForm.currency || selectedOppBrand?.primaryCurrency || "IDR";
+
   const canConvert =
     mode !== null &&
     oppForm.brandId !== "" &&
@@ -1724,7 +1792,7 @@ function ConvertModal({
             Konversi Lead
           </DialogTitle>
           <DialogDescription>
-            Jadi contact + opportunity — task follow-up otomatis dibuat.
+            Jadi contact + opportunity + draft brief awal — task follow-up otomatis dibuat.
           </DialogDescription>
         </DialogHeader>
 
@@ -1835,6 +1903,23 @@ function ConvertModal({
                     placeholder="cth. @rani.creativehouse"
                   />
                 </div>
+                {/* Ronde 41 — negara (auto text) + mata uang: dasar nilai brief/quotation/invoice */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Negara</Label>
+                  <CountryCombobox
+                    value={contactForm.country}
+                    onSelect={(c) => onContactFormChange({ ...contactForm, country: c.name, currency: c.currency })}
+                    ariaLabel="Pilih negara kontak"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Mata Uang</Label>
+                  <CurrencySelect
+                    value={contactForm.currency}
+                    onValueChange={(v) => onContactFormChange({ ...contactForm, currency: v })}
+                    ariaLabel="Pilih mata uang kontak"
+                  />
+                </div>
               </div>
             </div>
           ) : null}
@@ -1882,12 +1967,13 @@ function ConvertModal({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs">Kategori Layanan</Label>
-                <Select value={oppForm.serviceCategory} onValueChange={(v) => onOppFormChange({ ...oppForm, serviceCategory: v, serviceName: "" })}>
+                {/* Ronde 41 — opsi dari katalog live brand (fallback statis) */}
+                <Select value={oppForm.serviceCategory} onValueChange={handleConvertCategoryChange}>
                   <SelectTrigger className="w-full" aria-label="Kategori layanan">
                     <SelectValue placeholder="Pilih kategori" />
                   </SelectTrigger>
                   <SelectContent>
-                    {SERVICE_CATEGORIES.map((cat) => (
+                    {kategoriOptions.map((cat) => (
                       <SelectItem key={cat} value={cat}>{SERVICE_CATEGORY_LABELS[cat] ?? cat}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1920,15 +2006,19 @@ function ConvertModal({
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="convert-value" className="text-xs">Estimasi Nilai (Rp)</Label>
+                {/* Ronde 41 — label & placeholder sadar mata uang; kosong = belum diketahui (null) */}
+                <Label htmlFor="convert-value" className="text-xs">Estimasi Nilai ({estimasiCurrency})</Label>
                 <Input
                   id="convert-value"
                   type="number"
                   min={0}
                   value={oppForm.estimatedValue}
                   onChange={(e) => onOppFormChange({ ...oppForm, estimatedValue: e.target.value })}
-                  placeholder="cth. 25000000"
+                  placeholder="Belum diketahui — kosongkan bila belum ada"
                 />
+                <p className="text-[11px] text-zinc-400">
+                  Mata uang mengikuti kontak ({contactForm.country || "negara belum dipilih"}) / brand — dipakai brief, quotation & invoice.
+                </p>
               </div>
             </div>
           </div>
@@ -2600,6 +2690,9 @@ export default function InboxModule() {
         ...(contactForm.position.trim() ? { position: contactForm.position.trim() } : {}),
         ...(contactForm.instagram.trim() ? { instagram: contactForm.instagram.trim() } : {}),
         ...(contactForm.city.trim() ? { city: contactForm.city.trim() } : {}),
+        // Ronde 41 — negara + mata uang kontak: dasar mata uang opportunity/brief/quotation/invoice
+        ...(contactForm.country.trim() ? { country: contactForm.country.trim() } : {}),
+        ...(contactForm.currency.trim() ? { currency: contactForm.currency.trim() } : {}),
       };
     }
 
@@ -2611,7 +2704,7 @@ export default function InboxModule() {
           ? ` ${res.unifiedCount} pesan lain dari identitas sama ikut disatukan ke opportunity ini.`
           : "";
       toast.success("Lead dikonversi", {
-        description: `Opportunity ${res.opportunity?.title ?? ""} berhasil dibuat beserta task follow-up otomatis.${unifiedNote}`,
+        description: `Opportunity ${res.opportunity?.title ?? ""} berhasil dibuat${res.briefCode ? ` beserta draft brief ${res.briefCode}` : ""} + task follow-up otomatis.${unifiedNote}`,
       });
       setShowConvert(false);
       setShowNewContact(false);

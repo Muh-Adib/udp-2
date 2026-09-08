@@ -105,6 +105,7 @@ model Contact {
   whatsapp         String? // normalized E.164 digits
   phone            String?
   country          String?
+  currency         String? // Ronde 41: mata uang preferensi kontak (ISO 4217) — fallback mata uang opportunity/brief/quotation/invoice
   city             String?
   timezone         String?
   language         String    @default("id")
@@ -446,7 +447,7 @@ model Estimation {
   totalCost        Float       @default(0)
   contingency      Float       @default(0)
   managementFee    Float       @default(0)
-  revenue          Float       @default(0)
+  revenue          Float? // Ronde 41: nullable — harga penawaran bisa "belum diketahui" (null) sebelum diisi
   discountAmount   Float       @default(0)
   netRevenue       Float       @default(0)
   taxAmount        Float       @default(0)

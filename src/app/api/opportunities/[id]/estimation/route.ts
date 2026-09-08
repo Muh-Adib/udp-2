@@ -55,13 +55,14 @@ function parseCostItems(raw: unknown): CostItem[] {
   return items;
 }
 
-function compute(input: Record<string, number>, itemsTotal = 0, tanpaPajak = false) {
+function compute(input: Record<string, number | null>, itemsTotal = 0, tanpaPajak = false) {
   const categorySum = COST_FIELDS.reduce((s, f) => s + (input[f] ?? 0), 0);
   // Ronde 40 — bila rincian item terisi & totalnya > 0, kategori diabaikan
   const totalCost = itemsTotal > 0 ? itemsTotal : categorySum;
   const contingency = Math.round((totalCost * (input.contingencyPct ?? 0)) / 100);
   const managementFee = Math.round((totalCost * (input.managementFeePct ?? 0)) / 100);
   const costWithFees = totalCost + contingency + managementFee;
+  // Ronde 41 — revenue null = "belum diketahui"; kalkulasi memperlakukannya sbg 0
   const revenue = input.revenue ?? 0;
   const discountAmount = Math.round((revenue * (input.discountPct ?? 0)) / 100);
   const netRevenue = revenue - discountAmount;
@@ -84,7 +85,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     estimation = await db.estimation.create({
       data: {
         opportunityId: id,
-        revenue: opp.estimatedValue ?? 0,
+        // Ronde 41 — bila opportunity belum punya estimasi nilai, revenue = null ("belum diketahui")
+        revenue: opp.estimatedValue ?? null,
         createdBy: "System",
       },
     });
@@ -113,11 +115,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const taxName = body.taxName === null || body.taxName === undefined ? null : String(body.taxName).slice(0, 80);
   const tanpaPajak = taxName === null;
 
-  const input: Record<string, number> = {};
+  const input: Record<string, number | null> = {};
   for (const f of COST_FIELDS) input[f] = Number(body[f] ?? current?.[f] ?? 0);
   for (const f of PCT_FIELDS) input[f] = Number(body[f] ?? current?.[f] ?? 0);
-  input.revenue = body.revenue !== undefined ? Number(body.revenue) : (current?.revenue ?? opp.estimatedValue ?? 0);
+  // Ronde 41 — revenue bisa null ("belum diketahui"): body kosong/""/null → null
+  input.revenue = body.revenue !== undefined
+    ? (body.revenue === null || body.revenue === "" ? null : Number(body.revenue))
+    : (current?.revenue ?? opp.estimatedValue ?? null);
+  if (input.revenue !== null && !Number.isFinite(input.revenue)) input.revenue = null;
   if (tanpaPajak) input.taxPct = 0;
+
+  // Ronde 41 — approval hanya masuk akal bila harga penawaran sudah diketahui
+  if (body.submit === true && !(input.revenue !== null && input.revenue > 0)) {
+    return fail("Harga penawaran (revenue) wajib diisi lebih dari 0 sebelum mengajukan approval.", 400);
+  }
 
   // Ronde 40 — costItems (array | JSON string); bila tak dikirim, pertahankan item tersimpan
   let costItems: CostItem[];
@@ -151,15 +162,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     estimation = await db.estimation.create({ data: { ...data, opportunityId: id } });
   }
 
-  // Simpan revenue juga ke opportunity agar kanban/table konsisten
-  if (body.syncOppValue !== false && input.revenue > 0) {
+  // Simpan revenue juga ke opportunity agar kanban/table konsisten (null → jangan timpa)
+  if (body.syncOppValue !== false && input.revenue !== null && input.revenue > 0) {
     await db.opportunity.update({ where: { id }, data: { estimatedValue: input.revenue } });
   }
 
   await logAudit({
     actorName, actorRole, action: "update", entity: "estimation", entityId: estimation.id,
     entityLabel: `Estimasi — ${opp.title}`,
-    newValue: `Revenue ${input.revenue} · Margin ${calc.marginPct}% (${calc.margin})`,
+    newValue: `Revenue ${input.revenue ?? "(belum diketahui)"} · Margin ${calc.marginPct}% (${calc.margin})`,
     req,
   });
 

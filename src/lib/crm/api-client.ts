@@ -199,7 +199,8 @@ export const api = {
     return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
-    request<{ opportunity: OpportunityDTO; unifiedCount?: number }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
+    // Ronde 41 — briefCode: kode draft brief awal yang dibentuk otomatis saat konversi
+    request<{ opportunity: OpportunityDTO; briefCode?: string | null; unifiedCount?: number }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
   // Ronde 33 — gabungkan identitas lead ke contact existing TANPA membuat opportunity
   // (aksi yang hilang di modal Identifikasi: dulu satu-satunya jalan adalah konversi).
   linkLead: (payload: { interactionId: string; contactId: string }) =>

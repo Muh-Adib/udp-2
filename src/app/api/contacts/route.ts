@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, findMatchCandidates } from "@/lib/crm/server";
 import { normalizeEmail, normalizePhone, extractDomain } from "@/lib/crm/utils";
+import { findCountry } from "@/lib/crm/countries";
 import { resolveActor } from "@/lib/crm/auth";
 
 export async function GET(req: NextRequest) {
@@ -88,6 +89,10 @@ export async function POST(req: NextRequest) {
       email, emailAlt: body.emailAlt ? normalizeEmail(String(body.emailAlt)) : null,
       whatsapp, phone,
       country: body.country ? String(body.country) : null,
+      // Ronde 41 — mata uang kontak: body ?? turunan negara (peta COUNTRIES) ?? null
+      currency: body.currency
+        ? String(body.currency).toUpperCase()
+        : (body.country ? (findCountry(String(body.country))?.currency ?? null) : null),
       city: body.city ? String(body.city) : null,
       timezone: body.timezone ? String(body.timezone) : null,
       language: body.language ? String(body.language) : "id",

@@ -877,7 +877,7 @@ export default function BriefPanel({
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <label htmlFor="brief-bmin" className="text-xs font-medium text-zinc-600">Budget minimum (IDR)</label>
+                <label htmlFor="brief-bmin" className="text-xs font-medium text-zinc-600">Budget minimum ({brief?.currency ?? "IDR"})</label>
                 <Input
                   id="brief-bmin"
                   inputMode="numeric"
@@ -887,7 +887,7 @@ export default function BriefPanel({
                 />
               </div>
               <div className="space-y-1">
-                <label htmlFor="brief-bmax" className="text-xs font-medium text-zinc-600">Budget maksimum (IDR)</label>
+                <label htmlFor="brief-bmax" className="text-xs font-medium text-zinc-600">Budget maksimum ({brief?.currency ?? "IDR"})</label>
                 <Input
                   id="brief-bmax"
                   inputMode="numeric"

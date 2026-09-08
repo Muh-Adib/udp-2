@@ -529,7 +529,7 @@ const EMPTY_ESTIMATION_FORM: EstimationForm = {
   discountPct: "0",
   taxPct: "11",
   targetMarginPct: "30",
-  revenue: "0",
+  revenue: "", // Ronde 41 — kosong = "belum diketahui" (null), bukan 0
   notes: "",
 };
 
@@ -549,7 +549,8 @@ function formFromEstimation(est: EstimationDTO): EstimationForm {
     discountPct: String(est.discountPct ?? 0),
     taxPct: String(est.taxPct ?? 0),
     targetMarginPct: String(est.targetMarginPct ?? 0),
-    revenue: String(est.revenue ?? 0),
+    // Ronde 41 — revenue null → kosong ("belum diketahui"), bukan "0"
+    revenue: est.revenue === null || est.revenue === undefined ? "" : String(est.revenue),
     notes: est.notes ?? "",
   };
 }
@@ -846,7 +847,8 @@ function EstimationTab({
         actorName,
         actorRole,
         notes: form.notes.trim() || null,
-        revenue: revenueNum,
+        // Ronde 41 — revenue kosong dikirim null ("belum diketahui"), bukan 0
+        revenue: form.revenue.trim() === "" ? null : revenueNum,
         // Ronde 40-E — nama pajak dari master (null = tanpa pajak, taxPct dipaksa 0 server)
         taxName,
         taxPct: effectiveTaxPct,
@@ -971,19 +973,19 @@ function EstimationTab({
           </label>
           <div className="relative">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-              Rp
+              {currency}
             </span>
             <Input
               id={`est-cost-${c.key}`}
               type="number"
               min={0}
               inputMode="numeric"
-              className="pl-8"
+              className="pl-10"
               value={form[c.key]}
               onChange={(e) => setField(c.key, e.target.value)}
               disabled={disabled}
               placeholder="0"
-              aria-label={`${c.label} (Rupiah)`}
+              aria-label={`${c.label} (${currency})`}
             />
           </div>
         </div>
@@ -1099,7 +1101,7 @@ function EstimationTab({
                     />
                     <div className="relative">
                       <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-                        Rp
+                        {currency}
                       </span>
                       <Input
                         type="number"
@@ -1108,9 +1110,9 @@ function EstimationTab({
                         value={row.unitPrice}
                         onChange={(e) => updateCostItem(idx, { unitPrice: e.target.value })}
                         placeholder="0"
-                        aria-label={`Harga satuan item ${idx + 1}`}
+                        aria-label={`Harga satuan item ${idx + 1} (${currency})`}
                         disabled={disabled}
-                        className="h-8 pl-7 text-sm"
+                        className="h-8 pl-9 text-sm"
                       />
                     </div>
                     <span className="self-center text-right text-xs tabular-nums text-zinc-600 sm:text-sm" aria-label={`Subtotal item ${idx + 1}`}>
@@ -1215,22 +1217,23 @@ function EstimationTab({
           <div className="mt-3 space-y-1">
             <label htmlFor="est-revenue" className="text-xs font-semibold text-zinc-700">
               Harga Penawaran (Revenue)
+              <span className="ml-1 font-normal text-zinc-400">— boleh dikosongkan bila belum diketahui</span>
             </label>
             <div className="relative max-w-xs">
               <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-                Rp
+                {currency}
               </span>
               <Input
                 id="est-revenue"
                 type="number"
                 min={0}
                 inputMode="numeric"
-                className="pl-8 font-semibold"
+                className="pl-10 font-semibold"
                 value={form.revenue}
                 onChange={(e) => setField("revenue", e.target.value)}
                 disabled={disabled}
-                placeholder="0"
-                aria-label="Harga penawaran (Rupiah)"
+                placeholder="Belum diketahui"
+                aria-label={`Harga penawaran (${currency})`}
               />
             </div>
           </div>
@@ -1276,7 +1279,9 @@ function EstimationTab({
           </Button>
         </div>
         {!locked && revenueNum <= 0 ? (
-          <p className="text-xs text-zinc-400">Harga penawaran harus lebih dari 0 untuk mengajukan approval.</p>
+          <p className="text-xs text-zinc-400">
+            Isi harga penawaran (lebih dari 0) untuk mengajukan approval — atau simpan draft dulu bila nilainya belum diketahui.
+          </p>
         ) : null}
       </div>
 

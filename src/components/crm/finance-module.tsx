@@ -285,18 +285,23 @@ export default function FinanceModule() {
     let totalPaid = 0;
     let outstanding = 0;
     let cancelledCount = 0;
+    // Ronde 41 — mata uang ringkasan: bila semua invoice terlihat SATU mata uang, pakai itu;
+    // bila campuran, tetap dijumlahkan tapi label tanda "campuran" (format default IDR).
+    const currencies = new Set<string>();
     for (const inv of list) {
       if (inv.status === "cancelled") {
         cancelledCount += 1;
         continue; // invoice dibatalkan tidak dihitung ke total invoiced
       }
+      currencies.add(inv.currency || "IDR");
       totalInvoiced += inv.total;
       totalPaid += paidAmount(inv);
       if (["sent", "partial", "overdue"].includes(inv.status)) {
         outstanding += Math.max(0, inv.total - paidAmount(inv));
       }
     }
-    return { totalInvoiced, totalPaid, outstanding, cancelledCount };
+    const summaryCurrency = currencies.size === 1 ? [...currencies][0] : "IDR";
+    return { totalInvoiced, totalPaid, outstanding, cancelledCount, summaryCurrency, mixedCurrency: currencies.size > 1 };
   }, [invoices]);
 
   const quoteStats = useMemo(() => {
@@ -635,21 +640,25 @@ export default function FinanceModule() {
                 <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
                   <FileText className="h-3.5 w-3.5" aria-hidden /> Total Invoiced
                 </p>
-                <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{formatCurrency(summary.totalInvoiced)}</p>
-                <p className="mt-1 text-[11px] text-zinc-500">{formatCurrencyFull(summary.totalInvoiced)}</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{formatCurrency(summary.totalInvoiced, summary.summaryCurrency)}</p>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  {summary.mixedCurrency ? "Total campuran beberapa mata uang" : formatCurrencyFull(summary.totalInvoiced, summary.summaryCurrency)}
+                </p>
               </div>
               <div className="rounded-xl border bg-white p-4 shadow-sm">
                 <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
                   <Wallet className="h-3.5 w-3.5" aria-hidden /> Total Paid
                 </p>
-                <p className="mt-1 text-xl font-bold tabular-nums text-emerald-700">{formatCurrency(summary.totalPaid)}</p>
-                <p className="mt-1 text-[11px] text-zinc-500">{formatCurrencyFull(summary.totalPaid)}</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-emerald-700">{formatCurrency(summary.totalPaid, summary.summaryCurrency)}</p>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  {summary.mixedCurrency ? "Total campuran beberapa mata uang" : formatCurrencyFull(summary.totalPaid, summary.summaryCurrency)}
+                </p>
               </div>
               <div className="rounded-xl border bg-white p-4 shadow-sm">
                 <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
                   <ReceiptText className="h-3.5 w-3.5" aria-hidden /> Outstanding
                 </p>
-                <p className="mt-1 text-xl font-bold tabular-nums text-rose-600">{formatCurrency(summary.outstanding)}</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-rose-600">{formatCurrency(summary.outstanding, summary.summaryCurrency)}</p>
                 <p className="mt-1 text-[11px] text-zinc-500">
                   Sisa tagihan belum lunas
                   {summary.cancelledCount > 0 ? ` · ${summary.cancelledCount} invoice dibatalkan` : ""}

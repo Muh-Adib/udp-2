@@ -1742,3 +1742,27 @@ Stage Summary:
 - SEMUA 14 permintaan user Ronde 40 terimplementasi & terverifikasi end-to-end via agent-browser; data demo kembali bersih (4 brand, 24 opportunity, 2 estimasi pending approval utk demo).
 - Deviasi kecil terdokumentasi di worklog 40-A (assignees cap 10 dipotong; PATCH quotation tanpa items menghitung ulang totals dari item tersimpan).
 - Risiko backlog: Kirim quotation masih tanda kirim (bukan pengiriman nyata — sesuai permintaan dev); lampiran task file ≤5MB disimpan sebagai data URL di SQLite (perhatikan ukuran DB untuk produksi); list Inbox hanya lead inbound sehingga chat outbound murni belum membentuk kartu thread sampai balasan masuk (SUDAH diatasi UI dgn status inline).
+
+---
+Task ID: 41-main
+Agent: orchestrator (Z.ai Code)
+Task: Ronde 41 — (1) jawab & perbaiki alur konversi lead: sinkron layanan brand + brief awal; (2) estimasi bisa null (belum diketahui); (3) kontak: negara + mata uang terintegrasi brief/quotation/invoice.
+
+Work Log:
+- Schema: Contact.currency String? + Estimation.revenue Float @default(0) → Float? ; db push (dev server direstart — Prisma client lama di memori menyebabkan PrismaClientValidationError "Unknown arg currency" saat konversi; kini route catch MENCATAT error asli ke log, tidak lagi 500 generik tanpa jejak).
+- Shared component BARU src/components/crm/country-combobox.tsx: CountryCombobox (227 negara + pencarian + dial + badge mata uang; dipindah dari contacts-module) + CurrencySelect (8 mata uang umum + mata uang negara terpilih selalu masuk opsi). contacts-module & inbox-module memakai komponen yang sama.
+- KONVERSI LEAD (jawab pertanyaan user): sekarang konversi membentuk 4 hal dalam 1 transaksi: contact(+company) + opportunity + task follow-up + DRAFT BRIEF AWAL (ClientBrief status draft, kode BRF-*) — objectives = pesan lead, serviceTypes = layanan terpilih, currency = mata uang opportunity; best-effort (gagal tidak menggagalkan konversi); toast menyebut kode brief; ConvertModal description "Jadi contact + opportunity + draft brief awal".
+- SINKRON LAYANAN: ConvertModal kini fetch katalog LIVE per brand (api.brandServices, pola derive tanpa setState sinkron di effect agar lolos react-hooks/set-state-in-effect); fallback konstanta statis; kategori live + layanan ter-filter per kategori + reset layanan hanya bila tak cocok katalog (handleConvertCategoryChange).
+- ESTIMASI NULLABLE: revenue kosong di UI = null ("belum diketahui", bukan 0) — formFromEstimation/EMPTY form/persist mengirim null; GET auto-create revenue = opp.estimatedValue ?? null; PUT menerima ""/null → null; syncOppValue hanya bila revenue > 0; submit approval ditolak server bila revenue ≤ 0 (400) + UI tetap gate disabled dengan hint baru "…atau simpan draft dulu bila nilainya belum diketahui"; prefix Rp hardcoded di 4 input estimasi → {currency} (JPY dll).
+- MATA UANG KONTAK → nilai: rantai fallback baru body.currency → contact.currency → brand.primaryCurrency → IDR di convert route & POST /api/opportunities; contact baru menyimpan currency (body ?? findCountry(country)); company baru ikut defaultCurrency; invoice create currency = project.opportunity.currency ?? brand; briefs sudah opp.currency; label brief "Budget minimum (IDR)" → dinamis (brief.currency); EstimationDTO.revenue number|null; ContactRef.currency.
+- KONTAK UI: form create & edit (ContactFormFields) punya Negara (combobox) + Mata uang (select) — pilih negara otomatis mengisi mata uang, bisa dioverride; payload create/update mengirim currency; detail kontak menambah InfoRow "Mata uang"; convert modal contact form punya Negara + Mata Uang juga; PATCH /api/contacts/[id] allowlist + currency (diverifikasi 200 USD); POST /api/contacts derive currency dari negara.
+- FINANCE KPI: ringkasan mendeteksi mata uang tunggal → format sesuai; campuran → label "Total campuran beberapa mata uang".
+- QA browser (Rian): convert modal — kategori = katalog live Erfo ["Dokumentasi","Live Streaming","Video 360"] (bukan konstanta) ✓; Japan → JPY otomatis ✓; label "Estimasi Nilai (JPY)" ✓; konversi sukses → toast "…draft brief BRF-2026-0006 + task follow-up" ✓; DB: opp currency JPY + contact Japan/JPY + brief (draft, JPY, serviceTypes ["Dokumentasi Foto/Video"], objectives = pesan lead) + task ✓; detail sheet: NILAI JPY 4,500,000, tab Brief menampilkan BRF-2026-0006 ✓; tab Estimasi: placeholder "Belum diketahui", prefix JPY, kosongkan revenue → tombol approval disabled + hint baru, Simpan Draft → DB revenue null ✓; dialog Quotation: Subtotal/Total JPY ✓; invoice via API: currency dari opportunity ✓; contacts dialog: Negara + Mata uang ada ✓.
+- RADIX TABS: klik tab dlm sheet butuh urutan focus+mousedown/mouseup+pointerdown/pointerup+click (mousedown penting).
+- Cleanup: invoice SGT-2026-INV-010, brief BRF-2026-0006, task, opp QA41, contact Dian, audit logs — dilepas urut FK; 2 lead kembali ke inbox; sisa data demo utuh (hanya "QA Ronde 35" yang memang demo lama).
+- lint 0 error, tsc 0 error, dev.log bersih.
+
+Stage Summary:
+- Konversi lead kini lengkap: contact+opportunity+task+BRIEF AWAL dgn katalog layanan live brand; estimasi boleh "belum diketahui" (null); mata uang kontak mengalir otomatis ke opportunity → brief → quotation → invoice (fallback kontak → brand → IDR).
+- Catatan teknis: dev server HARUS direstart setelah db push/generate (Prisma client singleton basi); route catch kini mencatat error asli (mudah debugging).
+- Risiko/backlog: invoice KPI campuran tetap dijumlah mentah (tanpa kurs); "QA Ronde 35" masih demo; estimasi approval tetap butuh revenue > 0 (by design).
