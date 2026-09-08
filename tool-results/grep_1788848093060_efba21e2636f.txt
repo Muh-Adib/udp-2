@@ -1,0 +1,215 @@
+/home/z/my-project/src/app/api/quotations/route.ts:120:      currency: opp.currency,
+/home/z/my-project/src/app/api/quotations/[id]/route.ts:39:          content: `Quotation ${quotation.number} dikirim ke klien. Total: ${quotation.total.toLocaleString("id-ID")} ${quotation.currency}. Berlaku sampai ${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString("id-ID") : "-"}.`,
+/home/z/my-project/src/app/api/quotations/[id]/route.ts:59:        body: `${quotation.number} — ${updated.company?.name ?? "klien"} · total ${updated.total.toLocaleString("id-ID")} ${updated.currency}`,
+/home/z/my-project/src/app/api/quotations/[id]/route.ts:134:            currency: quotation.currency,
+/home/z/my-project/src/app/api/opportunities/route.ts:90:        currency: body.currency ? String(body.currency) : "IDR",
+/home/z/my-project/src/app/api/opportunities/import/route.ts:254:  currency: string;
+/home/z/my-project/src/app/api/opportunities/import/route.ts:304:  const currency = row.mataUang.trim().toUpperCase() || "IDR";
+/home/z/my-project/src/app/api/opportunities/import/route.ts:316:    currency,
+/home/z/my-project/src/app/api/opportunities/import/route.ts:513:        currency: r.currency,
+/home/z/my-project/src/app/api/opportunities/[id]/route.ts:100:    "targetAudience", "deliverables", "estimatedValue", "currency", "probability",
+/home/z/my-project/src/app/api/opportunities/[id]/summary/route.ts:5:import { formatCurrency, formatDate } from "@/lib/crm/utils";
+/home/z/my-project/src/app/api/opportunities/[id]/summary/route.ts:34:- Nilai estimasi: ${formatCurrency(opportunity.estimatedValue, opportunity.currency)}
+/home/z/my-project/src/app/api/brands/route.ts:36:      primaryCurrency: body.primaryCurrency ? String(body.primaryCurrency) : "IDR",
+/home/z/my-project/src/app/api/brands/[id]/route.ts:52:  if (body.primaryCurrency !== undefined) {
+/home/z/my-project/src/app/api/brands/[id]/route.ts:53:    data.primaryCurrency = String(body.primaryCurrency).trim().toUpperCase() || "IDR";
+/home/z/my-project/src/app/api/brands/[id]/route.ts:149:    description: brand.description, website: brand.website, primaryCurrency: brand.primaryCurrency,
+/home/z/my-project/src/app/api/inbox/convert/route.ts:137:          currency: oppData.currency ? String(oppData.currency) : "IDR",
+/home/z/my-project/src/app/api/invoices/route.ts:176:          currency: project.brand.primaryCurrency ?? "IDR",
+/home/z/my-project/src/app/api/companies/route.ts:41:      defaultCurrency: body.defaultCurrency ? String(body.defaultCurrency) : "IDR",
+/home/z/my-project/src/app/api/notifications/route.ts:34:  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+/home/z/my-project/src/app/api/briefs/route.ts:108:      currency: typeof body.currency === "string" ? body.currency : opp.currency,
+/home/z/my-project/src/app/api/change-requests/route.ts:218:            currency: "IDR",
+/home/z/my-project/src/components/crm/pipeline-module.tsx:73:import { formatCurrency, formatDate, initials, timeAgo } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/pipeline-module.tsx:112:      o.currency,
+/home/z/my-project/src/components/crm/pipeline-module.tsx:341:          {formatCurrency(opp.estimatedValue, opp.currency)} · {opp.probability}%
+/home/z/my-project/src/components/crm/pipeline-module.tsx:404:      <p className="px-3 pt-1.5 text-[11px] text-zinc-400">{formatCurrency(total)}</p>
+/home/z/my-project/src/components/crm/pipeline-module.tsx:540:                  {formatCurrency(opp.estimatedValue, opp.currency)}
+/home/z/my-project/src/components/crm/pipeline-module.tsx:683:  return digits ? formatCurrency(Number(digits)) : "-";
+/home/z/my-project/src/components/crm/finance-module.tsx:37:import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/finance-module.tsx:122:      <p className={`mt-1 text-xl font-bold tabular-nums ${valueCls}`}>{formatCurrency(value)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:343:        `Nominal melebihi sisa tagihan (sisa: ${formatCurrencyFull(outstanding, payTarget.currency)}). Catat pembayaran bertahap atau sesuaikan nominal.`,
+/home/z/my-project/src/components/crm/finance-module.tsx:356:      toast.success(`Pembayaran ${formatCurrencyFull(amount, payTarget.currency)} dicatat`);
+/home/z/my-project/src/components/crm/finance-module.tsx:562:                            {formatCurrencyFull(inv.total, inv.currency)}
+/home/z/my-project/src/components/crm/finance-module.tsx:638:                <p className="mt-1 text-xl font-bold tabular-nums text-zinc-900">{formatCurrency(summary.totalInvoiced)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:639:                <p className="mt-1 text-[11px] text-zinc-500">{formatCurrencyFull(summary.totalInvoiced)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:645:                <p className="mt-1 text-xl font-bold tabular-nums text-emerald-700">{formatCurrency(summary.totalPaid)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:646:                <p className="mt-1 text-[11px] text-zinc-500">{formatCurrencyFull(summary.totalPaid)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:652:                <p className="mt-1 text-xl font-bold tabular-nums text-rose-600">{formatCurrency(summary.outstanding)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:684:                        {formatCurrencyFull(detail.total, detail.currency)}
+/home/z/my-project/src/components/crm/finance-module.tsx:709:                        <p className="mt-0.5 tabular-nums text-zinc-800">{formatCurrencyFull(detail.amount, detail.currency)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:713:                        <p className="mt-0.5 tabular-nums text-zinc-800">{formatCurrencyFull(detail.taxAmount, detail.currency)}</p>
+/home/z/my-project/src/components/crm/finance-module.tsx:726:                          {formatCurrencyFull(detailPaid, detail.currency)} / {formatCurrencyFull(detail.total, detail.currency)} ({detailPct}%)
+/home/z/my-project/src/components/crm/finance-module.tsx:747:                                  {formatCurrencyFull(p.amount, detail.currency)}
+/home/z/my-project/src/components/crm/finance-module.tsx:772:                  {payTarget ? `Invoice ${payTarget.number} · sisa tagihan ${formatCurrencyFull(Math.max(0, payTarget.total - paidAmount(payTarget)), payTarget.currency)}` : ""}
+/home/z/my-project/src/components/crm/finance-module.tsx:879:                    sub={formatCurrency(quoteStats.totalValue)}
+/home/z/my-project/src/components/crm/finance-module.tsx:884:                    sub={formatCurrency(quoteStats.sentValue)}
+/home/z/my-project/src/components/crm/finance-module.tsx:946:                                  {formatCurrencyFull(q.total, q.currency)}
+/home/z/my-project/src/components/crm/finance-module.tsx:999:                        {formatCurrencyFull(quoteDetail.total, quoteDetail.currency)}
+/home/z/my-project/src/components/crm/finance-module.tsx:1049:                                  <td className="py-1 text-right tabular-nums text-zinc-600">{formatCurrencyFull(it.unitPrice, quoteDetail.currency)}</td>
+/home/z/my-project/src/components/crm/finance-module.tsx:1050:                                  <td className="py-1 text-right font-medium tabular-nums text-zinc-800">{formatCurrencyFull(it.subtotal, quoteDetail.currency)}</td>
+/home/z/my-project/src/components/crm/finance-module.tsx:1063:                        <span className="tabular-nums">{formatCurrencyFull(quoteDetail.subtotal, quoteDetail.currency)}</span>
+/home/z/my-project/src/components/crm/finance-module.tsx:1067:                        <span className="tabular-nums">-{formatCurrencyFull(quoteDetail.discountAmount, quoteDetail.currency)}</span>
+/home/z/my-project/src/components/crm/finance-module.tsx:1071:                        <span className="tabular-nums">{formatCurrencyFull(quoteDetail.taxAmount, quoteDetail.currency)}</span>
+/home/z/my-project/src/components/crm/finance-module.tsx:1075:                        <span className="tabular-nums">{formatCurrencyFull(quoteDetail.total, quoteDetail.currency)}</span>
+/home/z/my-project/src/components/crm/brief-panel.tsx:61:import { formatCurrencyFull, formatDate } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/brief-panel.tsx:614:                {brief.budgetMin ? formatCurrencyFull(brief.budgetMin, brief.currency) : "—"}
+/home/z/my-project/src/components/crm/brief-panel.tsx:616:                {brief.budgetMax ? formatCurrencyFull(brief.budgetMax, brief.currency) : "—"}
+/home/z/my-project/src/components/crm/brief-panel.tsx:618:              <span className="text-xs text-zinc-400">{brief.currency}</span>
+/home/z/my-project/src/components/crm/projects-module.tsx:38:import { formatCurrency, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/projects-module.tsx:120:      ? `Dari opportunity won · kontrak ${formatCurrency(project.contractValue ?? 0)}`
+/home/z/my-project/src/components/crm/projects-module.tsx:121:      : `Project manual · kontrak ${formatCurrency(project.contractValue ?? 0)}`,
+/home/z/my-project/src/components/crm/projects-module.tsx:140:        ? `${invoices.length} invoice · terbit ${formatCurrency(invTotal)}${paidTotal > 0 ? ` · dibayar ${formatCurrency(paidTotal)}` : ""}`
+/home/z/my-project/src/components/crm/projects-module.tsx:326:          <span className="truncate font-medium">{formatCurrency(project.contractValue)}</span>
+/home/z/my-project/src/components/crm/projects-module.tsx:2162:                    <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{formatCurrency(detail.contractValue)}</p>
+/home/z/my-project/src/components/crm/projects-module.tsx:2165:                        +{formatCurrency(approvedCrSum)} dari change request
+/home/z/my-project/src/components/crm/projects-module.tsx:2371:                                +{formatCurrency(cr.additionalCost)}
+/home/z/my-project/src/components/crm/projects-module.tsx:2775:                    ? `${decideTarget.cr.number} · ${decideTarget.cr.title} — +${formatCurrency(decideTarget.cr.additionalCost)}, +${decideTarget.cr.additionalDays} hari.`
+/home/z/my-project/src/components/crm/brand-settings-dialog.tsx:73:const IDR_FMT = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:101:import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:524:function CalcRow({ label, value, currency, muted }: { label: string; value: number; currency: string; muted?: boolean }) {
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:529:        {formatCurrencyFull(value, currency)}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:535:function CalcPanel({ calc, form, currency }: { calc: EstimationCalc; form: EstimationForm; currency: string }) {
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:545:        <CalcRow label="Total Biaya" value={calc.totalCost} currency={currency} />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:546:        <CalcRow label={`Contingency (${toNum(form.contingencyPct)}%)`} value={calc.contingency} currency={currency} muted />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:547:        <CalcRow label={`Management Fee (${toNum(form.managementFeePct)}%)`} value={calc.managementFee} currency={currency} muted />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:548:        <CalcRow label="Total Biaya + Fee" value={calc.costWithFees} currency={currency} />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:550:        <CalcRow label={`Diskon (${toNum(form.discountPct)}%)`} value={-calc.discountAmount} currency={currency} muted />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:551:        <CalcRow label="Net Revenue" value={calc.netRevenue} currency={currency} />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:552:        <CalcRow label={`PPN (${toNum(form.taxPct)}%)`} value={calc.taxAmount} currency={currency} muted />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:553:        <CalcRow label="Grand Total" value={calc.grandTotal} currency={currency} />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:561:              {formatCurrencyFull(calc.margin, currency)} <span className="text-sm font-medium">({calc.marginPct}%)</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:590:  currency,
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:597:  currency: string;
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:803:      <CalcPanel calc={calc} form={form} currency={currency} />
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:852:              Estimasi dengan revenue {formatCurrencyFull(revenueNum, currency)} akan dikirim ke Direktur untuk
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:905:  currency,
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:913:  currency: string;
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:955:        {formatCurrency(subtotal, currency)}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:976:  defaultCurrency,
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:988:  defaultCurrency: string;
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:999:  const currency = editing?.currency ?? defaultCurrency;
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1148:                {formatCurrencyFull(Number(estimation?.revenue ?? 0), currency)}). Sesuaikan item bila penawaran dibagi per komponen.
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1165:                currency={currency}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1255:              <span className="tabular-nums">{formatCurrencyFull(totals.subtotal, currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1259:              <span className="tabular-nums">-{formatCurrencyFull(totals.discountAmount, currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1263:              <span className="tabular-nums">{formatCurrencyFull(totals.taxAmount, currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1267:              <span className="tabular-nums">{formatCurrencyFull(totals.total, currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1311:                  <td className="py-1 text-right tabular-nums text-zinc-600">{formatCurrency(it.unitPrice, q.currency)}</td>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1312:                  <td className="py-1 text-right font-medium tabular-nums text-zinc-800">{formatCurrency(it.subtotal, q.currency)}</td>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1322:          <span className="tabular-nums">{formatCurrencyFull(q.subtotal, q.currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1326:          <span className="tabular-nums">-{formatCurrencyFull(q.discountAmount, q.currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1330:          <span className="tabular-nums">{formatCurrencyFull(q.taxAmount, q.currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1334:          <span className="tabular-nums">{formatCurrencyFull(q.total, q.currency)}</span>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1377:          {formatCurrencyFull(q.total, q.currency)}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1466:  defaultCurrency,
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1477:  defaultCurrency: string;
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:1569:        defaultCurrency={defaultCurrency}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:2073:                  <Meta label="Nilai">{formatCurrencyFull(data.estimatedValue, data.currency)}</Meta>
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:2364:                      currency={data.currency}
+/home/z/my-project/src/components/crm/opportunity-detail.tsx:2377:                      defaultCurrency={data.currency}
+/home/z/my-project/src/components/crm/portal-module.tsx:36:import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/portal-module.tsx:465:        <span className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(quote.total, quote.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:509:                    <td className="py-2 pr-2 text-right tabular-nums text-zinc-600">{formatCurrencyFull(it.unitPrice, quote.currency)}</td>
+/home/z/my-project/src/components/crm/portal-module.tsx:510:                    <td className="py-2 text-right tabular-nums font-medium text-zinc-900">{formatCurrencyFull(it.subtotal, quote.currency)}</td>
+/home/z/my-project/src/components/crm/portal-module.tsx:521:          <span className="tabular-nums">{formatCurrencyFull(quote.subtotal, quote.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:526:            <span className="tabular-nums text-emerald-600">-{formatCurrencyFull(quote.discountAmount, quote.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:531:          <span className="tabular-nums">{formatCurrencyFull(quote.taxAmount, quote.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:535:          <span className="tabular-nums">{formatCurrencyFull(quote.total, quote.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:1634:              <p className="mt-1 text-2xl font-bold tabular-nums text-rose-600">{formatCurrency(invoiceSummary.outstanding)}</p>
+/home/z/my-project/src/components/crm/portal-module.tsx:1700:                    Total nilai tambah {formatCurrency(crSummary.approvedValue)}
+/home/z/my-project/src/components/crm/portal-module.tsx:1727:                        <span className="font-bold tabular-nums text-emerald-600">+{formatCurrency(cr.additionalCost)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:1804:                        <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(q.total, q.currency)}</p>
+/home/z/my-project/src/components/crm/portal-module.tsx:1842:                          {inv.status !== "paid" ? ` · terbayar ${formatCurrency(paid, inv.currency)}` : ""}
+/home/z/my-project/src/components/crm/portal-module.tsx:1846:                        <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(inv.total, inv.currency)}</p>
+/home/z/my-project/src/components/crm/portal-module.tsx:1874:                  <span className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(detail.total, detail.currency)}</span>
+/home/z/my-project/src/components/crm/portal-module.tsx:1909:                            <p className="text-sm font-semibold tabular-nums text-zinc-900">{formatCurrencyFull(p.amount, detail.currency)}</p>
+/home/z/my-project/src/components/crm/portal-module.tsx:1945:                      <span className="font-semibold text-emerald-700">{formatCurrency(crDecision.cr.additionalCost)}</span>{" "}
+/home/z/my-project/src/components/crm/contacts-module.tsx:110:import { formatCurrency, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/contacts-module.tsx:163:  defaultCurrency: string;
+/home/z/my-project/src/components/crm/contacts-module.tsx:229:const CURRENCY_OPTIONS = [
+/home/z/my-project/src/components/crm/contacts-module.tsx:260:  defaultCurrency: "IDR",
+/home/z/my-project/src/components/crm/contacts-module.tsx:1326:            <InfoRow icon={Banknote} label="Mata uang default" value={company.defaultCurrency} />
+/home/z/my-project/src/components/crm/contacts-module.tsx:1330:              value={formatCurrency(company.lifetimeValue, company.defaultCurrency)}
+/home/z/my-project/src/components/crm/contacts-module.tsx:1639:        defaultCurrency: values.defaultCurrency,
+/home/z/my-project/src/components/crm/contacts-module.tsx:1691:              <Select value={values.defaultCurrency} onValueChange={setField("defaultCurrency")} disabled={submitting}>
+/home/z/my-project/src/components/crm/contacts-module.tsx:1696:                  {CURRENCY_OPTIONS.map((c) => (
+/home/z/my-project/src/components/crm/contacts-module.tsx:3073:                          {formatCurrency(c.lifetimeValue, c.defaultCurrency)}
+/home/z/my-project/src/components/crm/reports-module.tsx:18:import { formatCurrency } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/reports-module.tsx:282:          value={formatCurrency(totals?.wonValue ?? 0)}
+/home/z/my-project/src/components/crm/reports-module.tsx:294:          value={formatCurrency(totals?.outstanding ?? 0)}
+/home/z/my-project/src/components/crm/reports-module.tsx:346:                          <TableCell className="text-right text-sm font-semibold text-zinc-900">{formatCurrency(r.value)}</TableCell>
+/home/z/my-project/src/components/crm/reports-module.tsx:406:                          <TableCell className="text-right text-sm text-zinc-700">{formatCurrency(r.valueWon)}</TableCell>
+/home/z/my-project/src/components/crm/reports-module.tsx:515:                          <TableCell className="text-right text-sm font-semibold text-zinc-900">{formatCurrency(r.amount)}</TableCell>
+/home/z/my-project/src/components/crm/reports-module.tsx:570:                          <TableCell className="text-right text-sm font-semibold text-zinc-900">{formatCurrency(r.value)}</TableCell>
+/home/z/my-project/src/components/crm/reports-module.tsx:571:                          <TableCell className="text-right text-sm text-zinc-600">{formatCurrency(r.weighted)}</TableCell>
+/home/z/my-project/src/components/crm/brands-module.tsx:58:  primaryCurrency: string;
+/home/z/my-project/src/components/crm/brands-module.tsx:89:  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
+/home/z/my-project/src/components/crm/brands-module.tsx:96:  description: "", website: "", primaryCurrency: "IDR",
+/home/z/my-project/src/components/crm/brands-module.tsx:190:        <Badge variant="outline" className="border-transparent bg-zinc-100 text-zinc-600">{brand.primaryCurrency}</Badge>
+/home/z/my-project/src/components/crm/brands-module.tsx:909:        primaryCurrency: draft.primaryCurrency,
+/home/z/my-project/src/components/crm/brands-module.tsx:1138:                <Label htmlFor="brand-currency">Mata Uang</Label>
+/home/z/my-project/src/components/crm/brands-module.tsx:1139:                <Select value={draft.primaryCurrency} onValueChange={(v) => setDraft((d) => ({ ...d, primaryCurrency: v }))}>
+/home/z/my-project/src/components/crm/brands-module.tsx:1140:                  <SelectTrigger id="brand-currency"><SelectValue /></SelectTrigger>
+/home/z/my-project/src/components/crm/quotation-print.tsx:4:import { formatCurrencyFull, formatDate } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/quotation-print.tsx:125:                  {formatCurrencyFull(it.unitPrice, q.currency)}
+/home/z/my-project/src/components/crm/quotation-print.tsx:128:                  {formatCurrencyFull(it.subtotal, q.currency)}
+/home/z/my-project/src/components/crm/quotation-print.tsx:142:              <td className="py-1 text-right font-medium tabular-nums">{formatCurrencyFull(q.subtotal, q.currency)}</td>
+/home/z/my-project/src/components/crm/quotation-print.tsx:146:              <td className="py-1 text-right font-medium tabular-nums">-{formatCurrencyFull(q.discountAmount, q.currency)}</td>
+/home/z/my-project/src/components/crm/quotation-print.tsx:150:              <td className="py-1 text-right font-medium tabular-nums">{formatCurrencyFull(q.taxAmount, q.currency)}</td>
+/home/z/my-project/src/components/crm/quotation-print.tsx:154:              <td className="pt-1.5 text-right text-sm font-bold tabular-nums">{formatCurrencyFull(q.total, q.currency)}</td>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:28:import { formatCurrency, initials, timeAgo } from "@/lib/crm/utils";
+/home/z/my-project/src/components/crm/dashboard-module.tsx:290:            {item.amount != null ? formatCurrency(item.amount) : "-"}
+/home/z/my-project/src/components/crm/dashboard-module.tsx:652:                  <span className="shrink-0 text-sm font-semibold tabular-nums text-zinc-900">{formatCurrency(d.value)}</span>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:688:            <p className="text-lg font-bold tabular-nums text-zinc-900">{formatCurrency(view.pipelineValue)}</p>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:692:            <p className="text-lg font-bold tabular-nums text-emerald-700">{formatCurrency(view.wonValue)}</p>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:719:                  <span className="block text-[11px] tabular-nums opacity-80">{formatCurrency(s.total)}</span>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:727:            <p className="text-base font-bold tabular-nums text-emerald-700">{formatCurrency(view.collectedThisMonth)}</p>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:731:            <p className="text-base font-bold tabular-nums text-zinc-900">{formatCurrency(view.billedThisMonth)}</p>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:763:                    <span className="shrink-0 text-sm font-bold tabular-nums text-rose-700">{formatCurrency(i.total)}</span>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:796:                  <span className="shrink-0 font-semibold tabular-nums text-zinc-900">{formatCurrency(b.outstanding)}</span>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:809:          Total outstanding <span className="font-bold text-zinc-900">{formatCurrency(view.outstanding)}</span>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1156:        { label: "Pipeline Saya", value: formatCurrency(mv.pipelineValue), icon: Wallet, hint: `${mv.openLeads} deal terbuka milik saya`, accent: true },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1157:        { label: "Deal Won Saya", value: formatCurrency(mv.wonValue), icon: Trophy, hint: `${mv.wonCount} deal berhasil ditutup`, accent: true },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1164:        { label: "Outstanding", value: formatCurrency(fv.outstanding), icon: ReceiptText, hint: "total tagihan belum lunas", accent: true, goodWhen: "down" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1165:        { label: "Terkumpul Bulan Ini", value: formatCurrency(fv.collectedThisMonth), icon: Coins, hint: "payment diterima bulan berjalan", accent: true },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1166:        { label: "Diterbitkan Bulan Ini", value: formatCurrency(fv.billedThisMonth), icon: Banknote, hint: "invoice terbit bulan berjalan" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1189:      { key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue), icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1190:      { key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline), icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1192:      { key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue), icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1194:      { key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices), icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down" },
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1390:                    <div className="text-zinc-500">{formatCurrency(entry.value)}</div>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1415:                  tickFormatter={(value: number) => formatCurrency(value)}
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1419:                  formatter={(value) => [formatCurrency(Number(value)), "Forecast"]}
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1500:                      <div className="mt-1 text-xs tabular-nums text-zinc-600">{formatCurrency(b.value)} open</div>
+/home/z/my-project/src/components/crm/dashboard-module.tsx:1721:              {confirmState?.approval.amount != null ? ` · ${formatCurrency(confirmState.approval.amount)}` : ""}
+/home/z/my-project/src/lib/crm/utils.ts:110:export function formatCurrency(value?: number | null, currency = "IDR"): string {
+/home/z/my-project/src/lib/crm/utils.ts:112:  if (currency === "IDR") {
+/home/z/my-project/src/lib/crm/utils.ts:117:  return `${currency} ${value.toLocaleString("en-US")}`;
+/home/z/my-project/src/lib/crm/utils.ts:120:export function formatCurrencyFull(value?: number | null, currency = "IDR"): string {
+/home/z/my-project/src/lib/crm/utils.ts:122:  if (currency === "IDR") return `Rp ${value.toLocaleString("id-ID")}`;
+/home/z/my-project/src/lib/crm/utils.ts:123:  return `${currency} ${value.toLocaleString("en-US")}`;
+/home/z/my-project/src/lib/crm/seed.ts:347:    db.company.create({ data: { name: "PT Nusantara Digital Raya", industry: "Teknologi", website: "https://nusantaranet.com", websiteDomain: "nusantaranet.com", country: "Indonesia", city: "Jakarta", size: "enterprise", defaultCurrency: "IDR", tags: JSON.stringify(["priority", "retainer"]), lifetimeValue: 485000000 } }),
+/home/z/my-project/src/lib/crm/seed.ts:348:    db.company.create({ data: { name: "Kementerian Pendidikan dan Kebudayaan", industry: "Pemerintahan", website: "kemdikbud.go.id", websiteDomain: "kemdikbud.go.id", country: "Indonesia", city: "Jakarta", size: "government", defaultCurrency: "IDR", tags: JSON.stringify(["government"]) } }),
+/home/z/my-project/src/lib/crm/seed.ts:349:    db.company.create({ data: { name: "PT Sawit Sejahtera Abadi", industry: "Agrikultur", website: "sawitsejahtera.co.id", websiteDomain: "sawitsejahtera.co.id", country: "Indonesia", city: "Medan", size: "enterprise", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:350:    db.company.create({ data: { name: "Bank Berkah Sentosa", industry: "Perbankan", website: "bankberkah.co.id", websiteDomain: "bankberkah.co.id", country: "Indonesia", city: "Surabaya", size: "enterprise", defaultCurrency: "IDR", tags: JSON.stringify(["finance"]) } }),
+/home/z/my-project/src/lib/crm/seed.ts:351:    db.company.create({ data: { name: "PT Karya Wisata Nusantara", industry: "Pariwisata", website: "wisatanusantara.id", websiteDomain: "wisatanusantara.id", country: "Indonesia", city: "Denpasar", size: "sme", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:352:    db.company.create({ data: { name: "RS Harapan Sehat", industry: "Kesehatan", website: "harapansehat.co.id", websiteDomain: "harapansehat.co.id", country: "Indonesia", city: "Bandung", size: "enterprise", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:353:    db.company.create({ data: { name: "CV Manggala Kreatif", industry: "Kreatif", country: "Indonesia", city: "Yogyakarta", size: "sme", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:354:    db.company.create({ data: { name: "PT Logistik Prima Indonesia", industry: "Logistik", website: "logistikprima.co.id", websiteDomain: "logistikprima.co.id", country: "Indonesia", city: "Semarang", size: "enterprise", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:355:    db.company.create({ data: { name: "Global EdTech Pte Ltd", industry: "Pendidikan", website: "globaledtech.com", websiteDomain: "globaledtech.com", country: "Singapore", city: "Singapore", size: "sme", defaultCurrency: "USD" } }),
+/home/z/my-project/src/lib/crm/seed.ts:356:    db.company.create({ data: { name: "Dinas Pariwisata Daerah Kota Bandung", industry: "Pemerintahan", country: "Indonesia", city: "Bandung", size: "government", defaultCurrency: "IDR" } }),
+/home/z/my-project/src/lib/crm/seed.ts:384:    currency?: string; lastOfferValue?: number; followUpDate?: Date;
+/home/z/my-project/src/lib/crm/seed.ts:399:    { title: "Video profil internasional EN", brand: unicam.id, company: 8, contact: 8, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "linkedin", stage: "negotiation", value: 28000000, currency: "USD", probability: 65, owner: "Dewi Lestari", createdDaysAgo: 25 },
+/home/z/my-project/src/lib/crm/seed.ts:425:      currency: s.currency ?? "IDR",
+/home/z/my-project/src/lib/crm/seed.ts:568:      taxRate: 11, taxAmount, total: inv.amount + taxAmount, currency: "IDR",
+/home/z/my-project/src/lib/crm/seed.ts:636:    taxPct: 11, taxAmount: qTax, total: qSubtotal + qTax, currency: "IDR",
+/home/z/my-project/src/lib/crm/seed.ts:654:    taxPct: 11, taxAmount: dTax, total: dSubtotal - dDiscount + dTax, currency: "IDR",
+/home/z/my-project/src/lib/crm/seed.ts:670:      currency: "IDR", status: "sent", issueDate: ago(6), dueDate: ahead(8),
+/home/z/my-project/src/lib/crm/server.ts:237:          currency: opp.currency,
+/home/z/my-project/src/lib/crm/types.ts:10:  primaryCurrency: string;
+/home/z/my-project/src/lib/crm/types.ts:49:  defaultCurrency: string;
+/home/z/my-project/src/lib/crm/types.ts:94:  currency: string;
+/home/z/my-project/src/lib/crm/types.ts:328:  currency: string;
+/home/z/my-project/src/lib/crm/types.ts:398:  currency: string;
+/home/z/my-project/src/lib/crm/types.ts:770:  currency: string;

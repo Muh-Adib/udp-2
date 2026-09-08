@@ -1,0 +1,523 @@
+     1→"use client";
+     2→
+     3→import type {
+     4→  OpportunityDTO, InteractionDTO, TaskDTO, ContactRef, CompanyRef,
+     5→  DashboardData, MatchCandidateDTO, ProjectDTO, InvoiceDTO, AuditLogDTO, Brand,
+     6→  InboxLeadDTO,
+     7→} from "@/lib/crm/types";
+     8→
+     9→/** Satu entri hasil global search (ronde 26) — module = modul tujuan navigasi. */
+    10→export type SearchItemDTO = {
+    11→  id: string;
+    12→  module: "contacts" | "pipeline" | "projects" | "finance" | "inbox";
+    13→  label: string;
+    14→  title: string;
+    15→  subtitle: string;
+    16→  badge?: string;
+    17→};
+    18→
+    19→async function request<T>(url: string, init?: RequestInit): Promise<T> {
+    20→  const res = await fetch(url, {
+    21→    ...init,
+    22→    credentials: "same-origin", // Ronde 27: cookie sesi selalu ikut utk request same-origin
+    23→    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    24→  });
+    25→  const data = await res.json().catch(() => ({}));
+    26→  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    27→  return data as T;
+    28→}
+    29→
+    30→/** Entri user sesi (Ronde 27) — sama dgn bentuk login. */
+    31→export type SessionUserResponse = {
+    32→  id: string; name: string; email: string; role: string;
+    33→  avatarColor: string; brandAccess: string; companyName?: string | null;
+    34→};
+    35→
+    36→export const api = {
+    37→  // Bootstrap
+    38→  bootstrap: () => request<{ ready: boolean }>("/api/bootstrap"),
+    39→  login: (email: string, pin: string) =>
+    40→    request<{ user: SessionUserResponse }>(
+    41→      "/api/auth/login", { method: "POST", body: JSON.stringify({ email, pin }) }
+    42→    ),
+    43→  // Ronde 27 — sesi nyata: introspeksi cookie + logout server-side
+    44→  session: () => request<{ user: SessionUserResponse | null }>("/api/auth/session"),
+    45→  logout: () => request<{ loggedOut: boolean }>("/api/auth/session", { method: "POST" }),
+    46→  users: () => request<{ users: { id: string; name: string; email: string; role: string; avatarColor: string; active: boolean }[] }>("/api/users"),
+    47→
+    48→  // Brands
+    49→  brands: () => request<{ brands: Brand[] }>("/api/brands"),
+    50→
+    51→  // Ronde 40 — master pajak bebas (GET auto-seed PPN/PPh bila kosong; tulis role finance/director/super_admin)
+    52→  taxes: () => request<{ taxes: import("@/lib/crm/types").TaxDTO[] }>("/api/taxes"),
+    53→  createTax: (payload: { name: string; rate: number }) =>
+    54→    request<{ tax: import("@/lib/crm/types").TaxDTO }>("/api/taxes", { method: "POST", body: JSON.stringify(payload) }),
+    55→  updateTax: (payload: { id: string; name?: string; rate?: number; active?: boolean }) =>
+    56→    request<{ tax: import("@/lib/crm/types").TaxDTO }>("/api/taxes", { method: "PATCH", body: JSON.stringify(payload) }),
+    57→
+    58→  // Dashboard
+    59→  dashboard: () => request<DashboardData>("/api/dashboard"),
+    60→
+    61→  // Opportunities
+    62→  opportunities: (params?: { stage?: string; brandId?: string; q?: string; owner?: string }) => {
+    63→    const sp = new URLSearchParams();
+    64→    if (params?.stage) sp.set("stage", params.stage);
+    65→    if (params?.brandId) sp.set("brandId", params.brandId);
+    66→    if (params?.q) sp.set("q", params.q);
+    67→    if (params?.owner) sp.set("owner", params.owner);
+    68→    return request<{ opportunities: OpportunityDTO[] }>(`/api/opportunities?${sp}`);
+    69→  },
+    70→  opportunity: (id: string) => request<{ opportunity: OpportunityDTO & {
+    71→    interactions: InteractionDTO[]; tasks: TaskDTO[]; notes: { id: string; body: string; authorName: string; type: string; createdAt: string }[];
+    72→    projects: { id: string; code: string; name: string; status: string; progress: number; milestones: { id: string; name: string; order: number; status: string; dueDate?: string | null }[] }[];
+    73→    invoices: InvoiceDTO[];
+    74→  }; related: OpportunityDTO[] }>(`/api/opportunities/${id}`),
+    75→  createOpportunity: (payload: Record<string, unknown>) =>
+    76→    request<{ opportunity: OpportunityDTO }>("/api/opportunities", { method: "POST", body: JSON.stringify(payload) }),
+    77→  updateOpportunity: (id: string, payload: Record<string, unknown>) =>
+    78→    request<{ opportunity: OpportunityDTO; createdProject?: { code: string; id: string } | null }>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    79→  aiSummary: (id: string) =>
+    80→    request<{ summary: string }>(`/api/opportunities/${id}/summary`, { method: "POST" }),
+    81→
+    82→  // Estimation (Fase 2)
+    83→  getEstimation: (id: string) =>
+    84→    request<{ estimation: import("@/lib/crm/types").EstimationDTO }>(`/api/opportunities/${id}/estimation`),
+    85→  saveEstimation: (id: string, payload: Record<string, unknown>) =>
+    86→    request<{ estimation: import("@/lib/crm/types").EstimationDTO; approval?: import("@/lib/crm/types").ApprovalRequestDTO }>(
+    87→      `/api/opportunities/${id}/estimation`, { method: "PUT", body: JSON.stringify(payload) }
+    88→    ),
+    89→
+    90→  // Quotations (Fase 2)
+    91→  quotations: (params?: { status?: string; brandId?: string; opportunityId?: string; companyId?: string }) => {
+    92→    const sp = new URLSearchParams();
+    93→    if (params?.status && params.status !== "all") sp.set("status", params.status);
+    94→    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+    95→    if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+    96→    if (params?.companyId) sp.set("companyId", params.companyId);
+    97→    return request<{ quotations: import("@/lib/crm/types").QuotationDTO[] }>(`/api/quotations?${sp}`);
+    98→  },
+    99→  createQuotation: (payload: Record<string, unknown>) =>
+   100→    request<{ quotation: import("@/lib/crm/types").QuotationDTO }>("/api/quotations", { method: "POST", body: JSON.stringify(payload) }),
+   101→  quotationAction: (id: string, payload: Record<string, unknown>) =>
+   102→    request<{ quotation?: import("@/lib/crm/types").QuotationDTO; invoice?: { number: string } }>(`/api/quotations/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+   103→
+   104→  // Approvals (Fase 2)
+   105→  approvals: (status?: string) =>
+   106→    request<{ approvals: import("@/lib/crm/types").ApprovalRequestDTO[]; pendingCount: number }>(
+   107→      `/api/approvals${status && status !== "all" ? `?status=${status}` : ""}`
+   108→    ),
+   109→  decideApproval: (payload: { id: string; decision: "approve" | "reject"; decisionNote?: string; actorName: string; actorRole: string }) =>
+   110→    request<{ approval: import("@/lib/crm/types").ApprovalRequestDTO }>("/api/approvals", { method: "PATCH", body: JSON.stringify(payload) }),
+   111→
+   112→  // Brands & templates
+   113→  createBrand: (payload: Record<string, unknown>) =>
+   114→    request<{ brand: import("@/lib/crm/types").Brand }>("/api/brands", { method: "POST", body: JSON.stringify(payload) }),
+   115→  followUpTemplates: (brandId?: string) =>
+   116→    request<{ templates: import("@/lib/crm/types").FollowUpTemplateDTO[] }>(
+   117→      `/api/followup-templates${brandId && brandId !== "all" ? `?brandId=${brandId}` : ""}`
+   118→    ),
+   119→  updateBrand: (id: string, payload: Record<string, unknown>) =>
+   120→    request<{ brand: import("@/lib/crm/types").Brand }>(`/api/brands/${id}`, {
+   121→      method: "PATCH",
+   122→      body: JSON.stringify(payload),
+   123→    }),
+   124→  // Ronde 29-b — katalog layanan & workflow per brand
+   125→  brandServices: (id: string) =>
+   126→    request<import("@/lib/crm/types").BrandServiceCatalog>(`/api/brands/${id}/services`),
+   127→  brandServiceMutate: (
+   128→    id: string,
+   129→    payload: Record<string, unknown>,
+   130→    method: "POST" | "PATCH" | "DELETE"
+   131→  ) =>
+   132→    request<Record<string, unknown>>(
+   133→      method === "DELETE"
+   134→        ? `/api/brands/${id}/services?kind=${encodeURIComponent(String(payload.kind ?? ""))}&id=${encodeURIComponent(String(payload.id ?? ""))}`
+   135→        : `/api/brands/${id}/services`,
+   136→      method === "DELETE" ? { method } : { method, body: JSON.stringify(payload) }
+   137→    ),
+   138→  // Ronde 29-b — peta layanan × brand & peluang cross-selling (owner view)
+   139→  serviceMap: (init?: RequestInit) =>
+   140→    request<import("@/lib/crm/types").ServiceMapData>("/api/service-map", init),
+   141→  createTemplate: (payload: Record<string, unknown>) =>
+   142→    request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>("/api/followup-templates", {
+   143→      method: "POST",
+   144→      body: JSON.stringify(payload),
+   145→    }),
+   146→  updateTemplate: (id: string, payload: Record<string, unknown>) =>
+   147→    request<{ template: import("@/lib/crm/types").FollowUpTemplateDTO }>(`/api/followup-templates/${id}`, {
+   148→      method: "PATCH",
+   149→      body: JSON.stringify(payload),
+   150→    }),
+   151→  deleteTemplate: (id: string) =>
+   152→    request<{ ok: boolean }>(`/api/followup-templates/${id}`, { method: "DELETE" }),
+   153→
+   154→  // Contacts & companies
+   155→  contacts: (q?: string) => request<{ contacts: (ContactRef & { company?: CompanyRef | null; _count?: { opportunities: number; interactions: number } })[] }>(`/api/contacts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+   156→  companies: (q?: string) => request<{ companies: (CompanyRef & { contacts?: ContactRef[]; _count?: { opportunities: number; projects: number; invoices: number } })[] }>(`/api/companies${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+   157→  createContact: (payload: Record<string, unknown>) =>
+   158→    request<{ contact: ContactRef; duplicateCandidates: MatchCandidateDTO[] }>("/api/contacts", { method: "POST", body: JSON.stringify(payload) }),
+   159→  updateContact: (id: string, payload: Record<string, unknown>) =>
+   160→    request<{ contact: ContactRef }>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+   161→  createCompany: (payload: Record<string, unknown>) =>
+   162→    request<{ company: CompanyRef }>("/api/companies", { method: "POST", body: JSON.stringify(payload) }),
+   163→  mergeContacts: (primaryId: string, duplicateId: string, actorName: string) =>
+   164→    request<{ merged: boolean }>("/api/contacts/merge", { method: "POST", body: JSON.stringify({ primaryId, duplicateId, actorName }) }),
+   165→  /** Scanner duplikat lintas sumber (WA/IG/email/import): pasangan kontak skor ≥ ambang. */
+   166→  scanDuplicates: () =>
+   167→    request<{ pairs: import("@/lib/crm/types").DuplicatePairDTO[] }>("/api/contacts/duplicates"),
+   168→  /** Import CSV massal: preview (commit=false) mengembalikan kandidat duplikat per baris; commit mengeksekusi keputusan. */
+   169→  importContacts: (payload: { rows: Record<string, string>[]; decisions?: Record<string, string>; commit: boolean; actorName: string; actorRole: string }) =>
+   170→    request<import("@/lib/crm/types").ImportPreviewResponseDTO | import("@/lib/crm/types").ImportCommitResponseDTO>(
+   171→      "/api/contacts/import", { method: "POST", body: JSON.stringify(payload) }
+   172→    ),
+   173→  /** Import CSV opportunity (round-trip dgn ekspor ronde 13): preview validasi+dedupe atau commit dgn keputusan per baris duplikat (16-b). */
+   174→  importOpportunities: (payload: {
+   175→    rows: Record<string, string>[];
+   176→    commit: boolean;
+   177→    actorName: string;
+   178→    actorRole: string;
+   179→    /** Keputusan per baris duplikat (keyed by row index): default duplikat = "skip". */
+   180→    rowActions?: Record<number, "skip" | "create" | "update">;
+   181→  }) =>
+   182→    request<import("@/lib/crm/types").ImportOpportunityPreviewResponseDTO | import("@/lib/crm/types").ImportOpportunityCommitResponseDTO>(
+   183→      "/api/opportunities/import", { method: "POST", body: JSON.stringify(payload) }
+   184→    ),
+   185→  identify: (identity: { email?: string; whatsapp?: string; fullName?: string; companyName?: string }) =>
+   186→    request<{ candidates: MatchCandidateDTO[] }>("/api/identify", { method: "POST", body: JSON.stringify(identity) }),
+   187→
+   188→  // Inbox
+   189→  // Ronde 32 — view: "open" (default, belum dikonversi) | "all" (termasuk terkonversi)
+   190→  // Ronde 34-b — contactId: mode fokus kontak (task follow-up → chat kontak) — server ikut menyertakan
+   191→  // lead kontak tsb (via contactId ATAU kecocokan identitas sender) walau sudah dikonversi.
+   192→  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all"; contactId?: string }) => {
+   193→    const sp = new URLSearchParams();
+   194→    if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
+   195→    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+   196→    if (params?.sweep) sp.set("sweep", "1");
+   197→    if (params?.view === "all") sp.set("view", "all");
+   198→    if (params?.contactId) sp.set("contactId", params.contactId);
+   199→    return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
+   200→  },
+   201→  convertLead: (payload: Record<string, unknown>) =>
+   202→    request<{ opportunity: OpportunityDTO; unifiedCount?: number }>("/api/inbox/convert", { method: "POST", body: JSON.stringify(payload) }),
+   203→  // Ronde 33 — gabungkan identitas lead ke contact existing TANPA membuat opportunity
+   204→  // (aksi yang hilang di modal Identifikasi: dulu satu-satunya jalan adalah konversi).
+   205→  linkLead: (payload: { interactionId: string; contactId: string }) =>
+   206→    request<{ contactId: string; contactName: string | null; unifiedCount: number }>("/api/inbox/link", { method: "POST", body: JSON.stringify(payload) }),
+   207→  /** Respons & catat lead inbox (Fase 3): outbound reply + tandai respondedAt.
+   208→   *  Ronde 34-b — lampiran dokumen (maks 3 file @2MB, data URL) ikut dikirim bersama respons. */
+   209→  inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string; attachments?: { name: string; url: string; size?: number }[] }) =>
+   210→    request<{ reply: InteractionDTO; lead: InteractionDTO & { slaHours?: number } }>("/api/inbox/respond", { method: "POST", body: JSON.stringify(payload) }),
+   211→
+   212→  // Interactions
+   213→  interactions: (params?: { opportunityId?: string; contactId?: string; channel?: string; companyId?: string }) => {
+   214→    const sp = new URLSearchParams();
+   215→    if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+   216→    if (params?.contactId) sp.set("contactId", params.contactId);
+   217→    if (params?.companyId) sp.set("companyId", params.companyId);
+   218→    if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
+   219→    return request<{ interactions: InteractionDTO[] }>(`/api/interactions?${sp}`);
+   220→  },
+   221→  createInteraction: (payload: Record<string, unknown>) =>
+   222→    request<{ interaction: InteractionDTO }>("/api/interactions", { method: "POST", body: JSON.stringify(payload) }),
+   223→
+   224→  // Tasks
+   225→  tasks: (params?: { status?: string; assignee?: string; overdue?: string }) => {
+   226→    const sp = new URLSearchParams();
+   227→    if (params?.status) sp.set("status", params.status);
+   228→    if (params?.assignee) sp.set("assignee", params.assignee);
+   229→    if (params?.overdue) sp.set("overdue", params.overdue);
+   230→    return request<{ tasks: TaskDTO[] }>(`/api/tasks?${sp}`);
+   231→  },
+   232→  createTask: (payload: Record<string, unknown>) =>
+   233→    request<{ task: TaskDTO }>("/api/tasks", { method: "POST", body: JSON.stringify(payload) }),
+   234→  updateTask: (id: string, payload: Record<string, unknown>) =>
+   235→    request<{ task: TaskDTO }>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+   236→
+   237→  // Projects
+   238→  projects: (params?: { status?: string; companyId?: string; brandId?: string }) => {
+   239→    const sp = new URLSearchParams();
+   240→    if (params?.status && params.status !== "all") sp.set("status", params.status);
+   241→    if (params?.companyId) sp.set("companyId", params.companyId);
+   242→    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+   243→    return request<{ projects: ProjectDTO[] }>(`/api/projects?${sp}`);
+   244→  },
+   245→  createProject: (payload: Record<string, unknown>) =>
+   246→    request<{ project: ProjectDTO }>("/api/projects", { method: "POST", body: JSON.stringify(payload) }),
+   247→  updateProject: (payload: Record<string, unknown>) =>
+   248→    request<{ project: ProjectDTO }>("/api/projects", { method: "PATCH", body: JSON.stringify(payload) }),
+   249→  /** Deliverable: daftar + kirim tautan/file kecil utk ditinjau; keputusan review via decideDeliverable. */
+   250→  projectDeliverables: (projectId: string) =>
+   251→    request<{ deliverables: import("@/lib/crm/types").ProjectDeliverableDTO[] }>(
+   252→      `/api/projects/${projectId}/deliverables`
+   253→    ),
+   254→  createDeliverable: (projectId: string, payload: Record<string, unknown>) =>
+   255→    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(
+   256→      `/api/projects/${projectId}/deliverables`,
+   257→      { method: "POST", body: JSON.stringify(payload) }
+   258→    ),
+   259→  decideDeliverable: (payload: { id: string; decision: "approved" | "revision"; reviewComment?: string; reviewedBy: string; reviewedRole?: string }) =>
+   260→    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(
+   261→      "/api/projects/deliverables",
+   262→      { method: "PATCH", body: JSON.stringify(payload) }
+   263→    ),
+   264→  deleteDeliverable: (id: string) =>
+   265→    request<{ ok: boolean }>(`/api/projects/deliverables`, { method: "DELETE", body: JSON.stringify({ id }) }),
+   266→  /** Ronde 35 — tambah milestone baru (sheet project produksi). */
+   267→  createMilestone: (payload: { projectId: string; name: string; achievement?: string; dueDate?: string | null; actorName?: string; actorRole?: string }) =>
+   268→    request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "POST", body: JSON.stringify(payload) }),
+   269→  /** Update milestone (drag-reschedule kalender / status / capaian) — Fase 3 + Ronde 35. */
+   270→  updateMilestone: (payload: { milestoneId: string; dueDate?: string | null; status?: string; name?: string; achievement?: string | null; actorName?: string; actorRole?: string }) =>
+   271→    request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "PATCH", body: JSON.stringify(payload) }),
+   272→
+   273→  // Change Requests (Fase 2 — Produksi): scope change → persetujuan klien → invoice tambahan
+   274→  changeRequests: (params?: { projectId?: string; companyId?: string; status?: string }) => {
+   275→    const sp = new URLSearchParams();
+   276→    if (params?.projectId) sp.set("projectId", params.projectId);
+   277→    if (params?.companyId) sp.set("companyId", params.companyId);
+   278→    if (params?.status && params.status !== "all") sp.set("status", params.status);
+   279→    return request<{ changeRequests: import("@/lib/crm/types").ChangeRequestDTO[] }>(`/api/change-requests?${sp}`);
+   280→  },
+   281→  createChangeRequest: (payload: Record<string, unknown>) =>
+   282→    request<{ changeRequest: import("@/lib/crm/types").ChangeRequestDTO }>("/api/change-requests", { method: "POST", body: JSON.stringify(payload) }),
+   283→  decideChangeRequest: (payload: { id: string; decision: "approve" | "reject" | "cancel"; decisionNote?: string; actorName: string; actorRole: string }) =>
+   284→    request<{ changeRequest: import("@/lib/crm/types").ChangeRequestDTO; invoice?: { id: string; number: string } | null }>(
+   285→      "/api/change-requests", { method: "PATCH", body: JSON.stringify(payload) }
+   286→    ),
+   287→
+   288→  // Invoices
+   289→  invoices: (params?: { status?: string; brandId?: string; companyId?: string }) => {
+   290→    const sp = new URLSearchParams();
+   291→    if (params?.status && params.status !== "all") sp.set("status", params.status);
+   292→    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+   293→    if (params?.companyId) sp.set("companyId", params.companyId);
+   294→    return request<{ invoices: InvoiceDTO[]; aging: { current: number; d30: number; d60: number; d90: number } }>(`/api/invoices?${sp}`);
+   295→  },
+   296→  addPayment: (payload: { invoiceId: string; amount: number; method?: string; reference?: string; actorName?: string }) =>
+   297→    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "add_payment", ...payload }) }),
+   298→  /** Kirim (draft→sent) atau batalkan invoice — Fase 2/3 lifecycle. */
+   299→  invoiceAction: (payload: { invoiceId: string; action: "send_invoice" | "cancel_invoice"; actorName?: string; actorRole?: string }) =>
+   300→    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify(payload) }),
+   301→  /** Ronde 35 — terbitkan invoice manual dari project (termin/milestone): alur Produksi → Keuangan. */
+   302→  createProjectInvoice: (payload: { projectId: string; description: string; amount: number; taxRate?: number; dueDate?: string; milestoneName?: string; actorName?: string; actorRole?: string }) =>
+   303→    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_invoice", ...payload }) }),
+   304→
+   305→  // SLA escalation (Fase 3)
+   306→  escalateLead: (payload: { interactionId: string; note?: string; actorName: string; actorRole: string }) =>
+   307→    request<{ task: TaskDTO }>("/api/inbox/escalate", { method: "POST", body: JSON.stringify(payload) }),
+   308→
+   309→  // Notifikasi in-app (Fase 3) — komputasi server + state baca/dismiss per pengguna
+   310→  notifications: (user: string, brandId?: string) => {
+   311→    const sp = new URLSearchParams({ user });
+   312→    if (brandId && brandId !== "all") sp.set("brandId", brandId);
+   313→    return request<{ items: import("@/lib/crm/types").NotificationDTO[]; unread: number }>(`/api/notifications?${sp}`);
+   314→  },
+   315→  markNotifications: (payload: { user: string; action: "read" | "unread" | "dismiss"; keys: string[] }) =>
+   316→    request<{ ok: boolean; updated: number }>("/api/notifications", { method: "POST", body: JSON.stringify(payload) }),
+   317→
+   318→  // Preferensi notifikasi (ronde 16-c) — tersinkron antar perangkat via tabel UserPreference
+   319→  getNotifPrefs: (email: string) =>
+   320→    request<{ prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }; updatedAt: string | null }>(
+   321→      `/api/notif-prefs?user=${encodeURIComponent(email)}`
+   322→    ),
+   323→  putNotifPrefs: (email: string, prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }) =>
+   324→    request<{ prefs: { muted: import("@/lib/crm/types").NotificationType[]; hideRead: boolean }; updatedAt: string | null }>(
+   325→      "/api/notif-prefs", { method: "PUT", body: JSON.stringify({ user: email, ...prefs }) }
+   326→    ),
+   327→
+   328→  // Ronde 39 — Web Push (VAPID): kunci publik, simpan/hapus langganan per perangkat
+   329→  pushPublicKey: () =>
+   330→    request<{ publicKey: string | null }>("/api/push/public-key"),
+   331→  pushSubscribe: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+   332→    request<{ subscription: { id: string } }>("/api/push/subscribe", { method: "POST", body: JSON.stringify({ subscription }) }),
+   333→  pushUnsubscribe: (endpoint?: string) =>
+   334→    request<{ deleted: number }>("/api/push/unsubscribe", { method: "POST", body: JSON.stringify(endpoint ? { endpoint } : {}) }),
+   335→
+   336→  // Audit
+   337→  auditLogs: (params?: { limit?: number; entity?: string; action?: string }) => {
+   338→    const sp = new URLSearchParams();
+   339→    if (params?.limit) sp.set("limit", String(params.limit));
+   340→    if (params?.entity && params.entity !== "all") sp.set("entity", params.entity);
+   341→    if (params?.action && params.action !== "all") sp.set("action", params.action);
+   342→    return request<{ logs: AuditLogDTO[] }>(`/api/audit-logs?${sp}`);
+   343→  },
+   344→
+   345→  // Monitoring kesehatan sistem (ronde 17-d) — probe server read-only tanpa data sensitif
+   346→  getSystemHealth: () =>
+   347→    request<{
+   348→      status: "ok" | "degraded";
+   349→      db: { status: "up" | "down"; ms: number | null };
+   350→      notifService: { status: "up" | "down"; detail: string };
+   351→      uptimeSec: number;
+   352→      rssMb: number;
+   353→    }>("/api/health"),
+   354→
+   355→  // Global search antar modul (ronde 26 — ⌘K command palette); signal utk batal saat query berubah
+   356→  search: (q: string, signal?: AbortSignal) =>
+   357→    request<{ q: string; total: number; items: SearchItemDTO[] }>(
+   358→      `/api/search?q=${encodeURIComponent(q)}&limit=5`, { signal }
+   359→    ),
+   360→};
+   361→
+   362→export type { DashboardData };
+   363→
+   364→// ============ Laporan (ronde 17-b) ============
+   365→
+   366→/** Laporan kinerja period-bounded lintas brand (revenue, win rate, SLA, aging, pipeline per owner). */
+   367→export function getReports(params?: { brandId?: string; days?: number }) {
+   368→  const sp = new URLSearchParams();
+   369→  if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+   370→  if (params?.days) sp.set("days", String(params.days));
+   371→  return request<import("@/lib/crm/types").ReportsData>(`/api/reports?${sp}`);
+   372→}
+   373→
+   374→// ============ Brief Builder (ronde 18 — Fase 2) ============
+   375→
+   376→/** Payload create/update brief terstruktur (field opsional, sesuai kebutuhan). */
+   377→export interface ClientBriefPayload {
+   378→  opportunityId?: string;
+   379→  title?: string;
+   380→  serviceTypes?: string[];
+   381→  objectives?: string | null;
+   382→  targetAudience?: string | null;
+   383→  keyMessages?: string | null;
+   384→  deliverables?: import("@/lib/crm/types").BriefDeliverable[];
+   385→  timelineStart?: string | null;
+   386→  timelineEnd?: string | null;
+   387→  budgetMin?: number | null;
+   388→  budgetMax?: number | null;
+   389→  references?: import("@/lib/crm/types").BriefReference[];
+   390→  attachmentsNote?: string | null;
+   391→  status?: import("@/lib/crm/types").BriefStatus;
+   392→  /** Aksi alur status: save | submit | approve | request_revision | reopen. */
+   393→  action?: "save" | "submit" | "approve" | "request_revision" | "reopen";
+   394→  revisionNote?: string | null;
+   395→  actorName?: string;
+   396→  actorRole?: string;
+   397→}
+   398→
+   399→export const briefsApi = {
+   400→  list: (params?: { opportunityId?: string; brandId?: string; status?: string }) => {
+   401→    const sp = new URLSearchParams();
+   402→    if (params?.opportunityId) sp.set("opportunityId", params.opportunityId);
+   403→    if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
+   404→    if (params?.status && params.status !== "all") sp.set("status", params.status);
+   405→    return request<{ briefs: import("@/lib/crm/types").ClientBriefDTO[] }>(`/api/briefs?${sp}`);
+   406→  },
+   407→  create: (payload: ClientBriefPayload) =>
+   408→    request<{ brief: import("@/lib/crm/types").ClientBriefDTO }>("/api/briefs", {
+   409→      method: "POST",
+   410→      body: JSON.stringify(payload),
+   411→    }),
+   412→  update: (id: string, payload: ClientBriefPayload) =>
+   413→    request<{ brief: import("@/lib/crm/types").ClientBriefDTO }>(`/api/briefs/${id}`, {
+   414→      method: "PATCH",
+   415→      body: JSON.stringify(payload),
+   416→    }),
+   417→  remove: (id: string) =>
+   418→    request<{ ok: boolean }>(`/api/briefs/${id}`, { method: "DELETE" }),
+   419→};
+   420→
+   421→// ============ Saluran & Integrasi (ronde 19 — Fase 3) ============
+   422→
+   423→export const channelsApi = {
+   424→  list: () => request<import("@/lib/crm/types").ChannelsData>("/api/channels"),
+   425→  connect: (payload: {
+   426→    channel: string;
+   427→    brandId?: string | null;
+   428→    displayName: string;
+   429→    accountRef: string;
+   430→    credentials: Record<string, string>;
+   431→    isDemo?: boolean;
+   432→    skipVerification?: boolean;
+   433→    actorName?: string;
+   434→    actorRole?: string;
+   435→  }) =>
+   436→    request<{ config: import("@/lib/crm/types").ChannelConfigDTO; error?: string }>("/api/channels", {
+   437→      method: "POST",
+   438→      body: JSON.stringify(payload),
+   439→    }),
+   440→  emailSync: () =>
+   441→    request<{ created: number; skipped: number; scanned: number; since: string }>("/api/channels/email-sync", {
+   442→      method: "POST",
+   443→    }),
+   444→  demoConnect: (payload: { channel: string; brandId?: string | null; actorName?: string; actorRole?: string }) =>
+   445→    request<{ config: import("@/lib/crm/types").ChannelConfigDTO }>("/api/channels/demo", {
+   446→      method: "POST",
+   447→      body: JSON.stringify(payload),
+   448→    }),
+   449→  update: (id: string, payload: {
+   450→    action?: "update" | "test" | "disconnect" | "reconnect";
+   451→    displayName?: string;
+   452→    accountRef?: string;
+   453→    credentials?: Record<string, string | null>;
+   454→    actorName?: string;
+   455→    actorRole?: string;
+   456→  }) =>
+   457→    request<{ config: import("@/lib/crm/types").ChannelConfigDTO; test?: { ok: boolean; note: string } }>(
+   458→      `/api/channels/${id}`,
+   459→      { method: "PATCH", body: JSON.stringify(payload) }
+   460→    ),
+   461→  remove: (id: string) => request<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }),
+   462→};
+   463→
+   464→// ============ PORTAL KLIEN — SECURE LINK TOKEN & DOKUMEN ============
+   465→export const portalApi = {
+   466→  /** Daftar token secure link (staf). */
+   467→  tokens: () =>
+   468→    request<{ tokens: import("@/lib/crm/types").PortalTokenDTO[] }>("/api/portal/tokens"),
+   469→  /** Buat token secure link utk perusahaan klien. */
+   470→  createToken: (payload: { companyId: string; label?: string; actorName?: string; actorRole?: string }) =>
+   471→    request<{ token: import("@/lib/crm/types").PortalTokenDTO }>("/api/portal/tokens", {
+   472→      method: "POST",
+   473→      body: JSON.stringify(payload),
+   474→    }),
+   475→  /** Aktifkan/cabut token. */
+   476→  updateToken: (id: string, payload: { active?: boolean; actorName?: string }) =>
+   477→    request<{ token: import("@/lib/crm/types").PortalTokenDTO }>(`/api/portal/tokens/${id}`, {
+   478→      method: "PATCH",
+   479→      body: JSON.stringify(payload),
+   480→    }),
+   481→  deleteToken: (id: string) =>
+   482→    request<{ ok: boolean }>(`/api/portal/tokens/${id}`, { method: "DELETE" }),
+   483→
+   484→  /** Daftar dokumen/MoU/catatan rapat per perusahaan. */
+   485→  documents: (companyId: string) =>
+   486→    request<{ documents: import("@/lib/crm/types").ClientDocumentDTO[] }>(
+   487→      `/api/portal/documents?companyId=${encodeURIComponent(companyId)}`
+   488→    ),
+   489→  createDocument: (payload: {
+   490→    companyId: string;
+   491→    kind: string;
+   492→    title: string;
+   493→    content?: string;
+   494→    url?: string;
+   495→    fileName?: string;
+   496→    fileData?: string;
+   497→    mimeType?: string;
+   498→    sizeBytes?: number;
+   499→    meetingAt?: string;
+   500→    attendees?: string;
+   501→    actorName?: string;
+   502→  }) =>
+   503→    request<{ document: import("@/lib/crm/types").ClientDocumentDTO }>("/api/portal/documents", {
+   504→      method: "POST",
+   505→      body: JSON.stringify(payload),
+   506→    }),
+   507→  deleteDocument: (id: string) =>
+   508→    request<{ ok: boolean }>(`/api/portal/documents/${id}`, { method: "DELETE" }),
+   509→
+   510→  /** (PUBLIK) Ambil isi secure link — tanpa login, kunci = token URL. */
+   511→  byToken: (token: string) =>
+   512→    request<import("@/lib/crm/types").PortalTokenPayload>(`/api/portal/${token}`),
+   513→  /** (PUBLIK) Review deliverable dari secure link. */
+   514→  review: (
+   515→    token: string,
+   516→    payload: { deliverableId: string; decision: "approved" | "revision"; comment?: string; reviewerName: string }
+   517→  ) =>
+   518→    request<{ deliverable: import("@/lib/crm/types").ProjectDeliverableDTO }>(`/api/portal/${token}/review`, {
+   519→      method: "POST",
+   520→      body: JSON.stringify(payload),
+   521→    }),
+   522→};
+   523→

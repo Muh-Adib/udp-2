@@ -1,0 +1,1028 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Ronde 18 — Brief Builder (Fase 2): panel brief terstruktur pada detail opportunity.
+     5→ *
+     6→ * Alur: Brief → Estimasi → Quotation. Brief dibuat/diisi dari katalog layanan brand,
+     7→ * diberi skor kelengkapan 9 bagian, lalu melalui status:
+     8→ *   draft → in_review (kirim review) → approved | revision → in_review | draft (reopen).
+     9→ * Semua aksi menulis audit log di server; panel ini murni menampilkan & memanggil API.
+    10→ */
+    11→
+    12→import { useCallback, useEffect, useMemo, useState } from "react";
+    13→import {
+    14→  ArrowRight,
+    15→  BadgeCheck,
+    16→  CalendarRange,
+    17→  CircleAlert,
+    18→  ClipboardList,
+    19→  Link2,
+    20→  Loader2,
+    21→  MessageSquareQuote,
+    22→  Paperclip,
+    23→  Pencil,
+    24→  Plus,
+    25→  Send,
+    26→  Target,
+    27→  Trash2,
+    28→  Undo2,
+    29→  Users,
+    30→  Wallet,
+    31→} from "lucide-react";
+    32→import type { LucideIcon } from "lucide-react";
+    33→import {
+    34→  AlertDialog,
+    35→  AlertDialogAction,
+    36→  AlertDialogCancel,
+    37→  AlertDialogContent,
+    38→  AlertDialogDescription,
+    39→  AlertDialogFooter,
+    40→  AlertDialogHeader,
+    41→  AlertDialogTitle,
+    42→} from "@/components/ui/alert-dialog";
+    43→import { Badge } from "@/components/ui/badge";
+    44→import { Button } from "@/components/ui/button";
+    45→import {
+    46→  Dialog,
+    47→  DialogContent,
+    48→  DialogDescription,
+    49→  DialogFooter,
+    50→  DialogHeader,
+    51→  DialogTitle,
+    52→} from "@/components/ui/dialog";
+    53→import { Input } from "@/components/ui/input";
+    54→import { Progress } from "@/components/ui/progress";
+    55→import { Textarea } from "@/components/ui/textarea";
+    56→import { briefsApi } from "@/lib/crm/api-client";
+    57→import { BRIEF_STATUS_META, computeBriefCompleteness } from "@/lib/crm/brief";
+    58→import { BRAND_SERVICES } from "@/lib/crm/constants";
+    59→import { useCrmStore } from "@/lib/crm/store";
+    60→import type { BriefDeliverable, BriefReference, BriefStatus, ClientBriefDTO } from "@/lib/crm/types";
+    61→import { formatCurrencyFull, formatDate } from "@/lib/crm/utils";
+    62→import { cn } from "@/lib/utils";
+    63→
+    64→// ---------- Tipe & helper ----------
+    65→
+    66→interface BriefPanelProps {
+    67→  opportunityId: string;
+    68→  opportunityTitle: string;
+    69→  brandSlug: string;
+    70→  brandColor: string;
+    71→  /** Sheet detail terbuka — panel fetch hanya saat terbuka. */
+    72→  open: boolean;
+    73→  /** Laporkan status brief ke parent (untuk dot pada tab trigger). */
+    74→  onBriefStatusChange?: (status: BriefStatus | null) => void;
+    75→  /** Beri tahu parent bahwa data opportunity berubah (urutan list ikut segar). */
+    76→  onChanged?: () => void;
+    77→}
+    78→
+    79→interface DeliverableRow {
+    80→  name: string;
+    81→  qty: string;
+    82→}
+    83→interface ReferenceRow {
+    84→  label: string;
+    85→  url: string;
+    86→}
+    87→
+    88→function isoToDateInput(iso?: string | null): string {
+    89→  if (!iso) return "";
+    90→  const d = new Date(iso);
+    91→  if (Number.isNaN(d.getTime())) return "";
+    92→  return d.toISOString().slice(0, 10);
+    93→}
+    94→
+    95→function parseBudget(v: string): number | null {
+    96→  const digits = v.replace(/[^\d]/g, "");
+    97→  if (!digits) return null;
+    98→  const n = Number(digits);
+    99→  return Number.isFinite(n) && n > 0 ? n : null;
+   100→}
+   101→
+   102→/** Label durasi hari antara dua tanggal (inklusif kasar). */
+   103→function durationLabel(start?: string | null, end?: string | null): string | null {
+   104→  if (!start && !end) return null;
+   105→  const s = start ? new Date(start).getTime() : null;
+   106→  const e = end ? new Date(end).getTime() : null;
+   107→  if (s && e && e >= s) {
+   108→    const days = Math.round((e - s) / 86_400_000);
+   109→    return `± ${days} hari kerja kalender`;
+   110→  }
+   111→  return null;
+   112→}
+   113→
+   114→// ---------- Sub-komponen kecil ----------
+   115→
+   116→function SectionCard({
+   117→  icon: Ic,
+   118→  label,
+   119→  children,
+   120→  className,
+   121→}: {
+   122→  icon: LucideIcon;
+   123→  label: string;
+   124→  children: React.ReactNode;
+   125→  className?: string;
+   126→}) {
+   127→  return (
+   128→    <div className={cn("rounded-xl border bg-white p-3.5 shadow-sm transition-shadow hover:shadow-md", className)}>
+   129→      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+   130→        <Ic className="size-3.5" aria-hidden="true" />
+   131→        {label}
+   132→      </p>
+   133→      {children}
+   134→    </div>
+   135→  );
+   136→}
+   137→
+   138→function SectionText({ value, empty }: { value?: string | null; empty: string }) {
+   139→  if (!value || !value.trim()) return <p className="text-sm italic text-zinc-300">{empty}</p>;
+   140→  return <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{value}</p>;
+   141→}
+   142→
+   143→/** Stepper status: Draft → Review → Disetujui (revision ditandai alert terpisah). */
+   144→function StatusStepper({ status }: { status: BriefStatus }) {
+   145→  const steps = [
+   146→    { key: "draft", label: "Draft", icon: ClipboardList },
+   147→    { key: "in_review", label: "Review", icon: Send },
+   148→    { key: "approved", label: "Disetujui", icon: BadgeCheck },
+   149→  ];
+   150→  const reachedIdx = status === "approved" ? 2 : status === "in_review" ? 1 : 0;
+   151→  return (
+   152→    <ol className="flex items-center gap-1.5" aria-label="Status brief">
+   153→      {steps.map((s, i) => {
+   154→        const active = i <= reachedIdx && (status !== "revision" || i === 0);
+   155→        const current = status === "in_review" ? i === 1 : status === "approved" ? i === 2 : i === 0;
+   156→        return (
+   157→          <li key={s.key} className="flex items-center gap-1.5">
+   158→            {i > 0 ? <span className={cn("h-px w-4 sm:w-6", i <= reachedIdx ? "bg-emerald-300" : "bg-zinc-200")} aria-hidden="true" /> : null}
+   159→            <span
+   160→              className={cn(
+   161→                "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+   162→                status === "revision" && i === 0
+   163→                  ? "border-red-200 bg-red-50 text-red-600"
+   164→                  : active
+   165→                    ? current
+   166→                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+   167→                      : "border-emerald-100 bg-emerald-50/60 text-emerald-600"
+   168→                    : "border-zinc-200 bg-white text-zinc-400"
+   169→              )}
+   170→            >
+   171→              <s.icon className="size-3" aria-hidden="true" />
+   172→              {s.label}
+   173→            </span>
+   174→          </li>
+   175→        );
+   176→      })}
+   177→      {status === "revision" ? (
+   178→        <li className="ml-1 flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-600">
+   179→          <CircleAlert className="size-3" aria-hidden="true" />
+   180→          Revisi
+   181→        </li>
+   182→      ) : null}
+   183→    </ol>
+   184→  );
+   185→}
+   186→
+   187→/** Diagram alur komersial utk empty state: Brief → Estimasi → Quotation. */
+   188→function FlowDiagram({ brandColor }: { brandColor: string }) {
+   189→  const items = [
+   190→    { label: "Brief", icon: ClipboardList, active: true },
+   191→    { label: "Estimasi", icon: Wallet, active: false },
+   192→    { label: "Quotation", icon: BadgeCheck, active: false },
+   193→  ];
+   194→  return (
+   195→    <div className="flex items-center justify-center gap-2" aria-hidden="true">
+   196→      {items.map((it, i) => (
+   197→        <div key={it.label} className="flex items-center gap-2">
+   198→          {i > 0 ? <ArrowRight className="size-3.5 text-zinc-300" /> : null}
+   199→          <span
+   200→            className={cn(
+   201→              "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium",
+   202→              it.active ? "border-transparent text-white shadow-sm" : "border-zinc-200 bg-white text-zinc-400"
+   203→            )}
+   204→            style={it.active ? { backgroundColor: brandColor } : undefined}
+   205→          >
+   206→            <it.icon className="size-3.5" />
+   207→            {it.label}
+   208→          </span>
+   209→        </div>
+   210→      ))}
+   211→    </div>
+   212→  );
+   213→}
+   214→
+   215→// ---------- Komponen utama ----------
+   216→
+   217→export default function BriefPanel({
+   218→  opportunityId,
+   219→  opportunityTitle,
+   220→  brandSlug,
+   221→  brandColor,
+   222→  open,
+   223→  onBriefStatusChange,
+   224→  onChanged,
+   225→}: BriefPanelProps) {
+   226→  const { user } = useCrmStore();
+   227→
+   228→  const [brief, setBrief] = useState<ClientBriefDTO | null>(null);
+   229→  const [loading, setLoading] = useState(true);
+   230→  const [busy, setBusy] = useState<string | null>(null); // aksi yang sedang jalan
+   231→
+   232→  // Dialog edit
+   233→  const [editOpen, setEditOpen] = useState(false);
+   234→  const [form, setForm] = useState({
+   235→    title: "",
+   236→    objectives: "",
+   237→    targetAudience: "",
+   238→    keyMessages: "",
+   239→    serviceTypes: [] as string[],
+   240→    deliverables: [] as DeliverableRow[],
+   241→    references: [] as ReferenceRow[],
+   242→    start: "",
+   243→    end: "",
+   244→    budgetMin: "",
+   245→    budgetMax: "",
+   246→    attachmentsNote: "",
+   247→  });
+   248→
+   249→  // Dialog aksi
+   250→  const [deleteOpen, setDeleteOpen] = useState(false);
+   251→  const [revisionOpen, setRevisionOpen] = useState(false);
+   252→  const [revisionNote, setRevisionNote] = useState("");
+   253→  const [revisionError, setRevisionError] = useState<string | null>(null);
+   254→
+   255→  const catalog = useMemo(() => BRAND_SERVICES[brandSlug] ?? [], [brandSlug]);
+   256→
+   257→  const load = useCallback(async () => {
+   258→    if (!open || !opportunityId) return;
+   259→    setLoading(true);
+   260→    try {
+   261→      const res = await briefsApi.list({ opportunityId });
+   262→      const first = res.briefs[0] ?? null;
+   263→      setBrief(first);
+   264→      onBriefStatusChange?.(first ? first.status : null);
+   265→    } catch {
+   266→      setBrief(null);
+   267→      onBriefStatusChange?.(null);
+   268→    } finally {
+   269→      setLoading(false);
+   270→    }
+   271→    // onBriefStatusChange sengaja tidak masuk dep (callback parent stabil via useCallback)
+   272→  }, [open, opportunityId]);
+   273→
+   274→  useEffect(() => {
+   275→    void load();
+   276→  }, [load]);
+   277→
+   278→  function openEdit(b: ClientBriefDTO) {
+   279→    setForm({
+   280→      title: b.title,
+   281→      objectives: b.objectives ?? "",
+   282→      targetAudience: b.targetAudience ?? "",
+   283→      keyMessages: b.keyMessages ?? "",
+   284→      serviceTypes: [...b.serviceTypes],
+   285→      deliverables: b.deliverables.map((d) => ({ name: d.name, qty: String(d.qty) })),
+   286→      references: b.references.map((r) => ({ label: r.label, url: r.url })),
+   287→      start: isoToDateInput(b.timelineStart),
+   288→      end: isoToDateInput(b.timelineEnd),
+   289→      budgetMin: b.budgetMin ? String(b.budgetMin) : "",
+   290→      budgetMax: b.budgetMax ? String(b.budgetMax) : "",
+   291→      attachmentsNote: b.attachmentsNote ?? "",
+   292→    });
+   293→    setEditOpen(true);
+   294→  }
+   295→
+   296→  async function handleCreate() {
+   297→    setBusy("create");
+   298→    try {
+   299→      const res = await briefsApi.create({
+   300→        opportunityId,
+   301→        title: opportunityTitle,
+   302→        actorName: user?.name,
+   303→        actorRole: user?.role,
+   304→      });
+   305→      setBrief(res.brief);
+   306→      onBriefStatusChange?.(res.brief.status);
+   307→      onChanged?.();
+   308→      openEdit(res.brief);
+   309→    } catch (e) {
+   310→      console.error(e);
+   311→    } finally {
+   312→      setBusy(null);
+   313→    }
+   314→  }
+   315→
+   316→  async function handleSave() {
+   317→    if (!brief) return;
+   318→    setBusy("save");
+   319→    try {
+   320→      const res = await briefsApi.update(brief.id, {
+   321→        action: "save",
+   322→        title: form.title,
+   323→        objectives: form.objectives || null,
+   324→        targetAudience: form.targetAudience || null,
+   325→        keyMessages: form.keyMessages || null,
+   326→        serviceTypes: form.serviceTypes,
+   327→        deliverables: form.deliverables
+   328→          .filter((d) => d.name.trim())
+   329→          .map<BriefDeliverable>((d) => ({ name: d.name.trim(), qty: Math.max(1, Number(d.qty) || 1) })),
+   330→        references: form.references.filter((r) => r.url.trim()).map<BriefReference>((r) => ({ label: r.label.trim() || r.url.trim(), url: r.url.trim() })),
+   331→        timelineStart: form.start ? new Date(form.start).toISOString() : null,
+   332→        timelineEnd: form.end ? new Date(form.end).toISOString() : null,
+   333→        budgetMin: parseBudget(form.budgetMin),
+   334→        budgetMax: parseBudget(form.budgetMax),
+   335→        attachmentsNote: form.attachmentsNote || null,
+   336→        actorName: user?.name,
+   337→        actorRole: user?.role,
+   338→      });
+   339→      setBrief(res.brief);
+   340→      onBriefStatusChange?.(res.brief.status);
+   341→      setEditOpen(false);
+   342→      onChanged?.();
+   343→    } catch (e) {
+   344→      console.error(e);
+   345→    } finally {
+   346→      setBusy(null);
+   347→    }
+   348→  }
+   349→
+   350→  async function handleAction(action: "submit" | "approve" | "reopen" | "request_revision", note?: string) {
+   351→    if (!brief) return;
+   352→    setBusy(action);
+   353→    try {
+   354→      const res = await briefsApi.update(brief.id, {
+   355→        action,
+   356→        revisionNote: note,
+   357→        actorName: user?.name,
+   358→        actorRole: user?.role,
+   359→      });
+   360→      setBrief(res.brief);
+   361→      onBriefStatusChange?.(res.brief.status);
+   362→      onChanged?.();
+   363→      setRevisionOpen(false);
+   364→      setRevisionNote("");
+   365→    } catch (e) {
+   366→      console.error(e);
+   367→    } finally {
+   368→      setBusy(null);
+   369→    }
+   370→  }
+   371→
+   372→  async function handleDelete() {
+   373→    if (!brief) return;
+   374→    setBusy("delete");
+   375→    try {
+   376→      await briefsApi.remove(brief.id);
+   377→      setBrief(null);
+   378→      onBriefStatusChange?.(null);
+   379→      onChanged?.();
+   380→      setDeleteOpen(false);
+   381→    } catch (e) {
+   382→      console.error(e);
+   383→    } finally {
+   384→      setBusy(null);
+   385→    }
+   386→  }
+   387→
+   388→  const completeness = useMemo(
+   389→    () =>
+   390→      computeBriefCompleteness({
+   391→        title: brief?.title ?? "",
+   392→        serviceTypes: brief?.serviceTypes ?? [],
+   393→        objectives: brief?.objectives,
+   394→        targetAudience: brief?.targetAudience,
+   395→        keyMessages: brief?.keyMessages,
+   396→        deliverables: brief?.deliverables ?? [],
+   397→        timelineStart: brief?.timelineStart,
+   398→        timelineEnd: brief?.timelineEnd,
+   399→        budgetMin: brief?.budgetMin,
+   400→        budgetMax: brief?.budgetMax,
+   401→        references: brief?.references ?? [],
+   402→      }),
+   403→    [brief]
+   404→  );
+   405→
+   406→  const formCompleteness = useMemo(
+   407→    () =>
+   408→      computeBriefCompleteness({
+   409→        title: form.title,
+   410→        serviceTypes: form.serviceTypes,
+   411→        objectives: form.objectives,
+   412→        targetAudience: form.targetAudience,
+   413→        keyMessages: form.keyMessages,
+   414→        deliverables: form.deliverables.map((d) => ({ name: d.name, qty: Number(d.qty) || 1 })),
+   415→        timelineStart: form.start || null,
+   416→        timelineEnd: form.end || null,
+   417→        budgetMin: parseBudget(form.budgetMin),
+   418→        budgetMax: parseBudget(form.budgetMax),
+   419→        references: form.references,
+   420→      }),
+   421→    [form]
+   422→  );
+   423→
+   424→  // ---------- Loading & empty state ----------
+   425→
+   426→  if (loading) {
+   427→    return (
+   428→      <div className="space-y-3 py-2" aria-busy="true" aria-label="Memuat brief">
+   429→        <div className="h-8 w-48 animate-pulse rounded-lg bg-zinc-100" />
+   430→        <div className="h-16 animate-pulse rounded-xl bg-zinc-100" />
+   431→        <div className="h-40 animate-pulse rounded-xl bg-zinc-100" />
+   432→      </div>
+   433→    );
+   434→  }
+   435→
+   436→  if (!brief) {
+   437→    return (
+   438→      <div className="py-2">
+   439→        <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-10 text-center">
+   440→          <div
+   441→            className="flex size-12 items-center justify-center rounded-2xl text-white shadow-md"
+   442→            style={{ backgroundColor: brandColor }}
+   443→            aria-hidden="true"
+   444→          >
+   445→            <ClipboardList className="size-6" />
+   446→          </div>
+   447→          <div className="space-y-1">
+   448→            <p className="text-sm font-semibold text-zinc-800">Belum ada brief terstruktur</p>
+   449→            <p className="max-w-md text-xs leading-relaxed text-zinc-500">
+   450→              Susun brief per layanan sebelum estimasi: tujuan kampanye, audiens, deliverables, timeline, dan rentang
+   451→              budget. Brief lengkap mempercepat penyusunan estimasi &amp; quotation.
+   452→            </p>
+   453→          </div>
+   454→          <FlowDiagram brandColor={brandColor} />
+   455→          <Button
+   456→            size="sm"
+   457→            className="mt-1 text-white shadow-sm hover:opacity-90"
+   458→            style={{ backgroundColor: brandColor }}
+   459→            onClick={() => void handleCreate()}
+   460→            disabled={busy === "create"}
+   461→          >
+   462→            {busy === "create" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Plus className="size-4" aria-hidden="true" />}
+   463→            Buat Brief
+   464→          </Button>
+   465→        </div>
+   466→      </div>
+   467→    );
+   468→  }
+   469→
+   470→  const statusMeta = BRIEF_STATUS_META[brief.status] ?? BRIEF_STATUS_META.draft;
+   471→  const canEdit = brief.status === "draft" || brief.status === "revision";
+   472→  const dur = durationLabel(brief.timelineStart, brief.timelineEnd);
+   473→
+   474→  // ---------- Tampilan brief ----------
+   475→
+   476→  return (
+   477→    <div className="space-y-3 py-2">
+   478→      {/* Header: kode + status + aksi */}
+   479→      <div className="flex flex-wrap items-center gap-2">
+   480→        <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-xs font-semibold text-zinc-600">{brief.code}</span>
+   481→        <Badge variant="outline" className={statusMeta.badgeCls}>
+   482→          {statusMeta.label}
+   483→        </Badge>
+   484→        <span className="text-xs text-zinc-400">Diperbarui {formatDate(brief.updatedAt)}</span>
+   485→        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+   486→          {canEdit ? (
+   487→            <>
+   488→              <Button size="sm" variant="outline" onClick={() => openEdit(brief)}>
+   489→                <Pencil className="size-3.5" aria-hidden="true" />
+   490→                Edit
+   491→              </Button>
+   492→              <Button
+   493→                size="sm"
+   494→                className="text-white hover:opacity-90"
+   495→                style={{ backgroundColor: brandColor }}
+   496→                onClick={() => void handleAction("submit")}
+   497→                disabled={busy === "submit"}
+   498→              >
+   499→                {busy === "submit" ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Send className="size-3.5" aria-hidden="true" />}
+   500→                Kirim Review
+   501→              </Button>
+   502→              {brief.status === "draft" ? (
+   503→                <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => setDeleteOpen(true)}>
+   504→                  <Trash2 className="size-3.5" aria-hidden="true" />
+   505→                  Hapus
+   506→                </Button>
+   507→              ) : null}
+   508→            </>
+   509→          ) : brief.status === "in_review" ? (
+   510→            <>
+   511→              <Button
+   512→                size="sm"
+   513→                className="bg-emerald-600 text-white hover:bg-emerald-700"
+   514→                onClick={() => void handleAction("approve")}
+   515→                disabled={busy === "approve"}
+   516→              >
+   517→                {busy === "approve" ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <BadgeCheck className="size-3.5" aria-hidden="true" />}
+   518→                Setujui
+   519→              </Button>
+   520→              <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => { setRevisionNote(""); setRevisionError(null); setRevisionOpen(true); }}>
+   521→                <CircleAlert className="size-3.5" aria-hidden="true" />
+   522→                Minta Revisi
+   523→              </Button>
+   524→            </>
+   525→          ) : (
+   526→            <Button size="sm" variant="outline" onClick={() => void handleAction("reopen")} disabled={busy === "reopen"}>
+   527→              {busy === "reopen" ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Undo2 className="size-3.5" aria-hidden="true" />}
+   528→              Buka Ulang
+   529→            </Button>
+   530→          )}
+   531→        </div>
+   532→      </div>
+   533→
+   534→      {/* Kelengkapan + stepper */}
+   535→      <div className="grid gap-3 sm:grid-cols-2">
+   536→        <div className="rounded-xl border bg-white p-3.5 shadow-sm">
+   537→          <div className="mb-1.5 flex items-baseline justify-between">
+   538→            <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Kelengkapan</p>
+   539→            <p className={cn("text-sm font-bold", completeness.pct === 100 ? "text-emerald-600" : completeness.pct >= 60 ? "text-amber-600" : "text-zinc-500")}>
+   540→              {completeness.pct}%
+   541→            </p>
+   542→          </div>
+   543→          <Progress value={completeness.pct} className="h-2" aria-label={`Kelengkapan brief ${completeness.pct}%`} />
+   544→          <p className="mt-1.5 text-xs text-zinc-500">
+   545→            {completeness.filled} dari {completeness.total} bagian terisi
+   546→            {completeness.missing.length > 0 ? ` — lengkapi: ${completeness.missing.slice(0, 3).join(", ")}` : " — siap direview ✓"}
+   547→          </p>
+   548→        </div>
+   549→        <div className="flex items-center rounded-xl border bg-white p-3.5 shadow-sm">
+   550→          <StatusStepper status={brief.status} />
+   551→        </div>
+   552→      </div>
+   553→
+   554→      {/* Alert revisi */}
+   555→      {brief.status === "revision" && brief.revisionNote ? (
+   556→        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
+   557→          <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+   558→          <div>
+   559→            <p className="font-semibold">Catatan revisi</p>
+   560→            <p className="whitespace-pre-wrap text-red-600/90">{brief.revisionNote}</p>
+   561→          </div>
+   562→        </div>
+   563→      ) : null}
+   564→
+   565→      {/* Isi brief */}
+   566→      <div className="grid gap-3 md:grid-cols-2">
+   567→        <SectionCard icon={ClipboardList} label="Layanan" className="md:col-span-2">
+   568→          {brief.serviceTypes.length === 0 ? (
+   569→            <p className="text-sm italic text-zinc-300">Belum ada layanan dipilih</p>
+   570→          ) : (
+   571→            <div className="flex flex-wrap gap-1.5">
+   572→              {brief.serviceTypes.map((s) => (
+   573→                <span
+   574→                  key={s}
+   575→                  className="rounded-full border px-2.5 py-0.5 text-xs font-medium"
+   576→                  style={{ borderColor: `${brandColor}55`, backgroundColor: `${brandColor}14`, color: "#3f3f46" }}
+   577→                >
+   578→                  {s}
+   579→                </span>
+   580→              ))}
+   581→            </div>
+   582→          )}
+   583→        </SectionCard>
+   584→
+   585→        <SectionCard icon={Target} label="Tujuan Kampanye">
+   586→          <SectionText value={brief.objectives} empty="Jelaskan tujuan & target terukur" />
+   587→        </SectionCard>
+   588→
+   589→        <SectionCard icon={Users} label="Audiens Sasaran">
+   590→          <SectionText value={brief.targetAudience} empty="Siapa yang ingin dijangkau?" />
+   591→        </SectionCard>
+   592→
+   593→        <SectionCard icon={MessageSquareQuote} label="Pesan Kunci">
+   594→          <SectionText value={brief.keyMessages} empty="Pesan utama yang harus tersampaikan" />
+   595→        </SectionCard>
+   596→
+   597→        <SectionCard icon={CalendarRange} label="Timeline">
+   598→          {brief.timelineStart || brief.timelineEnd ? (
+   599→            <div className="space-y-0.5">
+   600→              <p className="text-sm text-zinc-700">
+   601→                {formatDate(brief.timelineStart) ?? "—"} <span className="text-zinc-300">→</span> {formatDate(brief.timelineEnd) ?? "—"}
+   602→              </p>
+   603→              {dur ? <p className="text-xs text-zinc-400">{dur}</p> : null}
+   604→            </div>
+   605→          ) : (
+   606→            <p className="text-sm italic text-zinc-300">Tentukan periode pengerjaan</p>
+   607→          )}
+   608→        </SectionCard>
+   609→
+   610→        <SectionCard icon={Wallet} label="Rentang Budget" className="md:col-span-2">
+   611→          {brief.budgetMin || brief.budgetMax ? (
+   612→            <div className="flex flex-wrap items-baseline gap-2">
+   613→              <p className="text-sm font-semibold text-zinc-800">
+   614→                {brief.budgetMin ? formatCurrencyFull(brief.budgetMin, brief.currency) : "—"}
+   615→                <span className="mx-1.5 text-zinc-300">–</span>
+   616→                {brief.budgetMax ? formatCurrencyFull(brief.budgetMax, brief.currency) : "—"}
+   617→              </p>
+   618→              <span className="text-xs text-zinc-400">{brief.currency}</span>
+   619→            </div>
+   620→          ) : (
+   621→            <p className="text-sm italic text-zinc-300">Rentang budget belum diisi</p>
+   622→          )}
+   623→        </SectionCard>
+   624→
+   625→        <SectionCard icon={Plus} label="Deliverables">
+   626→          {brief.deliverables.length === 0 ? (
+   627→            <p className="text-sm italic text-zinc-300">Rinci output yang dijanjikan</p>
+   628→          ) : (
+   629→            <ul className="space-y-1.5">
+   630→              {brief.deliverables.map((d, i) => (
+   631→                <li key={`${d.name}-${i}`} className="flex items-center gap-2 text-sm">
+   632→                  <span
+   633→                    className="flex size-5 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
+   634→                    style={{ backgroundColor: brandColor }}
+   635→                    aria-label={`Jumlah ${d.qty}`}
+   636→                  >
+   637→                    {d.qty}×
+   638→                  </span>
+   639→                  <span className="truncate text-zinc-700">{d.name}</span>
+   640→                  {d.notes ? <span className="ml-auto shrink-0 text-xs text-zinc-400">{d.notes}</span> : null}
+   641→                </li>
+   642→              ))}
+   643→            </ul>
+   644→          )}
+   645→        </SectionCard>
+   646→
+   647→        <SectionCard icon={Link2} label="Referensi">
+   648→          {brief.references.length === 0 ? (
+   649→            <p className="text-sm italic text-zinc-300">Tautan contoh/inspirasi (opsional)</p>
+   650→          ) : (
+   651→            <ul className="space-y-1">
+   652→              {brief.references.map((r, i) => (
+   653→                <li key={`${r.url}-${i}`} className="truncate text-sm">
+   654→                  <a
+   655→                    href={r.url}
+   656→                    target="_blank"
+   657→                    rel="noopener noreferrer"
+   658→                    className="inline-flex max-w-full items-center gap-1 text-zinc-700 underline decoration-zinc-300 underline-offset-2 hover:decoration-zinc-500"
+   659→                  >
+   660→                    <Link2 className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />
+   661→                    <span className="truncate">{r.label || r.url}</span>
+   662→                  </a>
+   663→                </li>
+   664→              ))}
+   665→            </ul>
+   666→          )}
+   667→        </SectionCard>
+   668→
+   669→        {brief.attachmentsNote ? (
+   670→          <SectionCard icon={Paperclip} label="Catatan Lampiran" className="md:col-span-2">
+   671→            <SectionText value={brief.attachmentsNote} empty="" />
+   672→          </SectionCard>
+   673→        ) : null}
+   674→      </div>
+   675→
+   676→      {/* Jejak status */}
+   677→      <p className="text-xs text-zinc-400">
+   678→        Dibuat oleh {brief.createdBy ?? "—"} · {formatDate(brief.createdAt)}
+   679→        {brief.submittedAt ? ` · dikirim review ${formatDate(brief.submittedAt)}` : ""}
+   680→        {brief.approvedBy ? ` · disetujui ${brief.approvedBy} ${formatDate(brief.approvedAt)}` : ""}
+   681→      </p>
+   682→
+   683→      {/* ---------- Dialog edit brief ---------- */}
+   684→      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+   685→        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-2xl">
+   686→          <DialogHeader>
+   687→            <DialogTitle className="flex items-center gap-2">
+   688→              <ClipboardList className="size-4" style={{ color: brandColor }} aria-hidden="true" />
+   689→              Edit Brief <span className="font-mono text-xs text-zinc-400">{brief.code}</span>
+   690→            </DialogTitle>
+   691→            <DialogDescription>
+   692→              Isi sebanyak mungkin bagian — kelengkapan brief mempercepat estimasi &amp; quotation.
+   693→            </DialogDescription>
+   694→          </DialogHeader>
+   695→
+   696→          <div className="crm-scroll -mx-1 flex-1 space-y-3.5 overflow-y-auto px-1 py-1">
+   697→            <div className="space-y-1">
+   698→              <label htmlFor="brief-title" className="text-xs font-medium text-zinc-600">Judul brief</label>
+   699→              <Input
+   700→                id="brief-title"
+   701→                value={form.title}
+   702→                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+   703→                placeholder="Mis. Brief animasi company profile 2026"
+   704→              />
+   705→            </div>
+   706→
+   707→            <div className="space-y-1.5">
+   708→              <p className="text-xs font-medium text-zinc-600">Layanan (pilih salah satu / lebih)</p>
+   709→              {catalog.length > 0 ? (
+   710→                <div className="flex flex-wrap gap-1.5">
+   711→                  {catalog.map((s) => {
+   712→                    const active = form.serviceTypes.includes(s);
+   713→                    return (
+   714→                      <button
+   715→                        key={s}
+   716→                        type="button"
+   717→                        aria-pressed={active}
+   718→                        onClick={() =>
+   719→                          setForm((f) => ({
+   720→                            ...f,
+   721→                            serviceTypes: active ? f.serviceTypes.filter((x) => x !== s) : [...f.serviceTypes, s],
+   722→                          }))
+   723→                        }
+   724→                        className={cn(
+   725→                          "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+   726→                          active ? "border-transparent text-white shadow-sm" : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300"
+   727→                        )}
+   728→                        style={active ? { backgroundColor: brandColor } : undefined}
+   729→                      >
+   730→                        {s}
+   731→                      </button>
+   732→                    );
+   733→                  })}
+   734→                </div>
+   735→              ) : (
+   736→                <p className="text-xs italic text-zinc-400">Katalog layanan brand tidak tersedia</p>
+   737→              )}
+   738→            </div>
+   739→
+   740→            <div className="grid gap-3 sm:grid-cols-2">
+   741→              <div className="space-y-1">
+   742→                <label htmlFor="brief-audience" className="text-xs font-medium text-zinc-600">Audiens sasaran</label>
+   743→                <Input
+   744→                  id="brief-audience"
+   745→                  value={form.targetAudience}
+   746→                  onChange={(e) => setForm((f) => ({ ...f, targetAudience: e.target.value }))}
+   747→                  placeholder="Mis. HRD BUMN, usia 30-45"
+   748→                />
+   749→              </div>
+   750→              <div className="space-y-1">
+   751→                <p className="text-xs font-medium text-zinc-600">Timeline pengerjaan</p>
+   752→                <div className="flex items-center gap-1.5">
+   753→                  <Input
+   754→                    type="date"
+   755→                    aria-label="Tanggal mulai"
+   756→                    value={form.start}
+   757→                    onChange={(e) => setForm((f) => ({ ...f, start: e.target.value }))}
+   758→                  />
+   759→                  <span className="text-zinc-300">→</span>
+   760→                  <Input
+   761→                    type="date"
+   762→                    aria-label="Tanggal selesai"
+   763→                    value={form.end}
+   764→                    onChange={(e) => setForm((f) => ({ ...f, end: e.target.value }))}
+   765→                  />
+   766→                </div>
+   767→              </div>
+   768→            </div>
+   769→
+   770→            <div className="space-y-1">
+   771→              <label htmlFor="brief-objectives" className="text-xs font-medium text-zinc-600">Tujuan kampanye</label>
+   772→              <Textarea
+   773→                id="brief-objectives"
+   774→                rows={2}
+   775→                value={form.objectives}
+   776→                onChange={(e) => setForm((f) => ({ ...f, objectives: e.target.value }))}
+   777→                placeholder="Tujuan & target terukur (awareness, leads, launch produk…)"
+   778→              />
+   779→            </div>
+   780→
+   781→            <div className="space-y-1">
+   782→              <label htmlFor="brief-messages" className="text-xs font-medium text-zinc-600">Pesan kunci</label>
+   783→              <Textarea
+   784→                id="brief-messages"
+   785→                rows={2}
+   786→                value={form.keyMessages}
+   787→                onChange={(e) => setForm((f) => ({ ...f, keyMessages: e.target.value }))}
+   788→                placeholder="Pesan utama yang harus tersampaikan ke audiens"
+   789→              />
+   790→            </div>
+   791→
+   792→            <div className="space-y-1.5">
+   793→              <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+   794→              <div className="space-y-1.5">
+   795→                {form.deliverables.map((d, i) => (
+   796→                  <div key={i} className="flex items-center gap-1.5">
+   797→                    <Input
+   798→                      value={d.name}
+   799→                      onChange={(e) =>
+   800→                        setForm((f) => ({
+   801→                          ...f,
+   802→                          deliverables: f.deliverables.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
+   803→                        }))
+   804→                      }
+   805→                      placeholder="Mis. Video animasi 60 detik"
+   806→                      aria-label={`Nama deliverable ${i + 1}`}
+   807→                    />
+   808→                    <Input
+   809→                      type="number"
+   810→                      min={1}
+   811→                      value={d.qty}
+   812→                      onChange={(e) =>
+   813→                        setForm((f) => ({
+   814→                          ...f,
+   815→                          deliverables: f.deliverables.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)),
+   816→                        }))
+   817→                      }
+   818→                      className="w-16 shrink-0"
+   819→                      aria-label={`Jumlah deliverable ${i + 1}`}
+   820→                    />
+   821→                    <Button
+   822→                      type="button"
+   823→                      size="icon"
+   824→                      variant="ghost"
+   825→                      className="size-8 shrink-0 text-zinc-400 hover:bg-red-50 hover:text-red-600"
+   826→                      aria-label={`Hapus deliverable ${i + 1}`}
+   827→                      onClick={() => setForm((f) => ({ ...f, deliverables: f.deliverables.filter((_, j) => j !== i) }))}
+   828→                    >
+   829→                      <Trash2 className="size-3.5" />
+   830→                    </Button>
+   831→                  </div>
+   832→                ))}
+   833→              </div>
+   834→              <Button
+   835→                type="button"
+   836→                size="sm"
+   837→                variant="outline"
+   838→                onClick={() => setForm((f) => ({ ...f, deliverables: [...f.deliverables, { name: "", qty: "1" }] }))}
+   839→              >
+   840→                <Plus className="size-3.5" aria-hidden="true" />
+   841→                Tambah deliverable
+   842→              </Button>
+   843→            </div>
+   844→
+   845→            <div className="grid gap-3 sm:grid-cols-2">
+   846→              <div className="space-y-1">
+   847→                <label htmlFor="brief-bmin" className="text-xs font-medium text-zinc-600">Budget minimum (IDR)</label>
+   848→                <Input
+   849→                  id="brief-bmin"
+   850→                  inputMode="numeric"
+   851→                  value={form.budgetMin}
+   852→                  onChange={(e) => setForm((f) => ({ ...f, budgetMin: e.target.value }))}
+   853→                  placeholder="Mis. 50000000"
+   854→                />
+   855→              </div>
+   856→              <div className="space-y-1">
+   857→                <label htmlFor="brief-bmax" className="text-xs font-medium text-zinc-600">Budget maksimum (IDR)</label>
+   858→                <Input
+   859→                  id="brief-bmax"
+   860→                  inputMode="numeric"
+   861→                  value={form.budgetMax}
+   862→                  onChange={(e) => setForm((f) => ({ ...f, budgetMax: e.target.value }))}
+   863→                  placeholder="Mis. 80000000"
+   864→                />
+   865→              </div>
+   866→            </div>
+   867→
+   868→            <div className="space-y-1.5">
+   869→              <p className="text-xs font-medium text-zinc-600">Referensi / tautan</p>
+   870→              <div className="space-y-1.5">
+   871→                {form.references.map((r, i) => (
+   872→                  <div key={i} className="flex items-center gap-1.5">
+   873→                    <Input
+   874→                      value={r.label}
+   875→                      onChange={(e) =>
+   876→                        setForm((f) => ({
+   877→                          ...f,
+   878→                          references: f.references.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)),
+   879→                        }))
+   880→                      }
+   881→                      placeholder="Label (mis. Contoh style)"
+   882→                      className="w-2/5 shrink-0"
+   883→                      aria-label={`Label referensi ${i + 1}`}
+   884→                    />
+   885→                    <Input
+   886→                      value={r.url}
+   887→                      onChange={(e) =>
+   888→                        setForm((f) => ({
+   889→                          ...f,
+   890→                          references: f.references.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)),
+   891→                        }))
+   892→                      }
+   893→                      placeholder="https://…"
+   894→                      aria-label={`URL referensi ${i + 1}`}
+   895→                    />
+   896→                    <Button
+   897→                      type="button"
+   898→                      size="icon"
+   899→                      variant="ghost"
+   900→                      className="size-8 shrink-0 text-zinc-400 hover:bg-red-50 hover:text-red-600"
+   901→                      aria-label={`Hapus referensi ${i + 1}`}
+   902→                      onClick={() => setForm((f) => ({ ...f, references: f.references.filter((_, j) => j !== i) }))}
+   903→                    >
+   904→                      <Trash2 className="size-3.5" />
+   905→                    </Button>
+   906→                  </div>
+   907→                ))}
+   908→              </div>
+   909→              <Button
+   910→                type="button"
+   911→                size="sm"
+   912→                variant="outline"
+   913→                onClick={() => setForm((f) => ({ ...f, references: [...f.references, { label: "", url: "" }] }))}
+   914→              >
+   915→                <Plus className="size-3.5" aria-hidden="true" />
+   916→                Tambah referensi
+   917→              </Button>
+   918→            </div>
+   919→
+   920→            <div className="space-y-1">
+   921→              <label htmlFor="brief-attach" className="text-xs font-medium text-zinc-600">Catatan lampiran (opsional)</label>
+   922→              <Input
+   923→                id="brief-attach"
+   924→                value={form.attachmentsNote}
+   925→                onChange={(e) => setForm((f) => ({ ...f, attachmentsNote: e.target.value }))}
+   926→                placeholder="Mis. Logo & footage tersedia di Drive — link dikirim via WA"
+   927→              />
+   928→            </div>
+   929→          </div>
+   930→
+   931→          <DialogFooter className="items-center gap-3 border-t pt-3 sm:justify-between">
+   932→            <div className="flex flex-1 items-center gap-2">
+   933→              <Progress value={formCompleteness.pct} className="h-1.5 w-24 sm:w-32" aria-label="Kelengkapan form" />
+   934→              <span className="text-xs text-zinc-500">
+   935→                {formCompleteness.pct}%{formCompleteness.missing.length > 0 ? ` · kurang: ${formCompleteness.missing[0]}` : " · lengkap"}
+   936→              </span>
+   937→            </div>
+   938→            <div className="flex gap-2">
+   939→              <Button variant="outline" size="sm" onClick={() => setEditOpen(false)}>
+   940→                Batal
+   941→              </Button>
+   942→              <Button
+   943→                size="sm"
+   944→                className="text-white hover:opacity-90"
+   945→                style={{ backgroundColor: brandColor }}
+   946→                onClick={() => void handleSave()}
+   947→                disabled={busy === "save" || !form.title.trim()}
+   948→              >
+   949→                {busy === "save" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Pencil className="size-4" aria-hidden="true" />}
+   950→                Simpan
+   951→              </Button>
+   952→            </div>
+   953→          </DialogFooter>
+   954→        </DialogContent>
+   955→      </Dialog>
+   956→
+   957→      {/* ---------- Dialog minta revisi ---------- */}
+   958→      <Dialog open={revisionOpen} onOpenChange={setRevisionOpen}>
+   959→        <DialogContent className="sm:max-w-md">
+   960→          <DialogHeader>
+   961→            <DialogTitle>Minta revisi brief</DialogTitle>
+   962→            <DialogDescription>
+   963→              Brief kembali ke status <span className="font-medium text-red-600">Perlu Revisi</span> — owner akan
+   964→              diminta memperbaiki sesuai catatan.
+   965→            </DialogDescription>
+   966→          </DialogHeader>
+   967→          <Textarea
+   968→            rows={3}
+   969→            value={revisionNote}
+   970→            onChange={(e) => {
+   971→              setRevisionNote(e.target.value);
+   972→              setRevisionError(null);
+   973→            }}
+   974→            placeholder="Tulis catatan revisi (wajib)…"
+   975→            aria-label="Catatan revisi"
+   976→          />
+   977→          {revisionError ? <p className="text-xs text-red-600">{revisionError}</p> : null}
+   978→          <DialogFooter>
+   979→            <Button variant="outline" size="sm" onClick={() => setRevisionOpen(false)}>
+   980→              Batal
+   981→            </Button>
+   982→            <Button
+   983→              size="sm"
+   984→              className="bg-red-600 text-white hover:bg-red-700"
+   985→              disabled={busy === "request_revision"}
+   986→              onClick={() => {
+   987→                if (!revisionNote.trim()) {
+   988→                  setRevisionError("Catatan revisi wajib diisi");
+   989→                  return;
+   990→                }
+   991→                void handleAction("request_revision", revisionNote.trim());
+   992→              }}
+   993→            >
+   994→              {busy === "request_revision" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
+   995→              Kirim Revisi
+   996→            </Button>
+   997→          </DialogFooter>
+   998→        </DialogContent>
+   999→      </Dialog>
+  1000→
+  1001→      {/* ---------- Konfirmasi hapus ---------- */}
+  1002→      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+  1003→        <AlertDialogContent>
+  1004→          <AlertDialogHeader>
+  1005→            <AlertDialogTitle>Hapus brief {brief.code}?</AlertDialogTitle>
+  1006→            <AlertDialogDescription>
+  1007→              Brief berstatus draft dapat dihapus permanen. Tindakan ini tercatat pada audit log.
+  1008→            </AlertDialogDescription>
+  1009→          </AlertDialogHeader>
+  1010→          <AlertDialogFooter>
+  1011→            <AlertDialogCancel>Batal</AlertDialogCancel>
+  1012→            <AlertDialogAction
+  1013→              className="bg-red-600 text-white hover:bg-red-700"
+  1014→              onClick={(e) => {
+  1015→                e.preventDefault();
+  1016→                void handleDelete();
+  1017→              }}
+  1018→            >
+  1019→              {busy === "delete" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+  1020→              Hapus
+  1021→            </AlertDialogAction>
+  1022→          </AlertDialogFooter>
+  1023→        </AlertDialogContent>
+  1024→      </AlertDialog>
+  1025→    </div>
+  1026→  );
+  1027→}
+  1028→

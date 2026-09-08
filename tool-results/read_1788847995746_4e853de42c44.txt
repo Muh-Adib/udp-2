@@ -1,0 +1,1333 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  AtSign, BellRing, Building2, CheckCircle2, ChevronDown, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
+     6→  Link2, Loader2, Mail, Map as MapIcon, MapPin, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
+     7→} from "lucide-react";
+     8→import type { LucideIcon } from "lucide-react";
+     9→import { toast } from "sonner";
+    10→
+    11→import { Badge } from "@/components/ui/badge";
+    12→import { Button } from "@/components/ui/button";
+    13→import {
+    14→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    15→} from "@/components/ui/dialog";
+    16→import { Input } from "@/components/ui/input";
+    17→import { Label } from "@/components/ui/label";
+    18→import {
+    19→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    20→} from "@/components/ui/select";
+    21→import { Skeleton } from "@/components/ui/skeleton";
+    22→import { Switch } from "@/components/ui/switch";
+    23→import { Textarea } from "@/components/ui/textarea";
+    24→import { api } from "@/lib/crm/api-client";
+    25→import BrandSettingsDialog, { BrandLogo } from "@/components/crm/brand-settings-dialog";
+    26→import { BRAND_SERVICES, PIPELINE_STAGES, stageLabel } from "@/lib/crm/constants";
+    27→import { useCrmStore } from "@/lib/crm/store";
+    28→import type { Brand, CrossSellCompany, FollowUpTemplateDTO, ServiceMapData, ServiceMapRow } from "@/lib/crm/types";
+    29→
+    30→// ============ Meta ============
+    31→
+    32→const CURRENCIES = ["IDR", "USD", "SGD", "EUR", "AUD"] as const;
+    33→
+    34→const CHANNEL_META: Record<string, { label: string; icon: LucideIcon }> = {
+    35→  whatsapp: { label: "WhatsApp", icon: MessageCircle },
+    36→  email: { label: "Email", icon: Mail },
+    37→  instagram: { label: "Instagram", icon: Instagram },
+    38→  website: { label: "Website", icon: Globe },
+    39→  phone: { label: "Telepon", icon: Phone },
+    40→  meeting: { label: "Meeting", icon: Video },
+    41→  portal: { label: "Client Portal", icon: LayoutDashboard },
+    42→};
+    43→
+    44→function channelMeta(channel: string): { label: string; icon: LucideIcon } {
+    45→  if (CHANNEL_META[channel]) return CHANNEL_META[channel];
+    46→  return {
+    47→    label: channel ? channel.charAt(0).toUpperCase() + channel.slice(1) : "Lainnya",
+    48→    icon: BellRing,
+    49→  };
+    50→}
+    51→
+    52→interface BrandDraft {
+    53→  name: string;
+    54→  slug: string;
+    55→  color: string;
+    56→  description: string;
+    57→  website: string;
+    58→  primaryCurrency: string;
+    59→  invoicePrefix: string;
+    60→  quotePrefix: string;
+    61→  slaHours: string;
+    62→  portalDomain: string;
+    63→  active: boolean;
+    64→}
+    65→
+    66→interface TemplateDraft {
+    67→  name: string;
+    68→  channel: string;
+    69→  brandId: string; // "all" = berlaku untuk semua brand
+    70→  stage: string;
+    71→  delayDays: string;
+    72→  body: string;
+    73→  approved: boolean;
+    74→}
+    75→
+    76→function slugify(name: string): string {
+    77→  return name
+    78→    .toLowerCase()
+    79→    .replace(/[^a-z0-9]+/g, "_")
+    80→    .replace(/^_+|_+$/g, "");
+    81→}
+    82→
+    83→function quotePrefixFrom(prefix: string): string {
+    84→  const clean = prefix.trim().replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase();
+    85→  return clean ? `Q${clean}` : "";
+    86→}
+    87→
+    88→function fmtIDR(value: number): string {
+    89→  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
+    90→}
+    91→
+    92→const SERVICE_MAP_VISIBLE_COMPANIES = 8;
+    93→
+    94→const EMPTY_DRAFT: BrandDraft = {
+    95→  name: "", slug: "", color: "#ea580c",
+    96→  description: "", website: "", primaryCurrency: "IDR",
+    97→  invoicePrefix: "", quotePrefix: "", slaHours: "24", portalDomain: "", active: true,
+    98→};
+    99→
+   100→const EMPTY_TEMPLATE_DRAFT: TemplateDraft = {
+   101→  name: "", channel: "whatsapp", brandId: "all", stage: "", delayDays: "1", body: "", approved: false,
+   102→};
+   103→
+   104→const TEMPLATE_CHANNELS = [
+   105→  { key: "whatsapp", label: "WhatsApp" },
+   106→  { key: "instagram", label: "Instagram" },
+   107→  { key: "email", label: "Email" },
+   108→] as const;
+   109→
+   110→const TEMPLATE_SAMPLE_VALUES: Record<string, string> = {
+   111→  namaKontak: "Dian",
+   112→  brand: "Unimasi",
+   113→  layanan: "Website Profil",
+   114→};
+   115→
+   116→function previewTemplateBody(body: string): string {
+   117→  return body.replace(/\{(namaKontak|brand|layanan)\}/g, (_, key: string) => TEMPLATE_SAMPLE_VALUES[key] ?? _);
+   118→}
+   119→
+   120→// ============ Sub-komponen kecil ============
+   121→
+   122→function BrandCard({ brand, onSettings }: { brand: Brand; onSettings: (brand: Brand) => void }) {
+   123→  const services = BRAND_SERVICES[brand.slug] ?? [];
+   124→  const contactChips: Array<{ key: string; value: string | null | undefined; label: string }> = [
+   125→    { key: "wa", value: brand.whatsappNumber, label: "WhatsApp" },
+   126→    { key: "ig", value: brand.instagramHandle, label: "Instagram" },
+   127→    { key: "threads", value: brand.threadsHandle, label: "Threads" },
+   128→    { key: "email", value: brand.email, label: "Email" },
+   129→  ];
+   130→  return (
+   131→    <div className="relative flex flex-col overflow-hidden rounded-xl border bg-white p-5 pl-6 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
+   132→      <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: brand.color }} aria-hidden />
+   133→      <div className="flex items-start gap-3">
+   134→        <BrandLogo brand={brand} size="lg" />
+   135→        <div className="min-w-0 flex-1">
+   136→          <div className="flex items-center gap-2">
+   137→            <p className="truncate text-base font-bold text-zinc-900">{brand.name}</p>
+   138→            {!brand.active ? <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-zinc-500">Nonaktif</Badge> : null}
+   139→          </div>
+   140→          {brand.tagline ? (
+   141→            <p className="truncate text-xs font-medium italic" style={{ color: brand.color }}>&ldquo;{brand.tagline}&rdquo;</p>
+   142→          ) : (
+   143→            <p className="truncate font-mono text-xs text-zinc-500">{brand.slug}</p>
+   144→          )}
+   145→          {brand.description ? (
+   146→            <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{brand.description}</p>
+   147→          ) : null}
+   148→        </div>
+   149→        <div className="flex shrink-0 flex-col gap-1">
+   150→          <Button
+   151→            variant="ghost"
+   152→            size="icon"
+   153→            className="h-8 w-8 text-zinc-400 hover:text-zinc-800"
+   154→            onClick={() => onSettings(brand)}
+   155→            aria-label={`Pengaturan ${brand.name}`}
+   156→            title="Kelola: identitas, layanan & workflow, surat, integrasi"
+   157→          >
+   158→            <Settings2 className="h-4 w-4" aria-hidden />
+   159→          </Button>
+   160→        </div>
+   161→      </div>
+   162→
+   163→      {/* Kontak resmi brand (data asli situs) */}
+   164→      {contactChips.some((c) => c.value) ? (
+   165→        <div className="mt-3 flex flex-wrap gap-1.5">
+   166→          {contactChips.filter((c) => c.value).map((c) => (
+   167→            <span key={c.key} className="inline-flex max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-600" title={c.label}>
+   168→              {c.key === "wa" ? <MessageCircle className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+   169→                : c.key === "ig" ? <Instagram className="h-3 w-3 shrink-0 text-pink-600" aria-hidden />
+   170→                : c.key === "threads" ? <AtSign className="h-3 w-3 shrink-0 text-zinc-700" aria-hidden />
+   171→                : <Mail className="h-3 w-3 shrink-0 text-zinc-500" aria-hidden />}
+   172→              <span className="truncate font-mono">{c.value}</span>
+   173→            </span>
+   174→          ))}
+   175→        </div>
+   176→      ) : null}
+   177→
+   178→      {brand.city || brand.address ? (
+   179→        <p className="mt-2 flex items-start gap-1.5 text-xs text-zinc-500">
+   180→          <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+   181→          <span className="line-clamp-1" title={brand.address ?? brand.city ?? ""}>{brand.city ?? brand.address}</span>
+   182→        </p>
+   183→      ) : null}
+   184→
+   185→      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+   186→        <span className="inline-flex items-center gap-1.5 text-zinc-600" title="Warna brand">
+   187→          <span className="h-3 w-3 rounded-full border border-zinc-200" style={{ backgroundColor: brand.color }} aria-hidden />
+   188→          <span className="font-mono">{brand.color}</span>
+   189→        </span>
+   190→        <Badge variant="outline" className="border-transparent bg-zinc-100 text-zinc-600">{brand.primaryCurrency}</Badge>
+   191→        <Badge variant="outline" className="border-transparent bg-zinc-100 font-mono text-zinc-600">{brand.invoicePrefix}</Badge>
+   192→        <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700">
+   193→          <Clock3 className="h-3 w-3" aria-hidden /> SLA {brand.slaHours} jam
+   194→        </Badge>
+   195→      </div>
+   196→
+   197→      {(brand.portalDomain || brand.website) ? (
+   198→        <div className="mt-3 space-y-1.5 border-t border-zinc-100 pt-3 text-xs">
+   199→          {brand.portalDomain ? (
+   200→            <p className="flex items-center gap-1.5 text-zinc-600">
+   201→              <Link2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden /> Portal: {brand.portalDomain}
+   202→            </p>
+   203→          ) : null}
+   204→          {brand.website ? (
+   205→            <a
+   206→              href={brand.website}
+   207→              target="_blank"
+   208→              rel="noreferrer"
+   209→              className="inline-flex items-center gap-1.5 font-medium text-zinc-700 underline-offset-2 hover:underline"
+   210→              aria-label={`Buka website ${brand.name}`}
+   211→            >
+   212→              <Globe className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden /> {brand.website.replace(/^https?:\/\//, "")}
+   213→              <ExternalLink className="h-3 w-3" aria-hidden />
+   214→            </a>
+   215→          ) : null}
+   216→        </div>
+   217→      ) : null}
+   218→
+   219→      {/* Layanan brand */}
+   220→      <div className="mt-3 border-t border-zinc-100 pt-3">
+   221→        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Layanan {brand.name}</p>
+   222→        {services.length === 0 ? (
+   223→          <p className="text-xs text-zinc-400">Belum ada katalog layanan untuk brand ini.</p>
+   224→        ) : (
+   225→          <div className="flex flex-wrap gap-1.5">
+   226→            {services.map((s) => (
+   227→              <span key={s} className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-600">
+   228→                {s}
+   229→              </span>
+   230→            ))}
+   231→          </div>
+   232→        )}
+   233→      </div>
+   234→    </div>
+   235→  );
+   236→}
+   237→
+   238→function PipelineStageCard({ stage, index }: { stage: (typeof PIPELINE_STAGES)[number]; index: number }) {
+   239→  return (
+   240→    <div className="flex items-start gap-3 rounded-xl border bg-white p-3.5 shadow-sm">
+   241→      <span
+   242→        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+   243→        style={{ backgroundColor: stage.color }}
+   244→        aria-hidden
+   245→      >
+   246→        {index + 1}
+   247→      </span>
+   248→      <div className="min-w-0">
+   249→        <p className="text-sm font-semibold text-zinc-900">{stage.label}</p>
+   250→        <p className="text-xs text-zinc-500">{stage.meaning}</p>
+   251→        <p className="mt-1 inline-flex items-start gap-1 text-[11px] text-zinc-400">
+   252→          <Tag className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+   253→          <span>Aktivitas wajib: {stage.required}</span>
+   254→        </p>
+   255→      </div>
+   256→    </div>
+   257→  );
+   258→}
+   259→
+   260→function TemplateCard({
+   261→  template, brandName, onEdit, onDelete,
+   262→}: {
+   263→  template: FollowUpTemplateDTO;
+   264→  brandName?: string;
+   265→  onEdit: (template: FollowUpTemplateDTO) => void;
+   266→  onDelete: (template: FollowUpTemplateDTO) => void;
+   267→}) {
+   268→  const meta = channelMeta(template.channel);
+   269→  const ChannelIcon = meta.icon;
+   270→  return (
+   271→    <div className="flex flex-col rounded-xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
+   272→      <div className="flex items-start gap-2.5">
+   273→        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600" aria-hidden>
+   274→          <ChannelIcon className="h-4 w-4" />
+   275→        </span>
+   276→        <div className="min-w-0 flex-1">
+   277→          <p className="truncate text-sm font-semibold text-zinc-900">{template.name}</p>
+   278→          <p className="mt-0.5 truncate text-[11px] text-zinc-400">
+   279→            {brandName ?? "Semua brand"}
+   280→            {template.stage ? ` · Stage ${stageLabel(template.stage)}` : ""}
+   281→          </p>
+   282→        </div>
+   283→        <div className="flex shrink-0 items-center gap-0.5">
+   284→          <Button
+   285→            variant="ghost"
+   286→            size="icon"
+   287→            className="h-7 w-7 text-zinc-400 hover:text-zinc-800"
+   288→            onClick={() => onEdit(template)}
+   289→            aria-label={`Edit template ${template.name}`}
+   290→          >
+   291→            <Pencil className="h-3.5 w-3.5" aria-hidden />
+   292→          </Button>
+   293→          <Button
+   294→            variant="ghost"
+   295→            size="icon"
+   296→            className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+   297→            onClick={() => onDelete(template)}
+   298→            aria-label={`Hapus template ${template.name}`}
+   299→          >
+   300→            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   301→          </Button>
+   302→        </div>
+   303→      </div>
+   304→
+   305→      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+   306→        <Badge variant="outline" className="border-transparent bg-zinc-100 text-zinc-600">
+   307→          <ChannelIcon className="h-3 w-3" aria-hidden /> {meta.label}
+   308→        </Badge>
+   309→        <Badge variant="outline" className="border-transparent bg-zinc-100 font-medium text-zinc-700">H+{template.delayDays}</Badge>
+   310→        <Badge variant="outline" className="border-transparent bg-zinc-100 font-mono uppercase text-zinc-600">{template.language}</Badge>
+   311→        <Badge variant="outline" className="border-transparent bg-zinc-100 font-mono text-zinc-500">v{template.version}</Badge>
+   312→        {template.approved ? (
+   313→          <Badge variant="outline" className="border-transparent bg-emerald-50 text-emerald-700">
+   314→            <CheckCircle2 className="h-3 w-3" aria-hidden /> Disetujui
+   315→          </Badge>
+   316→        ) : (
+   317→          <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700">Review</Badge>
+   318→        )}
+   319→      </div>
+   320→
+   321→      <blockquote className="mt-3 rounded-lg bg-zinc-50 p-3 text-sm leading-relaxed text-zinc-600">
+   322→        <span className="line-clamp-2 whitespace-pre-line">{template.body}</span>
+   323→      </blockquote>
+   324→    </div>
+   325→  );
+   326→}
+   327→
+   328→function BrandsSkeleton() {
+   329→  return (
+   330→    <div className="space-y-6" aria-hidden>
+   331→      <div className="space-y-2">
+   332→        <Skeleton className="h-7 w-64" />
+   333→        <Skeleton className="h-4 w-80" />
+   334→      </div>
+   335→      <div className="flex items-center justify-between">
+   336→        <Skeleton className="h-9 w-72 rounded-lg" />
+   337→        <Skeleton className="h-9 w-28 rounded-lg" />
+   338→      </div>
+   339→      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+   340→        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-64 rounded-xl" />)}
+   341→      </div>
+   342→      <Skeleton className="h-72 rounded-xl" />
+   343→      <Skeleton className="h-72 rounded-xl" />
+   344→    </div>
+   345→  );
+   346→}
+   347→
+   348→function TemplatesSkeleton() {
+   349→  return (
+   350→    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" aria-hidden>
+   351→      {Array.from({ length: 3 }).map((_, i) => (
+   352→        <div key={i} className="space-y-3 rounded-xl border bg-white p-4 shadow-sm">
+   353→          <div className="flex items-center gap-2.5">
+   354→            <Skeleton className="h-8 w-8 rounded-lg" />
+   355→            <div className="min-w-0 flex-1 space-y-1.5">
+   356→              <Skeleton className="h-4 w-3/4" />
+   357→              <Skeleton className="h-3 w-1/2" />
+   358→            </div>
+   359→          </div>
+   360→          <div className="flex gap-1.5">
+   361→            <Skeleton className="h-5 w-16 rounded-full" />
+   362→            <Skeleton className="h-5 w-12 rounded-full" />
+   363→            <Skeleton className="h-5 w-14 rounded-full" />
+   364→            <Skeleton className="h-5 w-16 rounded-full" />
+   365→          </div>
+   366→          <Skeleton className="h-12 rounded-lg" />
+   367→        </div>
+   368→      ))}
+   369→    </div>
+   370→  );
+   371→}
+   372→
+   373→// ============ Ronde 29-b — Peta Layanan & Cross-Selling (super_admin + director) ============
+   374→
+   375→function ServiceMapSection() {
+   376→  const [open, setOpen] = useState(false);
+   377→  const [data, setData] = useState<ServiceMapData | null>(null);
+   378→  const [loading, setLoading] = useState(false);
+   379→  const [error, setError] = useState<string | null>(null);
+   380→  const [tab, setTab] = useState<"matrix" | "crosssell">("matrix");
+   381→  const [showAll, setShowAll] = useState(false);
+   382→
+   383→  const loadMap = useCallback(async () => {
+   384→    setLoading(true);
+   385→    setError(null);
+   386→    const ctrl = new AbortController();
+   387→    const timer = setTimeout(() => ctrl.abort(), 15_000); // R30: skeleton tidak boleh menggantung selamanya
+   388→    try {
+   389→      const res = await api.serviceMap({ signal: ctrl.signal });
+   390→      setData(res);
+   391→    } catch (err) {
+   392→      if (err instanceof DOMException && err.name === "AbortError") {
+   393→        setError("Waktu muat habis — periksa koneksi lalu coba lagi");
+   394→      } else {
+   395→        setError(err instanceof Error ? err.message : "Gagal memuat peta layanan");
+   396→      }
+   397→    } finally {
+   398→      clearTimeout(timer);
+   399→      setLoading(false);
+   400→    }
+   401→  }, []);
+   402→
+   403→  // Lazy: fetch pertama kali hanya saat section dibuka.
+   404→  function toggleOpen() {
+   405→    const next = !open;
+   406→    setOpen(next);
+   407→    if (next && data === null && !loading) void loadMap();
+   408→  }
+   409→
+   410→  const rowsByBrand = useMemo(() => {
+   411→    const map = new Map<string, ServiceMapRow[]>();
+   412→    (data?.rows ?? []).forEach((row) => {
+   413→      const list = map.get(row.brandId);
+   414→      if (list) list.push(row);
+   415→      else map.set(row.brandId, [row]);
+   416→    });
+   417→    return map;
+   418→  }, [data]);
+   419→
+   420→  const companies: CrossSellCompany[] = data?.crossSell ?? [];
+   421→  const visibleCompanies = showAll ? companies : companies.slice(0, SERVICE_MAP_VISIBLE_COMPANIES);
+   422→  const avgBrands = data
+   423→    ? Number.isInteger(data.stats.avgBrandsPerCompany)
+   424→      ? String(data.stats.avgBrandsPerCompany)
+   425→      : data.stats.avgBrandsPerCompany.toFixed(1)
+   426→    : "0";
+   427→  const billedTotal = (data?.crossSell ?? []).reduce((sum, c) => sum + (c.billedValue ?? 0), 0);
+   428→  const isEmpty = Boolean(data) && (data?.brands.length ?? 0) === 0;
+   429→
+   430→  return (
+   431→    <section aria-label="Peta Layanan & Cross-Selling" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+   432→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   433→        <button type="button" onClick={toggleOpen} aria-expanded={open} className="flex min-w-0 flex-1 items-start gap-3 rounded-lg text-left">
+   434→          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600" aria-hidden>
+   435→            <MapIcon className="h-5 w-5" />
+   436→          </span>
+   437→          <span className="min-w-0 flex-1">
+   438→            <span className="block text-sm font-semibold text-zinc-900">Peta Layanan &amp; Cross-Selling</span>
+   439→            <span className="mt-0.5 block text-xs text-zinc-500">
+   440→              Matriks layanan × brand &amp; peluang cross-selling — dihitung dari opportunity dan invoice per perusahaan
+   441→            </span>
+   442→          </span>
+   443→          <ChevronDown className={`mt-1.5 h-4 w-4 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+   444→        </button>
+   445→        {open ? (
+   446→          <Button variant="outline" size="sm" onClick={() => void loadMap()} disabled={loading} aria-label="Muat ulang peta layanan">
+   447→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   448→          </Button>
+   449→        ) : null}
+   450→      </div>
+   451→
+   452→      {open ? (
+   453→        <div className="mt-4">
+   454→          {loading && data === null ? (
+   455→            <div className="space-y-4" aria-hidden>
+   456→              <div className="flex flex-wrap gap-2">
+   457→                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-6 w-44 rounded-full" />)}
+   458→              </div>
+   459→              <Skeleton className="h-8 w-72 rounded-lg" />
+   460→              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+   461→                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-48 rounded-xl" />)}
+   462→              </div>
+   463→            </div>
+   464→          ) : error ? (
+   465→            <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+   466→              <span>{error}</span>
+   467→              <Button variant="outline" size="sm" onClick={() => void loadMap()} aria-label="Coba lagi memuat peta layanan">
+   468→                <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+   469→              </Button>
+   470→            </div>
+   471→          ) : isEmpty ? (
+   472→            <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+   473→              <MapIcon className="h-8 w-8 text-zinc-300" aria-hidden />
+   474→              <p className="text-sm font-semibold text-zinc-700">Belum ada brand aktif</p>
+   475→              <p className="max-w-sm text-xs text-zinc-500">
+   476→                Tambahkan brand dan layanan pada Pengaturan Brand — peta layanan akan terisi otomatis.
+   477→              </p>
+   478→            </div>
+   479→          ) : data ? (
+   480→            <>
+   481→              {/* Stat chips */}
+   482→              <div className="flex flex-wrap gap-2">
+   483→                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+   484→                  <span className="font-bold text-zinc-900">{data.stats.companies}</span> perusahaan aktif
+   485→                </span>
+   486→                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+   487→                  rata-rata <span className="font-bold text-zinc-900">{avgBrands}</span> brand per perusahaan
+   488→                </span>
+   489→                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+   490→                  <span className="font-bold text-emerald-700">{data.stats.coveredAll}</span> pakai semua brand
+   491→                </span>
+   492→                <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+   493→                  <span className="font-bold text-zinc-900">{data.stats.activeServices}</span> layanan aktif
+   494→                </span>
+   495→                {billedTotal > 0 ? (
+   496→                  <span className="rounded-full border bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+   497→                    invoice terealisasi <span className="font-bold text-emerald-700">{fmtIDR(billedTotal)}</span>
+   498→                  </span>
+   499→                ) : null}
+   500→              </div>
+   501→
+   502→              {/* Sub-tab internal */}
+   503→              <div className="mt-4 inline-flex rounded-lg border bg-zinc-50 p-0.5" role="tablist" aria-label="Mode tampilan peta layanan">
+   504→                <button
+   505→                  type="button" role="tab" aria-selected={tab === "matrix"}
+   506→                  onClick={() => setTab("matrix")}
+   507→                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${tab === "matrix" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+   508→                >
+   509→                  Matriks Layanan
+   510→                </button>
+   511→                <button
+   512→                  type="button" role="tab" aria-selected={tab === "crosssell"}
+   513→                  onClick={() => setTab("crosssell")}
+   514→                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${tab === "crosssell" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+   515→                >
+   516→                  Peluang Cross-Selling
+   517→                </button>
+   518→              </div>
+   519→
+   520→              {tab === "matrix" ? (
+   521→                /* ===== MATRIKS LAYANAN — kartu per brand, digroup per kategori ===== */
+   522→                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+   523→                  {data.brands.map((b) => {
+   524→                    const rows = rowsByBrand.get(b.id) ?? [];
+   525→                    const categories = new Map<string, ServiceMapRow[]>();
+   526→                    rows.forEach((row) => {
+   527→                      const key = row.categoryName ?? "Lainnya";
+   528→                      const list = categories.get(key);
+   529→                      if (list) list.push(row);
+   530→                      else categories.set(key, [row]);
+   531→                    });
+   532→                    return (
+   533→                      <div key={b.id} className="overflow-hidden rounded-xl border bg-white shadow-sm">
+   534→                        <div className="flex items-center gap-2.5 border-b border-zinc-100 bg-zinc-50/60 px-4 py-3">
+   535→                          <BrandLogo brand={b} size="sm" />
+   536→                          <div className="min-w-0 flex-1">
+   537→                            <p className="truncate text-sm font-bold text-zinc-900">{b.name}</p>
+   538→                            {b.tagline ? <p className="truncate text-[11px] italic text-zinc-500">{b.tagline}</p> : null}
+   539→                          </div>
+   540→                          <span className="shrink-0 rounded-full border bg-white px-2 py-0.5 text-[11px] text-zinc-500">{rows.length} layanan</span>
+   541→                        </div>
+   542→                        <div className="space-y-3 p-4">
+   543→                          {rows.length === 0 ? (
+   544→                            <p className="text-xs text-zinc-400">Belum ada layanan terdaftar untuk brand ini.</p>
+   545→                          ) : (
+   546→                            Array.from(categories.entries()).map(([catName, list]) => (
+   547→                              <div key={catName}>
+   548→                                <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">{catName}</p>
+   549→                                <ul className="mt-1.5 space-y-1.5">
+   550→                                  {list.map((row) => {
+   551→                                    const badge =
+   552→                                      row.costTotal == null || row.suggestedPrice == null || row.basePrice == null || row.suggestedPrice <= 0
+   553→                                        ? null
+   554→                                        : row.basePrice < row.suggestedPrice
+   555→                                          ? (
+   556→                                            <Badge variant="outline" className="border-transparent bg-amber-50 px-1.5 text-[10px] text-amber-700">
+   557→                                              Di bawah saran
+   558→                                            </Badge>
+   559→                                          )
+   560→                                          : (
+   561→                                            <Badge variant="outline" className="border-transparent bg-emerald-50 px-1.5 text-[10px] text-emerald-700">
+   562→                                              OK
+   563→                                            </Badge>
+   564→                                          );
+   565→                                    return (
+   566→                                      <li key={row.id} className="flex items-start justify-between gap-3 rounded-lg border border-zinc-100 bg-zinc-50 px-2.5 py-2">
+   567→                                        <div className="min-w-0">
+   568→                                          <p className="truncate text-sm font-medium text-zinc-800">{row.name}</p>
+   569→                                          <p className="text-xs text-zinc-500">{row.unit ?? "paket"}</p>
+   570→                                          {row.costTotal != null ? (
+   571→                                            <p className="mt-0.5 text-xs text-zinc-500">
+   572→                                              Biaya: <span className="font-medium">{fmtIDR(row.costTotal)}</span>
+   573→                                              {" · Saran: "}
+   574→                                              <span className="font-medium">{fmtIDR(row.suggestedPrice ?? 0)}</span>
+   575→                                            </p>
+   576→                                          ) : null}
+   577→                                        </div>
+   578→                                        <div className="flex shrink-0 flex-col items-end gap-1">
+   579→                                          <span className="text-sm font-semibold text-zinc-900">{fmtIDR(row.basePrice ?? 0)}</span>
+   580→                                          <div className="flex gap-1">
+   581→                                            {!row.active ? (
+   582→                                              <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-[10px] text-zinc-500">Nonaktif</Badge>
+   583→                                            ) : null}
+   584→                                            {badge}
+   585→                                          </div>
+   586→                                        </div>
+   587→                                      </li>
+   588→                                    );
+   589→                                  })}
+   590→                                </ul>
+   591→                              </div>
+   592→                            ))
+   593→                          )}
+   594→                        </div>
+   595→                      </div>
+   596→                    );
+   597→                  })}
+   598→                </div>
+   599→              ) : (
+   600→                /* ===== PELUANG CROSS-SELLING — kartu per perusahaan ===== */
+   601→                <div className="mt-4">
+   602→                  {companies.length === 0 ? (
+   603→                    <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+   604→                      <Building2 className="h-8 w-8 text-zinc-300" aria-hidden />
+   605→                      <p className="text-sm font-semibold text-zinc-700">Belum ada data perusahaan</p>
+   606→                      <p className="max-w-sm text-xs text-zinc-500">
+   607→                        Ringkasan cross-selling dihitung dari opportunity dan invoice per perusahaan — akan muncul setelah perusahaan digarap di salah satu brand.
+   608→                      </p>
+   609→                    </div>
+   610→                  ) : (
+   611→                    <>
+   612→                      <div className="crm-scroll max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+   613→                        {visibleCompanies.map((c) => (
+   614→                          <div key={c.companyId} className="rounded-xl border bg-white p-4 shadow-sm">
+   615→                            <div className="flex items-start justify-between gap-3">
+   616→                              <div className="flex min-w-0 items-center gap-2.5">
+   617→                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600" aria-hidden>
+   618→                                  <Building2 className="h-4 w-4" />
+   619→                                </span>
+   620→                                <p className="truncate text-sm font-semibold text-zinc-900">{c.companyName}</p>
+   621→                              </div>
+   622→                              <div className="shrink-0 text-right">
+   623→                                <p className="text-sm font-bold text-zinc-900" title="Total nilai opportunity semua brand">
+   624→                                  {fmtIDR(c.totalValue)}
+   625→                                </p>
+   626→                                {(c.billedValue ?? 0) > 0 ? (
+   627→                                  <p className="text-[11px] text-emerald-700" title="Total invoice terealisasi (bukan draft/cancelled)">
+   628→                                    invoice {fmtIDR(c.billedValue ?? 0)}
+   629→                                  </p>
+   630→                                ) : null}
+   631→                              </div>
+   632→                            </div>
+   633→
+   634→                            {c.purchases.length > 0 ? (
+   635→                              <div className="mt-3 space-y-1.5">
+   636→                                {c.purchases.map((p) => (
+   637→                                  <div key={p.brandId} className="rounded-lg bg-zinc-50 px-2.5 py-1.5 text-xs">
+   638→                                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+   639→                                      <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-800">
+   640→                                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.brandColor }} aria-hidden />
+   641→                                        {p.brandName}
+   642→                                      </span>
+   643→                                      <span className="text-zinc-500">
+   644→                                        {p.serviceCount} layanan · {fmtIDR(p.totalValue)}
+   645→                                        {(p.billedValue ?? 0) > 0 ? <span className="text-emerald-700"> · invoice {fmtIDR(p.billedValue ?? 0)}</span> : null}
+   646→                                      </span>
+   647→                                    </span>
+   648→                                    {p.services.length > 0 ? (
+   649→                                      <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={p.services.join(", ")}>
+   650→                                        {p.services.join(" · ")}
+   651→                                      </p>
+   652→                                    ) : null}
+   653→                                  </div>
+   654→                                ))}
+   655→                              </div>
+   656→                            ) : (
+   657→                              <p className="mt-2 text-xs text-zinc-400">Belum ada pembelian tercatat.</p>
+   658→                            )}
+   659→
+   660→                            <div className="mt-3 border-t border-zinc-100 pt-2.5">
+   661→                              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Peluang cross-sell →</p>
+   662→                              {c.suggestions.length === 0 ? (
+   663→                                <Badge variant="outline" className="mt-1.5 border-transparent bg-emerald-50 text-emerald-700">
+   664→                                  <CheckCircle2 className="h-3 w-3" aria-hidden /> Semua brand sudah digarap
+   665→                                </Badge>
+   666→                              ) : (
+   667→                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+   668→                                  {c.suggestions.map((s) => (
+   669→                                    <span
+   670→                                      key={s.brandId}
+   671→                                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-dashed border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-600"
+   672→                                      title={s.topService ?? `Brand ${s.brandName}`}
+   673→                                    >
+   674→                                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.brandColor }} aria-hidden />
+   675→                                      <span className="font-semibold text-zinc-800">{s.brandName}</span>
+   676→                                      {s.topService ? <span className="truncate text-zinc-500">· {s.topService}</span> : null}
+   677→                                      {s.basePrice != null ? <span className="shrink-0 text-zinc-500">dari {fmtIDR(s.basePrice)}</span> : null}
+   678→                                    </span>
+   679→                                  ))}
+   680→                                </div>
+   681→                              )}
+   682→                            </div>
+   683→                          </div>
+   684→                        ))}
+   685→                      </div>
+   686→                      {companies.length > SERVICE_MAP_VISIBLE_COMPANIES ? (
+   687→                        <Button
+   688→                          variant="ghost" size="sm" className="mt-2 text-zinc-500 hover:text-zinc-800"
+   689→                          onClick={() => setShowAll((v) => !v)}
+   690→                          aria-label={showAll ? "Tampilkan 8 perusahaan teratas saja" : `Tampilkan semua ${companies.length} perusahaan`}
+   691→                        >
+   692→                          {showAll ? "Tampilkan lebih sedikit" : `Tampilkan semua (${companies.length})`}
+   693→                          <ChevronDown className={`h-3.5 w-3.5 ${showAll ? "rotate-180" : ""}`} aria-hidden />
+   694→                        </Button>
+   695→                      ) : null}
+   696→                    </>
+   697→                  )}
+   698→                </div>
+   699→              )}
+   700→            </>
+   701→          ) : null}
+   702→        </div>
+   703→      ) : null}
+   704→    </section>
+   705→  );
+   706→}
+   707→
+   708→// ============ Module utama ============
+   709→
+   710→export default function BrandsModule() {
+   711→  const user = useCrmStore((s) => s.user);
+   712→
+   713→  const [brands, setBrands] = useState<Brand[] | null>(null);
+   714→  const [loading, setLoading] = useState(true);
+   715→  const [error, setError] = useState<string | null>(null);
+   716→  const [serviceFilter, setServiceFilter] = useState("");
+   717→
+   718→  const [createOpen, setCreateOpen] = useState(false);
+   719→  const [editingBrand, setEditingBrand] = useState<Brand | null>(null);
+   720→  const [draft, setDraft] = useState<BrandDraft>(EMPTY_DRAFT);
+   721→  const [submitting, setSubmitting] = useState(false);
+   722→
+   723→  // Ronde 29-b — dialog Pengaturan Brand (identitas/layanan/surat/integrasi)
+   724→  const [settingsBrand, setSettingsBrand] = useState<Brand | null>(null);
+   725→  const [settingsOpen, setSettingsOpen] = useState(false);
+   726→
+   727→  const [templates, setTemplates] = useState<FollowUpTemplateDTO[] | null>(null);
+   728→  const [templatesLoading, setTemplatesLoading] = useState(true);
+   729→  const [templatesError, setTemplatesError] = useState<string | null>(null);
+   730→  const [channelFilter, setChannelFilter] = useState("");
+   731→
+   732→  const [templateOpen, setTemplateOpen] = useState(false);
+   733→  const [editingTemplate, setEditingTemplate] = useState<FollowUpTemplateDTO | null>(null);
+   734→  const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(EMPTY_TEMPLATE_DRAFT);
+   735→  const [templateSubmitting, setTemplateSubmitting] = useState(false);
+   736→
+   737→  const load = useCallback(async (silent = false) => {
+   738→    if (!silent) setLoading(true);
+   739→    setError(null);
+   740→    try {
+   741→      const res = await api.brands();
+   742→      setBrands(res.brands);
+   743→    } catch (err) {
+   744→      setError(err instanceof Error ? err.message : "Gagal memuat brand");
+   745→      if (!silent) toast.error("Gagal memuat konfigurasi brand");
+   746→    } finally {
+   747→      setLoading(false);
+   748→    }
+   749→  }, []);
+   750→
+   751→  const loadTemplates = useCallback(async () => {
+   752→    setTemplatesLoading(true);
+   753→    setTemplatesError(null);
+   754→    try {
+   755→      const res = await api.followUpTemplates();
+   756→      setTemplates(res.templates);
+   757→    } catch (err) {
+   758→      setTemplatesError(err instanceof Error ? err.message : "Gagal memuat template follow-up");
+   759→    } finally {
+   760→      setTemplatesLoading(false);
+   761→    }
+   762→  }, []);
+   763→
+   764→  useEffect(() => {
+   765→    void load();
+   766→    void loadTemplates();
+   767→  }, [load, loadTemplates]);
+   768→
+   769→  const allServices = useMemo(() => {
+   770→    const set = new Set<string>();
+   771→    Object.values(BRAND_SERVICES).forEach((arr) => arr.forEach((s) => set.add(s)));
+   772→    return Array.from(set);
+   773→  }, []);
+   774→
+   775→  const filteredBrands = useMemo(() => {
+   776→    if (!serviceFilter || serviceFilter === "all") return brands ?? [];
+   777→    return (brands ?? []).filter((b) => (BRAND_SERVICES[b.slug] ?? []).includes(serviceFilter));
+   778→  }, [brands, serviceFilter]);
+   779→
+   780→  const templateChannels = useMemo(() => {
+   781→    const set = new Set<string>();
+   782→    (templates ?? []).forEach((t) => set.add(t.channel));
+   783→    return Array.from(set).sort().map((c) => ({ key: c, label: channelMeta(c).label }));
+   784→  }, [templates]);
+   785→
+   786→  const filteredTemplates = useMemo(() => {
+   787→    if (!templates) return [];
+   788→    if (!channelFilter || channelFilter === "all") return templates;
+   789→    return templates.filter((t) => t.channel === channelFilter);
+   790→  }, [templates, channelFilter]);
+   791→
+   792→  const brandNameById = useMemo(() => {
+   793→    const map = new Map<string, string>();
+   794→    (brands ?? []).forEach((b) => map.set(b.id, b.name));
+   795→    return map;
+   796→  }, [brands]);
+   797→
+   798→  const canApproveTemplates = user?.role === "director" || user?.role === "super_admin";
+   799→
+   800→  const templatePreview = useMemo(
+   801→    () => previewTemplateBody(templateDraft.body),
+   802→    [templateDraft.body],
+   803→  );
+   804→
+   805→  function openTemplateCreate() {
+   806→    setEditingTemplate(null);
+   807→    setTemplateDraft(EMPTY_TEMPLATE_DRAFT);
+   808→    setTemplateOpen(true);
+   809→  }
+   810→
+   811→  function openTemplateEdit(t: FollowUpTemplateDTO) {
+   812→    setEditingTemplate(t);
+   813→    setTemplateDraft({
+   814→      name: t.name,
+   815→      channel: TEMPLATE_CHANNELS.some((c) => c.key === t.channel) ? t.channel : "whatsapp",
+   816→      brandId: t.brandId ?? "all",
+   817→      stage: t.stage ?? "",
+   818→      delayDays: String(t.delayDays),
+   819→      body: t.body,
+   820→      approved: t.approved,
+   821→    });
+   822→    setTemplateOpen(true);
+   823→  }
+   824→
+   825→  async function submitTemplate(e: React.FormEvent<HTMLFormElement>) {
+   826→    e.preventDefault();
+   827→    if (!templateDraft.name.trim()) { toast.error("Nama template wajib diisi"); return; }
+   828→    if (!templateDraft.body.trim()) { toast.error("Isi template wajib diisi"); return; }
+   829→    const delay = Number(templateDraft.delayDays);
+   830→    if (!Number.isInteger(delay) || delay < 0 || delay > 30) { toast.error("Jeda hari harus antara 0 dan 30"); return; }
+   831→    if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
+   832→    setTemplateSubmitting(true);
+   833→    try {
+   834→      const payload = {
+   835→        name: templateDraft.name.trim(),
+   836→        channel: templateDraft.channel,
+   837→        brandId: templateDraft.brandId === "all" ? null : templateDraft.brandId,
+   838→        stage: templateDraft.stage.trim() || null,
+   839→        delayDays: delay,
+   840→        body: templateDraft.body.trim(),
+   841→        approved: canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false),
+   842→        actorName: user.name,
+   843→        actorRole: user.role,
+   844→      };
+   845→      if (editingTemplate) {
+   846→        await api.updateTemplate(editingTemplate.id, payload);
+   847→        toast.success("Template diperbarui");
+   848→      } else {
+   849→        await api.createTemplate(payload);
+   850→        toast.success("Template dibuat");
+   851→      }
+   852→      setTemplateDraft(EMPTY_TEMPLATE_DRAFT);
+   853→      setEditingTemplate(null);
+   854→      setTemplateOpen(false);
+   855→      await loadTemplates();
+   856→    } catch (err) {
+   857→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan template");
+   858→    } finally {
+   859→      setTemplateSubmitting(false);
+   860→    }
+   861→  }
+   862→
+   863→  async function handleDeleteTemplate(t: FollowUpTemplateDTO) {
+   864→    if (!window.confirm(`Hapus template "${t.name}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+   865→    try {
+   866→      await api.deleteTemplate(t.id);
+   867→      toast.success(`Template "${t.name}" dihapus`);
+   868→      await loadTemplates();
+   869→    } catch (err) {
+   870→      toast.error(err instanceof Error ? err.message : "Gagal menghapus template");
+   871→    }
+   872→  }
+   873→
+   874→  function openBrandCreate() {
+   875→    setEditingBrand(null);
+   876→    setDraft(EMPTY_DRAFT);
+   877→    setCreateOpen(true);
+   878→  }
+   879→
+   880→  function handleNameChange(name: string) {
+   881→    // Mode edit: slug tidak ikut berubah otomatis (bisa diatur manual).
+   882→    setDraft((d) => (editingBrand ? { ...d, name } : { ...d, name, slug: slugify(name) }));
+   883→  }
+   884→
+   885→  function handleInvoicePrefixChange(value: string) {
+   886→    const upper = value.toUpperCase();
+   887→    setDraft((d) =>
+   888→      editingBrand
+   889→        ? { ...d, invoicePrefix: upper }
+   890→        : { ...d, invoicePrefix: upper, quotePrefix: quotePrefixFrom(upper) },
+   891→    );
+   892→  }
+   893→
+   894→  async function submitDraft(e: React.FormEvent<HTMLFormElement>) {
+   895→    e.preventDefault();
+   896→    if (!draft.name.trim()) { toast.error("Nama brand wajib diisi"); return; }
+   897→    if (!draft.slug.trim()) { toast.error("Slug brand wajib diisi"); return; }
+   898→    const sla = Number(draft.slaHours);
+   899→    if (!Number.isFinite(sla) || sla < 1 || sla > 72) { toast.error("SLA harus antara 1 dan 72 jam"); return; }
+   900→    if (!user) { toast.error("Sesi berakhir — silakan login ulang"); return; }
+   901→    setSubmitting(true);
+   902→    try {
+   903→      const payload = {
+   904→        name: draft.name.trim(),
+   905→        slug: draft.slug.trim(),
+   906→        color: draft.color,
+   907→        description: draft.description.trim(),
+   908→        website: draft.website.trim(),
+   909→        primaryCurrency: draft.primaryCurrency,
+   910→        invoicePrefix: draft.invoicePrefix.trim(),
+   911→        quotePrefix: editingBrand
+   912→          ? (draft.quotePrefix.trim() || quotePrefixFrom(draft.invoicePrefix))
+   913→          : quotePrefixFrom(draft.invoicePrefix),
+   914→        slaHours: sla,
+   915→        portalDomain: draft.portalDomain.trim(),
+   916→        active: draft.active,
+   917→        actorName: user.name,
+   918→        actorRole: user.role,
+   919→      };
+   920→      if (editingBrand) {
+   921→        await api.updateBrand(editingBrand.id, payload);
+   922→        toast.success("Brand diperbarui");
+   923→      } else {
+   924→        const res = await api.createBrand(payload);
+   925→        toast.success(`Brand ${res.brand.name} dikonfigurasi`);
+   926→      }
+   927→      setDraft(EMPTY_DRAFT);
+   928→      setEditingBrand(null);
+   929→      setCreateOpen(false);
+   930→      await load(true);
+   931→    } catch (err) {
+   932→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan brand");
+   933→    } finally {
+   934→      setSubmitting(false);
+   935→    }
+   936→  }
+   937→
+   938→  if (loading && brands === null) return <BrandsSkeleton />;
+   939→
+   940→  return (
+   941→    <div className="space-y-6">
+   942→      {/* Header */}
+   943→      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+   944→        <div>
+   945→          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Konfigurasi Brand</h1>
+   946→          <p className="text-sm text-zinc-500">Tambah brand baru tanpa mengubah source code</p>
+   947→        </div>
+   948→        <div className="flex items-center gap-2">
+   949→          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar brand">
+   950→            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+   951→          </Button>
+   952→          <Button size="sm" onClick={openBrandCreate} aria-label="Tambah brand baru">
+   953→            <Plus className="h-4 w-4" aria-hidden /> Tambah Brand
+   954→          </Button>
+   955→        </div>
+   956→      </div>
+   957→
+   958→      {error ? (
+   959→        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+   960→      ) : null}
+   961→
+   962→      {/* Filter layanan */}
+   963→      <div className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+   964→        <div className="flex items-center gap-2">
+   965→          <Layers className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+   966→          <Select value={serviceFilter} onValueChange={setServiceFilter}>
+   967→            <SelectTrigger className="w-full sm:w-[260px]" aria-label="Filter brand berdasarkan layanan">
+   968→              <SelectValue placeholder="Semua layanan" />
+   969→            </SelectTrigger>
+   970→            <SelectContent>
+   971→              <SelectItem value="all">Semua Layanan</SelectItem>
+   972→              {allServices.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+   973→            </SelectContent>
+   974→          </Select>
+   975→        </div>
+   976→        <span className="text-xs text-zinc-500 sm:ml-auto">{filteredBrands.length} dari {brands?.length ?? 0} brand</span>
+   977→      </div>
+   978→
+   979→      {/* Grid brand */}
+   980→      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+   981→        {filteredBrands.map((b) => <BrandCard key={b.id} brand={b} onSettings={(brand) => { setSettingsBrand(brand); setSettingsOpen(true); }} />)}
+   982→
+   983→        {/* Kartu tambah */}
+   984→        <button
+   985→          type="button"
+   986→          onClick={openBrandCreate}
+   987→          aria-label="Tambah brand baru"
+   988→          className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-300 p-5 text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-600"
+   989→        >
+   990→          <Plus className="h-8 w-8" aria-hidden />
+   991→          <span className="text-sm font-semibold">Tambah Brand</span>
+   992→          <span className="max-w-[220px] text-center text-xs">Definisikan brand, warna, SLA, dan prefix invoice</span>
+   993→        </button>
+   994→      </div>
+   995→
+   996→      {/* Peta Layanan & Cross-Selling (Ronde 29-b — lazy fetch saat dibuka) */}
+   997→      <ServiceMapSection />
+   998→
+   999→      {/* Konfigurasi pipeline standar */}
+  1000→      <section aria-label="Konfigurasi pipeline standar" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+  1001→        <div className="mb-4">
+  1002→          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+  1003→            <Wand2 className="h-3.5 w-3.5" aria-hidden /> Standar Tim Sales
+  1004→          </p>
+  1005→          <h2 className="mt-1 text-sm font-semibold text-zinc-900">Konfigurasi Pipeline Standar (12 Stage)</h2>
+  1006→          <p className="mt-0.5 text-xs text-zinc-500">
+  1007→            Acuan baku dari lead baru hingga deal — dipakai sebagai acuan aktivitas follow-up di semua brand.
+  1008→          </p>
+  1009→        </div>
+  1010→        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+  1011→          {PIPELINE_STAGES.map((s, i) => <PipelineStageCard key={s.key} stage={s} index={i} />)}
+  1012→        </div>
+  1013→      </section>
+  1014→
+  1015→      {/* Template follow-up */}
+  1016→      <section aria-label="Template follow-up" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+  1017→        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+  1018→          <div>
+  1019→            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+  1020→              <FileText className="h-3.5 w-3.5" aria-hidden /> Template Pesan
+  1021→            </p>
+  1022→            <h2 className="mt-1 text-sm font-semibold text-zinc-900">Template Follow-up</h2>
+  1023→            <p className="mt-0.5 text-xs text-zinc-500">
+  1024→              Pesan siap pakai dengan variabel kontak/brand — terkirim otomatis sesuai jeda H+ dan kanal.
+  1025→            </p>
+  1026→          </div>
+  1027→          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+  1028→            <Button size="sm" variant="outline" onClick={openTemplateCreate} aria-label="Tambah template follow-up baru">
+  1029→              <Plus className="h-4 w-4" aria-hidden /> Template Baru
+  1030→            </Button>
+  1031→            <Select value={channelFilter} onValueChange={setChannelFilter}>
+  1032→              <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filter template berdasarkan kanal">
+  1033→                <SelectValue placeholder="Semua kanal" />
+  1034→              </SelectTrigger>
+  1035→              <SelectContent>
+  1036→                <SelectItem value="all">Semua Kanal</SelectItem>
+  1037→                {templateChannels.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+  1038→              </SelectContent>
+  1039→            </Select>
+  1040→            <span className="hidden text-xs text-zinc-500 lg:inline">{filteredTemplates.length} template</span>
+  1041→          </div>
+  1042→        </div>
+  1043→
+  1044→        {templatesLoading && templates === null ? (
+  1045→          <TemplatesSkeleton />
+  1046→        ) : templatesError ? (
+  1047→          <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+  1048→            <span>{templatesError}</span>
+  1049→            <Button variant="outline" size="sm" onClick={() => void loadTemplates()} aria-label="Coba lagi memuat template follow-up">
+  1050→              <RefreshCw className="h-4 w-4" aria-hidden /> Coba lagi
+  1051→            </Button>
+  1052→          </div>
+  1053→        ) : filteredTemplates.length === 0 ? (
+  1054→          <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-zinc-200 p-8 text-center">
+  1055→            <FileText className="h-8 w-8 text-zinc-300" aria-hidden />
+  1056→            <p className="text-sm font-semibold text-zinc-700">Belum ada template follow-up</p>
+  1057→            <p className="max-w-sm text-xs text-zinc-500">
+  1058→              {channelFilter && channelFilter !== "all"
+  1059→                ? "Tidak ada template untuk kanal ini — coba pilih kanal lain."
+  1060→                : "Template akan muncul di sini setelah ditambahkan ke daftar pesan bawaan."}
+  1061→            </p>
+  1062→          </div>
+  1063→        ) : (
+  1064→          <div className="crm-scroll max-h-96 overflow-y-auto pr-1">
+  1065→            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+  1066→              {filteredTemplates.map((t) => (
+  1067→                <TemplateCard
+  1068→                  key={t.id}
+  1069→                  template={t}
+  1070→                  brandName={t.brandId ? brandNameById.get(t.brandId) : undefined}
+  1071→                  onEdit={openTemplateEdit}
+  1072→                  onDelete={(tpl) => void handleDeleteTemplate(tpl)}
+  1073→                />
+  1074→              ))}
+  1075→            </div>
+  1076→          </div>
+  1077→        )}
+  1078→      </section>
+  1079→
+  1080→      {/* Dialog tambah / edit brand */}
+  1081→      <Dialog open={createOpen} onOpenChange={(open) => { if (!submitting) { setCreateOpen(open); if (!open) setEditingBrand(null); } }}>
+  1082→        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+  1083→          <DialogHeader>
+  1084→            <DialogTitle>{editingBrand ? "Edit Brand" : "Tambah Brand Baru"}</DialogTitle>
+  1085→            <DialogDescription>
+  1086→              {editingBrand
+  1087→                ? `Perubahan brand ${editingBrand.name} tersimpan ke database dan langsung dipakai di seluruh modul CRM.`
+  1088→                : "Detail brand akan tersimpan ke database dan langsung dipakai di seluruh modul CRM — tanpa mengubah source code."}
+  1089→            </DialogDescription>
+  1090→          </DialogHeader>
+  1091→          <form onSubmit={submitDraft} className="grid gap-4 py-2">
+  1092→            <div className="grid gap-4 sm:grid-cols-2">
+  1093→              <div className="grid gap-2">
+  1094→                <Label htmlFor="brand-name">Nama Brand *</Label>
+  1095→                <Input
+  1096→                  id="brand-name" value={draft.name} required
+  1097→                  onChange={(e) => handleNameChange(e.target.value)}
+  1098→                  placeholder="Contoh: Zenith Creative"
+  1099→                />
+  1100→              </div>
+  1101→              <div className="grid gap-2">
+  1102→                <Label htmlFor="brand-slug">Slug</Label>
+  1103→                <Input
+  1104→                  id="brand-slug" value={draft.slug} required
+  1105→                  onChange={(e) => setDraft((d) => ({ ...d, slug: slugify(e.target.value) }))}
+  1106→                  placeholder="zenith_creative"
+  1107→                />
+  1108→                <p className="text-[11px] text-zinc-400">Unik, dipakai di URL/invoice prefix</p>
+  1109→              </div>
+  1110→            </div>
+  1111→            <div className="grid gap-2">
+  1112→              <Label htmlFor="brand-color" className="items-center gap-2">
+  1113→                <Palette className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> Warna Brand
+  1114→              </Label>
+  1115→              <div className="flex items-center gap-2">
+  1116→                <Input
+  1117→                  id="brand-color" type="color" className="h-10 w-14 cursor-pointer p-1"
+  1118→                  value={draft.color}
+  1119→                  onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))}
+  1120→                  aria-label="Pilih warna brand"
+  1121→                />
+  1122→                <span className="flex items-center gap-1.5 rounded-lg border bg-white px-2.5 py-1.5 text-xs font-mono text-zinc-600">
+  1123→                  <span className="h-3 w-3 rounded-full border border-zinc-200" style={{ backgroundColor: draft.color }} aria-hidden />
+  1124→                  {draft.color}
+  1125→                </span>
+  1126→              </div>
+  1127→            </div>
+  1128→            <div className="grid gap-2">
+  1129→              <Label htmlFor="brand-desc">Deskripsi</Label>
+  1130→              <Input
+  1131→                id="brand-desc" value={draft.description}
+  1132→                onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+  1133→                placeholder="Bidang layanan utama brand ini"
+  1134→              />
+  1135→            </div>
+  1136→            <div className="grid gap-4 sm:grid-cols-3">
+  1137→              <div className="grid gap-2">
+  1138→                <Label htmlFor="brand-currency">Mata Uang</Label>
+  1139→                <Select value={draft.primaryCurrency} onValueChange={(v) => setDraft((d) => ({ ...d, primaryCurrency: v }))}>
+  1140→                  <SelectTrigger id="brand-currency"><SelectValue /></SelectTrigger>
+  1141→                  <SelectContent>
+  1142→                    {CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+  1143→                  </SelectContent>
+  1144→                </Select>
+  1145→              </div>
+  1146→              <div className="grid gap-2">
+  1147→                <Label htmlFor="brand-prefix">Prefix Invoice</Label>
+  1148→                <Input
+  1149→                  id="brand-prefix" value={draft.invoicePrefix}
+  1150→                  onChange={(e) => handleInvoicePrefixChange(e.target.value)}
+  1151→                  placeholder="ZTH-2026"
+  1152→                />
+  1153→              </div>
+  1154→              <div className="grid gap-2">
+  1155→                <Label htmlFor="brand-sla">SLA (jam)</Label>
+  1156→                <Input
+  1157→                  id="brand-sla" type="number" min={1} max={72} value={draft.slaHours}
+  1158→                  onChange={(e) => setDraft((d) => ({ ...d, slaHours: e.target.value }))}
+  1159→                  aria-label="SLA respons dalam jam (1 sampai 72)"
+  1160→                />
+  1161→              </div>
+  1162→            </div>
+  1163→            <div className="grid gap-4 sm:grid-cols-2">
+  1164→              <div className="grid gap-2">
+  1165→                <Label htmlFor="brand-quote-prefix">Prefix Quotation</Label>
+  1166→                <Input
+  1167→                  id="brand-quote-prefix" value={draft.quotePrefix}
+  1168→                  onChange={(e) => setDraft((d) => ({ ...d, quotePrefix: e.target.value.toUpperCase() }))}
+  1169→                  placeholder="QZTH"
+  1170→                />
+  1171→                {!editingBrand ? (
+  1172→                  <p className="text-[11px] text-zinc-400">Otomatis mengikuti prefix invoice — boleh diubah.</p>
+  1173→                ) : null}
+  1174→              </div>
+  1175→              <div className="grid gap-2">
+  1176→                <Label htmlFor="brand-website">Website</Label>
+  1177→                <Input
+  1178→                  id="brand-website" type="url" value={draft.website}
+  1179→                  onChange={(e) => setDraft((d) => ({ ...d, website: e.target.value }))}
+  1180→                  placeholder="https://zenith.co.id"
+  1181→                />
+  1182→              </div>
+  1183→              <div className="grid gap-2">
+  1184→                <Label htmlFor="brand-portal">Portal Domain</Label>
+  1185→                <Input
+  1186→                  id="brand-portal" value={draft.portalDomain}
+  1187→                  onChange={(e) => setDraft((d) => ({ ...d, portalDomain: e.target.value }))}
+  1188→                  placeholder="portal.zenith.co.id"
+  1189→                />
+  1190→              </div>
+  1191→              <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+  1192→                <div className="space-y-0.5">
+  1193→                  <Label htmlFor="brand-active" className="text-sm">Brand aktif</Label>
+  1194→                  <p className="text-[11px] text-zinc-500">Brand nonaktif disembunyikan dari daftar brand.</p>
+  1195→                </div>
+  1196→                <Switch
+  1197→                  id="brand-active"
+  1198→                  checked={draft.active}
+  1199→                  onCheckedChange={(v) => setDraft((d) => ({ ...d, active: v }))}
+  1200→                  aria-label="Aktifkan atau nonaktifkan brand"
+  1201→                />
+  1202→              </div>
+  1203→            </div>
+  1204→            <DialogFooter className="mt-2">
+  1205→              <Button type="button" variant="outline" onClick={() => { setCreateOpen(false); setEditingBrand(null); }} disabled={submitting}>Batal</Button>
+  1206→              <Button type="submit" disabled={submitting} aria-label={editingBrand ? "Simpan perubahan brand" : "Simpan brand baru"}>
+  1207→                {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : editingBrand ? <Pencil className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+  1208→                {submitting ? "Menyimpan…" : editingBrand ? "Simpan Perubahan" : "Simpan Brand"}
+  1209→              </Button>
+  1210→            </DialogFooter>
+  1211→          </form>
+  1212→        </DialogContent>
+  1213→      </Dialog>
+  1214→
+  1215→      {/* Dialog template follow-up (baru / edit) */}
+  1216→      <Dialog open={templateOpen} onOpenChange={(open) => { if (!templateSubmitting) { setTemplateOpen(open); if (!open) setEditingTemplate(null); } }}>
+  1217→        <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-xl">
+  1218→          <DialogHeader>
+  1219→            <DialogTitle>{editingTemplate ? "Edit Template Follow-up" : "Template Follow-up Baru"}</DialogTitle>
+  1220→            <DialogDescription>
+  1221→              {editingTemplate
+  1222→                ? `Mengubah isi pesan akan menaikkan versi template (saat ini v${editingTemplate.version}).`
+  1223→                : "Pesan siap pakai yang terkirim otomatis sesuai jeda H+ dan kanal — tanpa mengubah source code."}
+  1224→            </DialogDescription>
+  1225→          </DialogHeader>
+  1226→          <form onSubmit={submitTemplate} className="grid gap-4 py-2">
+  1227→            <div className="grid gap-4 sm:grid-cols-2">
+  1228→              <div className="grid gap-2">
+  1229→                <Label htmlFor="tpl-name">Nama Template *</Label>
+  1230→                <Input
+  1231→                  id="tpl-name" value={templateDraft.name} required
+  1232→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, name: e.target.value }))}
+  1233→                  placeholder="Contoh: Follow-up Kunjungan H+1"
+  1234→                />
+  1235→              </div>
+  1236→              <div className="grid gap-2">
+  1237→                <Label htmlFor="tpl-channel">Kanal *</Label>
+  1238→                <Select value={templateDraft.channel} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, channel: v }))}>
+  1239→                  <SelectTrigger id="tpl-channel"><SelectValue /></SelectTrigger>
+  1240→                  <SelectContent>
+  1241→                    {TEMPLATE_CHANNELS.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+  1242→                  </SelectContent>
+  1243→                </Select>
+  1244→              </div>
+  1245→              <div className="grid gap-2">
+  1246→                <Label htmlFor="tpl-brand">Cakupan Brand</Label>
+  1247→                <Select value={templateDraft.brandId} onValueChange={(v) => setTemplateDraft((d) => ({ ...d, brandId: v }))}>
+  1248→                  <SelectTrigger id="tpl-brand"><SelectValue /></SelectTrigger>
+  1249→                  <SelectContent>
+  1250→                    <SelectItem value="all">Semua brand</SelectItem>
+  1251→                    {(brands ?? []).map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+  1252→                  </SelectContent>
+  1253→                </Select>
+  1254→              </div>
+  1255→              <div className="grid gap-2">
+  1256→                <Label htmlFor="tpl-delay">Jeda (hari, H+)</Label>
+  1257→                <Input
+  1258→                  id="tpl-delay" type="number" min={0} max={30} value={templateDraft.delayDays} required
+  1259→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, delayDays: e.target.value }))}
+  1260→                  aria-label="Jeda follow-up dalam hari (0 sampai 30)"
+  1261→                />
+  1262→              </div>
+  1263→              <div className="grid gap-2 sm:col-span-2">
+  1264→                <Label htmlFor="tpl-stage">Stage Pipeline (opsional)</Label>
+  1265→                <Input
+  1266→                  id="tpl-stage" value={templateDraft.stage}
+  1267→                  onChange={(e) => setTemplateDraft((d) => ({ ...d, stage: e.target.value }))}
+  1268→                  placeholder="cth. after_visit"
+  1269→                />
+  1270→              </div>
+  1271→            </div>
+  1272→            <div className="grid gap-2">
+  1273→              <Label htmlFor="tpl-body">Isi Pesan *</Label>
+  1274→              <Textarea
+  1275→                id="tpl-body" rows={6} value={templateDraft.body} required
+  1276→                onChange={(e) => setTemplateDraft((d) => ({ ...d, body: e.target.value }))}
+  1277→                placeholder={"Halo {namaKontak}, terima kasih sudah bertemu dengan tim {brand}. Berikut penawaran {layanan} dari kami…"}
+  1278→              />
+  1279→              <p className="text-[11px] text-zinc-400">
+  1280→                Placeholder otomatis diganti saat pengiriman: <code className="font-mono">{"{namaKontak}"}</code>{" "}
+  1281→                <code className="font-mono">{"{brand}"}</code> <code className="font-mono">{"{layanan}"}</code>
+  1282→              </p>
+  1283→            </div>
+  1284→            <div className="rounded-lg border bg-zinc-50 p-3">
+  1285→              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Pratinjau</p>
+  1286→              {templateDraft.body.trim() ? (
+  1287→                <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-700">{templatePreview}</p>
+  1288→              ) : (
+  1289→                <p className="text-sm text-zinc-400">Isi pesan untuk melihat pratinjau dengan contoh nilai.</p>
+  1290→              )}
+  1291→            </div>
+  1292→            <div className="flex items-start justify-between gap-3 rounded-lg border bg-zinc-50 p-3">
+  1293→              <div className="space-y-0.5">
+  1294→                <Label htmlFor="tpl-approved" className="text-sm">Setujui template</Label>
+  1295→                <p className="text-[11px] text-zinc-500">
+  1296→                  {canApproveTemplates
+  1297→                    ? "Template disetujui siap dipakai pengiriman otomatis."
+  1298→                    : "Hanya Direktur/Super Admin yang bisa menandai disetujui."}
+  1299→                </p>
+  1300→              </div>
+  1301→              <Switch
+  1302→                id="tpl-approved"
+  1303→                checked={canApproveTemplates ? templateDraft.approved : (editingTemplate?.approved ?? false)}
+  1304→                disabled={!canApproveTemplates}
+  1305→                onCheckedChange={(v) => setTemplateDraft((d) => ({ ...d, approved: v }))}
+  1306→                aria-label="Tandai template disetujui"
+  1307→              />
+  1308→            </div>
+  1309→            <DialogFooter className="mt-2">
+  1310→              <Button type="button" variant="outline" onClick={() => { setTemplateOpen(false); setEditingTemplate(null); }} disabled={templateSubmitting}>Batal</Button>
+  1311→              <Button type="submit" disabled={templateSubmitting} aria-label={editingTemplate ? "Simpan perubahan template" : "Simpan template baru"}>
+  1312→                {templateSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+  1313→                {templateSubmitting ? "Menyimpan…" : editingTemplate ? "Simpan Perubahan" : "Simpan Template"}
+  1314→              </Button>
+  1315→            </DialogFooter>
+  1316→          </form>
+  1317→        </DialogContent>
+  1318→      </Dialog>
+  1319→
+  1320→      {/* Ronde 29-b — Pengaturan Brand lengkap (identitas asli, layanan & workflow, surat, integrasi) */}
+  1321→      <BrandSettingsDialog
+  1322→        brand={settingsBrand}
+  1323→        open={settingsOpen}
+  1324→        onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsBrand(null); }}
+  1325→        onSaved={(updated) => {
+  1326→          setSettingsBrand((prev) => (prev && prev.id === updated.id ? updated : prev));
+  1327→          setBrands((prev) => (prev ?? []).map((b) => (b.id === updated.id ? updated : b)));
+  1328→        }}
+  1329→      />
+  1330→    </div>
+  1331→  );
+  1332→}
+  1333→

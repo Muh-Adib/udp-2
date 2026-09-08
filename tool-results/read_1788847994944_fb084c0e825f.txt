@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→// ============================================================
+     4→// Modul: Contacts & Companies (Task 3-b)
+     5→// Identitas calon klien global — terhubung ke seluruh brand.
+     6→// ============================================================
+     7→
+     8→import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+     9→import { toast } from "sonner";
+    10→import {
+    11→  AlertTriangle,
+    12→  ArrowLeftRight,
+    13→  Banknote,
+    14→  Briefcase,
+    15→  Building2,
+    16→  Check,
+    17→  CheckCircle2,
+    18→  CheckCheck,
+    19→  ChevronDown,
+    20→  Clock,
+    21→  CopyX,
+    22→  Download,
+    23→  ExternalLink,
+    24→  Facebook,
+    25→  FileUp,
+    26→  GitMerge,
+    27→  Globe,
+    28→  Info,
+    29→  Instagram,
+    30→  Languages,
+    31→  LayoutDashboard,
+    32→  Linkedin,
+    33→  Loader2,
+    34→  Mail,
+    35→  MailPlus,
+    36→  MapPin,
+    37→  MessageCircle,
+    38→  MessagesSquare,
+    39→  Music2,
+    40→  Pencil,
+    41→  Phone,
+    42→  Plus,
+    43→  RefreshCw,
+    44→  RotateCcw,
+    45→  Search,
+    46→  ShieldCheck,
+    47→  Trash2,
+    48→  Upload,
+    49→  UserPlus,
+    50→  Users,
+    51→  Video,
+    52→  X,
+    53→  type LucideIcon,
+    54→} from "lucide-react";
+    55→import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+    56→import {
+    57→  AlertDialog,
+    58→  AlertDialogAction,
+    59→  AlertDialogCancel,
+    60→  AlertDialogContent,
+    61→  AlertDialogDescription,
+    62→  AlertDialogFooter,
+    63→  AlertDialogHeader,
+    64→  AlertDialogTitle,
+    65→  AlertDialogTrigger,
+    66→} from "@/components/ui/alert-dialog";
+    67→import { Badge } from "@/components/ui/badge";
+    68→import { Button } from "@/components/ui/button";
+    69→import {
+    70→  Dialog,
+    71→  DialogContent,
+    72→  DialogDescription,
+    73→  DialogFooter,
+    74→  DialogHeader,
+    75→  DialogTitle,
+    76→} from "@/components/ui/dialog";
+    77→import { Input } from "@/components/ui/input";
+    78→import {
+    79→  Select,
+    80→  SelectContent,
+    81→  SelectItem,
+    82→  SelectTrigger,
+    83→  SelectValue,
+    84→} from "@/components/ui/select";
+    85→import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+    86→import { Skeleton } from "@/components/ui/skeleton";
+    87→import {
+    88→  Table,
+    89→  TableBody,
+    90→  TableCell,
+    91→  TableHead,
+    92→  TableHeader,
+    93→  TableRow,
+    94→} from "@/components/ui/table";
+    95→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    96→import { Textarea } from "@/components/ui/textarea";
+    97→import { api } from "@/lib/crm/api-client";
+    98→import { CHANNELS } from "@/lib/crm/constants";
+    99→import { useCrmStore } from "@/lib/crm/store";
+   100→import type {
+   101→  CompanyRef,
+   102→  ContactRef,
+   103→  DuplicatePairDTO,
+   104→  ImportCommitResponseDTO,
+   105→  ImportPreviewResponseDTO,
+   106→  ImportPreviewRowDTO,
+   107→  InteractionDTO,
+   108→  MatchCandidateDTO,
+   109→} from "@/lib/crm/types";
+   110→import { formatCurrency, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
+   111→import { cn } from "@/lib/utils";
+   112→
+   113→// ---------- Tipe lokal ----------
+   114→
+   115→type TabKey = "contacts" | "companies";
+   116→
+   117→/** Contact dari API (payload berisi field lebih lengkap dari ContactRef). */
+   118→interface ContactRecord extends ContactRef {
+   119→  firstName: string;
+   120→  lastName?: string | null;
+   121→  emailAlt?: string | null;
+   122→  linkedin?: string | null;
+   123→  timezone?: string | null;
+   124→  socialProfile?: string | null;
+   125→  instagram?: string | null;
+   126→  facebook?: string | null;
+   127→  tiktok?: string | null;
+   128→  notes?: string | null;
+   129→  _count?: { opportunities: number; interactions: number };
+   130→}
+   131→
+   132→/** Company dari API (include contacts + _count). */
+   133→interface CompanyRecord extends CompanyRef {
+   134→  contacts?: ContactRef[];
+   135→  _count?: { opportunities: number; projects: number; invoices: number };
+   136→}
+   137→
+   138→interface ContactFormValues {
+   139→  firstName: string;
+   140→  lastName: string;
+   141→  position: string;
+   142→  email: string;
+   143→  whatsapp: string;
+   144→  phone: string;
+   145→  companyName: string;
+   146→  companyId: string;
+   147→  city: string;
+   148→  country: string;
+   149→  preferredChannel: string;
+   150→  instagram: string;
+   151→  facebook: string;
+   152→  tiktok: string;
+   153→  tagsText: string;
+   154→}
+   155→
+   156→interface CompanyFormValues {
+   157→  name: string;
+   158→  industry: string;
+   159→  website: string;
+   160→  country: string;
+   161→  city: string;
+   162→  size: string;
+   163→  defaultCurrency: string;
+   164→}
+   165→
+   166→/** Satu baris hasil parse CSV — bentuk persis yang dikirim ke API impor massal. */
+   167→type ImportRowValues = {
+   168→  fullName: string;
+   169→  email: string;
+   170→  whatsapp: string;
+   171→  phone: string;
+   172→  company: string;
+   173→  position: string;
+   174→  country: string;
+   175→  city: string;
+   176→  instagram: string;
+   177→  facebook: string;
+   178→  tiktok: string;
+   179→};
+   180→
+   181→// ---------- Konstanta & helper ----------
+   182→
+   183→const AVATAR_PALETTE: readonly string[] = [
+   184→  "#18181b", // zinc-900
+   185→  "#ea580c", // Unimasi
+   186→  "#059669", // Segia Tech
+   187→  "#e11d48", // Erfo Multimedia
+   188→  "#7c3aed", // Unicam Studio
+   189→  "#b45309",
+   190→  "#0369a1",
+   191→];
+   192→
+   193→const CHANNEL_ICONS: Record<string, LucideIcon> = {
+   194→  whatsapp: MessageCircle,
+   195→  email: Mail,
+   196→  instagram: Instagram,
+   197→  website: Globe,
+   198→  phone: Phone,
+   199→  meeting: Video,
+   200→  portal: LayoutDashboard,
+   201→};
+   202→
+   203→/** Warna badge kanal pada header riwayat percakapan (tanpa indigo/blue). */
+   204→const CHANNEL_BADGE_CLASS: Record<string, string> = {
+   205→  whatsapp: "bg-emerald-100 text-emerald-700",
+   206→  email: "bg-amber-100 text-amber-700",
+   207→  instagram: "bg-rose-100 text-rose-700",
+   208→  website: "bg-violet-100 text-violet-700",
+   209→  phone: "bg-cyan-100 text-cyan-700",
+   210→  meeting: "bg-zinc-200 text-zinc-700",
+   211→};
+   212→
+   213→const LANGUAGE_LABELS: Record<string, string> = { id: "Bahasa Indonesia", en: "English" };
+   214→
+   215→const SIZE_OPTIONS = [
+   216→  { value: "startup", label: "Startup" },
+   217→  { value: "sme", label: "SME" },
+   218→  { value: "enterprise", label: "Enterprise" },
+   219→  { value: "government", label: "Government" },
+   220→];
+   221→
+   222→const SIZE_LABELS: Record<string, string> = {
+   223→  enterprise: "Enterprise",
+   224→  government: "Government",
+   225→  sme: "SME",
+   226→  startup: "Startup",
+   227→};
+   228→
+   229→const CURRENCY_OPTIONS = [
+   230→  { value: "IDR", label: "IDR — Rupiah" },
+   231→  { value: "USD", label: "USD — US Dollar" },
+   232→  { value: "SGD", label: "SGD — Dollar Singapura" },
+   233→];
+   234→
+   235→const EMPTY_CONTACT_FORM: ContactFormValues = {
+   236→  firstName: "",
+   237→  lastName: "",
+   238→  position: "",
+   239→  email: "",
+   240→  whatsapp: "",
+   241→  phone: "",
+   242→  companyName: "",
+   243→  companyId: "none",
+   244→  city: "",
+   245→  country: "",
+   246→  preferredChannel: "whatsapp",
+   247→  instagram: "",
+   248→  facebook: "",
+   249→  tiktok: "",
+   250→  tagsText: "",
+   251→};
+   252→
+   253→const EMPTY_COMPANY_FORM: CompanyFormValues = {
+   254→  name: "",
+   255→  industry: "",
+   256→  website: "",
+   257→  country: "",
+   258→  city: "",
+   259→  size: "none",
+   260→  defaultCurrency: "IDR",
+   261→};
+   262→
+   263→const NO_VALUE = "none";
+   264→
+   265→function hashColor(name: string): string {
+   266→  let h = 0;
+   267→  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+   268→  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+   269→}
+   270→
+   271→function useDebounced<T>(value: T, delay = 300): T {
+   272→  const [debounced, setDebounced] = useState(value);
+   273→  useEffect(() => {
+   274→    const t = setTimeout(() => setDebounced(value), delay);
+   275→    return () => clearTimeout(t);
+   276→  }, [value, delay]);
+   277→  return debounced;
+   278→}
+   279→
+   280→function channelLabel(key?: string | null): string {
+   281→  return CHANNELS.find((c) => c.key === key)?.label ?? (key || "-");
+   282→}
+   283→
+   284→function locationText(city?: string | null, country?: string | null): string {
+   285→  return [city, country].filter(Boolean).join(", ") || "-";
+   286→}
+   287→
+   288→function consentMeta(status: string): { label: string; className: string } {
+   289→  if (status === "granted") return { label: "Consent: Disetujui", className: "bg-emerald-100 text-emerald-700" };
+   290→  if (status === "pending") return { label: "Consent: Menunggu", className: "bg-amber-100 text-amber-700" };
+   291→  if (status === "declined") return { label: "Consent: Ditolak", className: "bg-rose-100 text-rose-700" };
+   292→  return { label: status, className: "bg-zinc-100 text-zinc-600" };
+   293→}
+   294→
+   295→function sizeBadgeClass(size?: string | null): string {
+   296→  switch (size) {
+   297→    case "enterprise":
+   298→      return "bg-violet-100 text-violet-700";
+   299→    case "government":
+   300→      return "bg-zinc-200 text-zinc-800";
+   301→    case "sme":
+   302→      return "bg-emerald-100 text-emerald-700";
+   303→    case "startup":
+   304→      return "bg-orange-100 text-orange-700";
+   305→    default:
+   306→      return "bg-zinc-100 text-zinc-600";
+   307→  }
+   308→}
+   309→
+   310→function scoreBadgeClass(score: number): string {
+   311→  if (score >= 85) return "bg-rose-100 text-rose-700";
+   312→  if (score >= 70) return "bg-amber-100 text-amber-700";
+   313→  return "bg-zinc-100 text-zinc-600";
+   314→}
+   315→
+   316→/** Skor pasangan duplikat lintas sumber: ≥90 emerald (nyaris pasti), 80–89 amber, sisanya zinc. */
+   317→function dupScoreBadgeClass(score: number): string {
+   318→  if (score >= 90) return "bg-emerald-100 text-emerald-700";
+   319→  if (score >= 80) return "bg-amber-100 text-amber-700";
+   320→  return "bg-zinc-100 text-zinc-600";
+   321→}
+   322→
+   323→function parseTagsText(text: string): string[] {
+   324→  return text
+   325→    .split(",")
+   326→    .map((t) => t.trim())
+   327→    .filter(Boolean);
+   328→}
+   329→
+   330→// ---------- Elemen kecil ----------
+   331→
+   332→function AvatarBubble({
+   333→  name,
+   334→  size = "md",
+   335→  icon: Icon,
+   336→}: {
+   337→  name: string;
+   338→  size?: "sm" | "md" | "lg";
+   339→  icon?: LucideIcon;
+   340→}) {
+   341→  const cls =
+   342→    size === "sm"
+   343→      ? "size-7 text-[10px]"
+   344→      : size === "lg"
+   345→        ? "size-12 text-sm"
+   346→        : "size-10 text-xs";
+   347→  return (
+   348→    <span
+   349→      aria-hidden="true"
+   350→      className={cn(
+   351→        "inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white",
+   352→        cls
+   353→      )}
+   354→      style={{ backgroundColor: hashColor(name) }}
+   355→    >
+   356→      {Icon ? <Icon className="size-4" /> : initials(name)}
+   357→    </span>
+   358→  );
+   359→}
+   360→
+   361→function InfoRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value?: string | null }) {
+   362→  return (
+   363→    <div className="flex items-start gap-3">
+   364→      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+   365→        <Icon className="size-4" />
+   366→      </span>
+   367→      <div className="min-w-0">
+   368→        <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{label}</p>
+   369→        <p className="truncate text-sm text-zinc-800">{value || "-"}</p>
+   370→      </div>
+   371→    </div>
+   372→  );
+   373→}
+   374→
+   375→function SectionTitle({ children }: { children: ReactNode }) {
+   376→  return <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{children}</h3>;
+   377→}
+   378→
+   379→function ChannelBadge({ channel }: { channel?: string | null }) {
+   380→  const Icon = CHANNEL_ICONS[channel ?? ""] ?? Globe;
+   381→  return (
+   382→    <Badge variant="secondary" className="shrink-0 bg-zinc-100 text-zinc-600">
+   383→      <Icon className="size-3" /> {channelLabel(channel)}
+   384→    </Badge>
+   385→  );
+   386→}
+   387→
+   388→function ConsentBadge({ status }: { status: string }) {
+   389→  const meta = consentMeta(status);
+   390→  return (
+   391→    <Badge className={cn("border-transparent", meta.className)}>
+   392→      <ShieldCheck className="size-3" /> {meta.label}
+   393→    </Badge>
+   394→  );
+   395→}
+   396→
+   397→function SizeBadge({ size }: { size?: string | null }) {
+   398→  return (
+   399→    <Badge className={cn("border-transparent capitalize", sizeBadgeClass(size))}>
+   400→      {SIZE_LABELS[size ?? ""] ?? size ?? "-"}
+   401→    </Badge>
+   402→  );
+   403→}
+   404→
+   405→function TagList({ tags }: { tags: string[] }) {
+   406→  if (tags.length === 0) return <p className="text-xs text-zinc-400">Belum ada tag.</p>;
+   407→  return (
+   408→    <div className="flex flex-wrap gap-1.5">
+   409→      {tags.map((t) => (
+   410→        <Badge key={t} variant="secondary" className="bg-zinc-100 text-[11px] font-normal text-zinc-600">
+   411→          {t}
+   412→        </Badge>
+   413→      ))}
+   414→    </div>
+   415→  );
+   416→}
+   417→
+   418→function EmptyState({
+   419→  icon: Icon,
+   420→  title,
+   421→  description,
+   422→  action,
+   423→}: {
+   424→  icon: LucideIcon;
+   425→  title: string;
+   426→  description: string;
+   427→  action?: ReactNode;
+   428→}) {
+   429→  return (
+   430→    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border bg-white px-6 py-16 text-center shadow-sm">
+   431→      <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100 text-zinc-400">
+   432→        <Icon className="size-6" />
+   433→      </span>
+   434→      <div>
+   435→        <p className="font-semibold text-zinc-900">{title}</p>
+   436→        <p className="mt-1 max-w-md text-sm text-zinc-500">{description}</p>
+   437→      </div>
+   438→      {action}
+   439→    </div>
+   440→  );
+   441→}
+   442→
+   443→function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+   444→  return (
+   445→    <EmptyState
+   446→      icon={AlertTriangle}
+   447→      title="Gagal memuat data"
+   448→      description={message}
+   449→      action={
+   450→        <Button variant="outline" onClick={onRetry} aria-label="Coba muat ulang data">
+   451→          <RefreshCw className="size-4" /> Coba lagi
+   452→        </Button>
+   453→      }
+   454→    />
+   455→  );
+   456→}
+   457→
+   458→function ContactCardSkeleton() {
+   459→  return (
+   460→    <div className="space-y-3 rounded-xl border bg-white p-4 shadow-sm">
+   461→      <div className="flex items-center gap-3">
+   462→        <Skeleton className="size-10 rounded-full" />
+   463→        <div className="flex-1 space-y-1.5">
+   464→          <Skeleton className="h-3.5 w-2/3" />
+   465→          <Skeleton className="h-3 w-1/2" />
+   466→        </div>
+   467→      </div>
+   468→      <Skeleton className="h-3 w-3/4" />
+   469→      <Skeleton className="h-3 w-1/2" />
+   470→      <div className="flex gap-1.5">
+   471→        <Skeleton className="h-5 w-16 rounded-md" />
+   472→        <Skeleton className="h-5 w-14 rounded-md" />
+   473→      </div>
+   474→    </div>
+   475→  );
+   476→}
+   477→
+   478→function ContactSkeletonGrid() {
+   479→  return (
+   480→    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
+   481→      {Array.from({ length: 6 }).map((_, i) => (
+   482→        <ContactCardSkeleton key={i} />
+   483→      ))}
+   484→    </div>
+   485→  );
+   486→}
+   487→
+   488→function CompanyTableSkeleton() {
+   489→  return (
+   490→    <div className="space-y-4 rounded-xl border bg-white p-4 shadow-sm" aria-hidden="true">
+   491→      <Skeleton className="h-5 w-44" />
+   492→      {Array.from({ length: 6 }).map((_, i) => (
+   493→        <div key={i} className="flex items-center gap-4">
+   494→          <Skeleton className="h-4 flex-1" />
+   495→          <Skeleton className="hidden h-4 w-28 sm:block" />
+   496→          <Skeleton className="hidden h-4 w-24 md:block" />
+   497→          <Skeleton className="h-4 w-16" />
+   498→          <Skeleton className="h-4 w-24" />
+   499→        </div>
+   500→      ))}
+   501→    </div>
+   502→  );
+   503→}
+   504→
+   505→// ---------- Kartu contact ----------
+   506→
+   507→function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () => void }) {
+   508→  const tags = parseJsonArray(contact.tags);
+   509→  return (
+   510→    <div
+   511→      role="button"
+   512→      tabIndex={0}
+   513→      aria-label={`Buka detail ${contact.fullName}`}
+   514→      onClick={onOpen}
+   515→      onKeyDown={(e) => {
+   516→        if (e.key === "Enter" || e.key === " ") {
+   517→          e.preventDefault();
+   518→          onOpen();
+   519→        }
+   520→      }}
+   521→      className="flex cursor-pointer flex-col gap-3 rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30"
+   522→    >
+   523→      <div className="flex items-start gap-3">
+   524→        <AvatarBubble name={contact.fullName} />
+   525→        <div className="min-w-0 flex-1">
+   526→          <p className="truncate font-semibold text-zinc-900">{contact.fullName}</p>
+   527→          <p className="truncate text-xs text-zinc-500">{contact.position || "Tanpa jabatan"}</p>
+   528→        </div>
+   529→        <ChannelBadge channel={contact.preferredChannel} />
+   530→      </div>
+   531→
+   532→      {contact.company && (
+   533→        <p className="flex items-center gap-1.5 text-xs text-zinc-600">
+   534→          <Building2 className="size-3.5 shrink-0 text-zinc-400" />
+   535→          <span className="truncate">{contact.company.name}</span>
+   536→        </p>
+   537→      )}
+   538→
+   539→      <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+   540→        <MapPin className="size-3.5 shrink-0 text-zinc-400" />
+   541→        <span className="truncate">{locationText(contact.city, contact.country)}</span>
+   542→      </p>
+   543→
+   544→      <div className="space-y-1 border-t border-zinc-100 pt-2.5 text-xs text-zinc-500">
+   545→        <p className="flex items-center gap-1.5">
+   546→          <Mail className="size-3.5 shrink-0 text-zinc-400" />
+   547→          <span className="truncate">{contact.email || "—"}</span>
+   548→        </p>
+   549→        <p className="flex items-center gap-1.5">
+   550→          <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
+   551→          <span className="truncate">{contact.whatsapp || "—"}</span>
+   552→        </p>
+   553→        {typeof contact._count?.interactions === "number" && contact._count.interactions > 0 && (
+   554→          <p className="flex items-center gap-1.5">
+   555→            <MessagesSquare className="size-3.5 shrink-0 text-zinc-400" />
+   556→            <span className="truncate">
+   557→              {contact._count.interactions} pesan percakapan
+   558→            </span>
+   559→          </p>
+   560→        )}
+   561→      </div>
+   562→
+   563→      {tags.length > 0 && (
+   564→        <div className="flex flex-wrap gap-1">
+   565→          {tags.map((t) => (
+   566→            <Badge key={t} variant="secondary" className="text-[11px] font-normal">
+   567→              {t}
+   568→            </Badge>
+   569→          ))}
+   570→        </div>
+   571→      )}
+   572→    </div>
+   573→  );
+   574→}
+   575→
+   576→// ---------- Form fields contact (dipakai create & edit) ----------
+   577→
+   578→function FormField({
+   579→  label,
+   580→  required,
+   581→  className,
+   582→  children,
+   583→}: {
+   584→  label: string;
+   585→  required?: boolean;
+   586→  className?: string;
+   587→  children: ReactNode;
+   588→}) {
+   589→  return (
+   590→    <div className={cn("flex flex-col gap-1.5", className)}>
+   591→      <span className="text-xs font-medium text-zinc-600">
+   592→        {label}
+   593→        {required && <span className="text-rose-600"> *</span>}
+   594→      </span>
+   595→      {children}
+   596→    </div>
+   597→  );
+   598→}
+   599→
+   600→function ContactFormFields({
+   601→  values,
+   602→  onChange,
+   603→  disabled,
+   604→  mode,
+   605→  companies,
+   606→}: {
+   607→  values: ContactFormValues;
+   608→  onChange: (patch: Partial<ContactFormValues>) => void;
+   609→  disabled?: boolean;
+   610→  mode: "create" | "edit";
+   611→  companies: CompanyRecord[];
+   612→}) {
+   613→  const setField = (key: keyof ContactFormValues) => (value: string) =>
+   614→    onChange({ [key]: value } as Partial<ContactFormValues>);
+   615→
+   616→  return (
+   617→    <div className="space-y-4">
+   618→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   619→        <FormField label="Nama depan" required>
+   620→          <Input value={values.firstName} onChange={(e) => setField("firstName")(e.target.value)} placeholder="cth. Ratna" disabled={disabled} />
+   621→        </FormField>
+   622→        <FormField label="Nama belakang">
+   623→          <Input value={values.lastName} onChange={(e) => setField("lastName")(e.target.value)} placeholder="cth. Wijaya" disabled={disabled} />
+   624→        </FormField>
+   625→        <FormField label="Jabatan di Perusahaan">
+   626→          <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
+   627→        </FormField>
+   628→        <FormField label="Email">
+   629→          <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
+   630→        </FormField>
+   631→        <FormField label="WhatsApp">
+   632→          <Input value={values.whatsapp} onChange={(e) => setField("whatsapp")(e.target.value)} placeholder="+62…" disabled={disabled} />
+   633→        </FormField>
+   634→        <FormField label="Telepon">
+   635→          <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
+   636→        </FormField>
+   637→
+   638→        {mode === "create" ? (
+   639→          <FormField label="Perusahaan">
+   640→            <Input
+   641→              value={values.companyName}
+   642→              onChange={(e) => setField("companyName")(e.target.value)}
+   643→              placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
+   644→              disabled={disabled}
+   645→            />
+   646→          </FormField>
+   647→        ) : (
+   648→          <FormField label="Perusahaan">
+   649→            <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
+   650→              <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
+   651→                <SelectValue placeholder="Pilih perusahaan" />
+   652→              </SelectTrigger>
+   653→              <SelectContent>
+   654→                <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
+   655→                {companies.map((c) => (
+   656→                  <SelectItem key={c.id} value={c.id}>
+   657→                    {c.name}
+   658→                  </SelectItem>
+   659→                ))}
+   660→              </SelectContent>
+   661→            </Select>
+   662→          </FormField>
+   663→        )}
+   664→
+   665→        <FormField label="Kota">
+   666→          <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
+   667→        </FormField>
+   668→        <FormField label="Negara">
+   669→          <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={disabled} />
+   670→        </FormField>
+   671→        <FormField label="Kanal preferensi">
+   672→          <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
+   673→            <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
+   674→              <SelectValue placeholder="Pilih kanal" />
+   675→            </SelectTrigger>
+   676→            <SelectContent>
+   677→              {CHANNELS.map((c) => (
+   678→                <SelectItem key={c.key} value={c.key}>
+   679→                  {c.label}
+   680→                </SelectItem>
+   681→              ))}
+   682→            </SelectContent>
+   683→          </Select>
+   684→        </FormField>
+   685→      </div>
+   686→
+   687→      <section aria-label="Media sosial" className="space-y-2">
+   688→        <SectionTitle>Media Sosial</SectionTitle>
+   689→        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   690→          <FormField label="Instagram">
+   691→            <Input value={values.instagram} onChange={(e) => setField("instagram")(e.target.value)} placeholder="cth. @rani.creativehouse" disabled={disabled} />
+   692→          </FormField>
+   693→          <FormField label="Facebook">
+   694→            <Input value={values.facebook} onChange={(e) => setField("facebook")(e.target.value)} placeholder="cth. facebook.com/nama" disabled={disabled} />
+   695→          </FormField>
+   696→          <FormField label="TikTok">
+   697→            <Input value={values.tiktok} onChange={(e) => setField("tiktok")(e.target.value)} placeholder="cth. @namabrand" disabled={disabled} />
+   698→          </FormField>
+   699→        </div>
+   700→      </section>
+   701→
+   702→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   703→        <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
+   704→          <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
+   705→        </FormField>
+   706→      </div>
+   707→    </div>
+   708→  );
+   709→}
+   710→
+   711→// ---------- Riwayat percakapan (Task 24-b): timeline chat bubble per kontak ----------
+   712→
+   713→/** Tick status kirim pesan outbound: read/delivered emerald, sent zinc, failed rose. */
+   714→function DeliveryTick({ status }: { status?: string | null }) {
+   715→  if (!status) return null;
+   716→  const s = status.toLowerCase();
+   717→  const meta =
+   718→    s === "read" || s === "delivered"
+   719→      ? { Icon: CheckCheck, cls: "text-emerald-400", label: "Pesan dibaca" }
+   720→      : s === "sent"
+   721→        ? { Icon: Check, cls: "text-zinc-400", label: "Pesan terkirim" }
+   722→        : s === "failed"
+   723→          ? { Icon: AlertTriangle, cls: "text-rose-400", label: "Pesan gagal terkirim" }
+   724→          : null;
+   725→  if (!meta) return null;
+   726→  const { Icon, cls, label } = meta;
+   727→  return <Icon className={cn("size-3.5 shrink-0", cls)} role="img" aria-label={label} />;
+   728→}
+   729→
+   730→/** Satu gelembung chat: inbound rata kiri (zinc-100), outbound rata kanan (zinc-900). */
+   731→function ConversationBubble({ item, contactName }: { item: InteractionDTO; contactName: string }) {
+   732→  const outbound = item.direction === "outbound";
+   733→  const ChannelIcon = CHANNEL_ICONS[item.channel] ?? Globe;
+   734→  const author = outbound ? item.respondedBy || "Tim CRM" : item.senderName || contactName || "Kontak";
+   735→  const isReply = Boolean(outbound && item.externalId?.startsWith("inbox-reply:"));
+   736→  const hasOpp = Boolean(item.opportunity);
+   737→
+   738→  return (
+   739→    <li className={cn("flex max-w-[85%] flex-col", outbound ? "self-end items-end" : "self-start items-start")}>
+   740→      <div
+   741→        className={cn(
+   742→          "min-w-0 space-y-1 rounded-2xl px-3.5 py-2.5",
+   743→          outbound ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-900"
+   744→        )}
+   745→      >
+   746→        <p
+   747→          className={cn(
+   748→            "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-medium",
+   749→            outbound ? "text-zinc-400" : "text-zinc-500"
+   750→          )}
+   751→        >
+   752→          <span className={cn("truncate", outbound ? "text-zinc-200" : "text-zinc-700")}>{author}</span>
+   753→          <ChannelIcon className="size-3 shrink-0 opacity-70" aria-label={`Kanal ${channelLabel(item.channel)}`} />
+   754→          <span>{formatDateTime(item.createdAt)}</span>
+   755→          {outbound && <DeliveryTick status={item.deliveryStatus} />}
+   756→        </p>
+   757→        {item.subject && (
+   758→          <p className={cn("truncate text-xs font-semibold", outbound ? "text-zinc-300" : "text-zinc-600")}>
+   759→            {item.subject}
+   760→          </p>
+   761→        )}
+   762→        <p className="whitespace-pre-wrap text-sm leading-relaxed">{item.content}</p>
+   763→        {isReply && (
+   764→          <p>
+   765→            <span className="inline-block rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300">
+   766→              Balasan inbox
+   767→            </span>
+   768→          </p>
+   769→        )}
+   770→      </div>
+   771→      {hasOpp && (
+   772→        <span
+   773→          className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600"
+   774→          aria-label={`Terkait opportunity: ${item.opportunity?.title ?? ""}`}
+   775→        >
+   776→          {item.brand?.color && (
+   777→            <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: item.brand.color }} aria-hidden="true" />
+   778→          )}
+   779→          <span className="truncate">Opp: {item.opportunity?.title}</span>
+   780→        </span>
+   781→      )}
+   782→    </li>
+   783→    );
+   784→}
+   785→
+   786→function ConversationSkeleton() {
+   787→  return (
+   788→    <div className="space-y-3" aria-hidden="true">
+   789→      {["self-start w-3/4", "self-end w-2/3", "self-start w-2/3"].map((pos, i) => (
+   790→        <div key={i} className={cn("flex flex-col", pos)}>
+   791→          <Skeleton className="h-3 w-1/3 rounded-full" />
+   792→          <Skeleton className="mt-1.5 h-10 rounded-2xl" />
+   793→        </div>
+   794→      ))}
+   795→    </div>
+   796→  );
+   797→}
+   798→
+   799→/**
+   800→ * Seksi "Riwayat Percakapan" pada detail kontak — menggabungkan log interaksi
+   801→ * lintas kanal (WhatsApp/Instagram/Email/Website/Telepon/Meeting) satu kontak.
+   802→ * Urutan tampil: terbaru di atas (API orderBy createdAt desc).
+   803→ */
+   804→function ConversationHistorySection({ contactId, contactName }: { contactId: string; contactName: string }) {
+   805→  const [items, setItems] = useState<InteractionDTO[]>([]);
+   806→  const [loading, setLoading] = useState(true);
+   807→  const [error, setError] = useState<string | null>(null);
+   808→  const [reloadKey, setReloadKey] = useState(0);
+   809→
+   810→  useEffect(() => {
+   811→    // Komponen di-remount per kontak (key=contact.id) → loading awal cukup dari useState.
+   812→    // Reset loading/error saat "Muat ulang" dilakukan lewat handler reload() (bukan di sini).
+   813→    let alive = true; // guard race: respons fetch lama diabaikan setelah unmount/ganti kontak
+   814→    api
+   815→      .interactions({ contactId })
+   816→      .then((res) => {
+   817→        if (!alive) return;
+   818→        setItems(res.interactions);
+   819→        setLoading(false);
+   820→      })
+   821→      .catch((err: unknown) => {
+   822→        if (!alive) return;
+   823→        setError(err instanceof Error ? err.message : "Gagal memuat riwayat percakapan");
+   824→        setLoading(false);
+   825→      });
+   826→    return () => {
+   827→      alive = false;
+   828→    };
+   829→  }, [contactId, reloadKey]);
+   830→
+   831→  function reload() {
+   832→    setLoading(true);
+   833→    setError(null);
+   834→    setReloadKey((k) => k + 1);
+   835→  }
+   836→
+   837→  const uniqueChannels = useMemo(
+   838→    () => Array.from(new Set(items.map((i) => i.channel).filter((ch): ch is string => Boolean(ch)))),
+   839→    [items]
+   840→  );
+   841→
+   842→  return (
+   843→    <section aria-label="Riwayat percakapan">
+   844→      <div className="flex flex-wrap items-center gap-2">
+   845→        <MessagesSquare className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
+   846→        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Riwayat Percakapan</h3>
+   847→        <Badge variant="secondary" className="border-transparent bg-zinc-100 text-[11px] font-normal text-zinc-600">
+   848→          {loading ? "…" : `${items.length} pesan`}
+   849→        </Badge>
+   850→        {uniqueChannels.map((ch) => {
+   851→          const Icon = CHANNEL_ICONS[ch] ?? Globe;
+   852→          return (
+   853→            <Badge
+   854→              key={ch}
+   855→              variant="secondary"
+   856→              className={cn(
+   857→                "border-transparent px-1.5 text-[10px]",
+   858→                CHANNEL_BADGE_CLASS[ch] ?? "bg-zinc-100 text-zinc-600"
+   859→              )}
+   860→              aria-label={`Ada percakapan via ${channelLabel(ch)}`}
+   861→            >
+   862→              <Icon className="size-3" />
+   863→            </Badge>
+   864→          );
+   865→        })}
+   866→        <Button
+   867→          type="button"
+   868→          size="sm"
+   869→          variant="ghost"
+   870→          className="ml-auto h-7 gap-1 px-2 text-xs text-zinc-500"
+   871→          onClick={reload}
+   872→          disabled={loading}
+   873→          aria-label="Muat ulang riwayat percakapan"
+   874→        >
+   875→          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} /> Muat ulang
+   876→        </Button>
+   877→      </div>
+   878→
+   879→      <div className="crm-scroll mt-2 max-h-96 overflow-y-auto rounded-xl border bg-white p-3 shadow-sm">
+   880→        {loading ? (
+   881→          <ConversationSkeleton />
+   882→        ) : error ? (
+   883→          <div className="flex flex-col items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-6 text-center">
+   884→            <AlertTriangle className="size-4 text-rose-600" />
+   885→            <p className="text-xs text-rose-700">{error}</p>
+   886→            <Button
+   887→              type="button"
+   888→              size="sm"
+   889→              variant="outline"
+   890→              onClick={reload}
+   891→              aria-label="Coba muat ulang riwayat percakapan"
+   892→            >
+   893→              <RefreshCw className="size-3.5" /> Coba lagi
+   894→            </Button>
+   895→          </div>
+   896→        ) : items.length === 0 ? (
+   897→          <p className="py-4 text-center text-xs text-zinc-400">Belum ada percakapan tercatat untuk kontak ini.</p>
+   898→        ) : (
+   899→          <ul className="flex flex-col gap-3">
+   900→            {items.map((item) => (
+   901→              <ConversationBubble key={item.id} item={item} contactName={contactName} />
+   902→            ))}
+   903→          </ul>
+   904→        )}
+   905→      </div>
+   906→    </section>
+   907→  );
+   908→}
+   909→
+   910→// ---------- Detail contact (Sheet) ----------
+   911→
+   912→function ContactDetailBody({
+   913→  contact,
+   914→  companies,
+   915→  onSaved,
+   916→  onDeleted,
+   917→  onOpenCompany,
+   918→}: {
+   919→  contact: ContactRecord;
+   920→  companies: CompanyRecord[];
+   921→  onSaved: (contact: ContactRef) => void;
+   922→  onDeleted: () => void;
+   923→  onOpenCompany: (company: CompanyRef) => void;
+   924→}) {
+   925→  const user = useCrmStore((s) => s.user);
+   926→  const [editing, setEditing] = useState(false);
+   927→  const [saving, setSaving] = useState(false);
+   928→  const [form, setForm] = useState<ContactFormValues>({
+   929→    firstName: contact.firstName ?? "",
+   930→    lastName: contact.lastName ?? "",
+   931→    position: contact.position ?? "",
+   932→    email: contact.email ?? "",
+   933→    whatsapp: contact.whatsapp ?? "",
+   934→    phone: contact.phone ?? "",
+   935→    companyName: contact.company?.name ?? "",
+   936→    companyId: contact.companyId || NO_VALUE,
+   937→    city: contact.city ?? "",
+   938→    country: contact.country ?? "",
+   939→    preferredChannel: contact.preferredChannel || "whatsapp",
+   940→    instagram: contact.instagram ?? "",
+   941→    facebook: contact.facebook ?? "",
+   942→    tiktok: contact.tiktok ?? "",
+   943→    tagsText: "",
+   944→  });
+   945→  const [tags, setTags] = useState<string[]>(() => parseJsonArray(contact.tags));
+   946→  const [tagInput, setTagInput] = useState("");
+   947→  const [tagBusy, setTagBusy] = useState(false);
+   948→  const [deleting, setDeleting] = useState(false);
+   949→
+   950→  const PreferredIcon = CHANNEL_ICONS[contact.preferredChannel] ?? Globe;
+   951→  const company = contact.company ?? null;
+   952→  const oppCount = contact._count?.opportunities;
+   953→
+   954→  function patchForm(p: Partial<ContactFormValues>) {
+   955→    setForm((v) => ({ ...v, ...p }));
+   956→  }
+   957→
+   958→  async function handleSave(e: FormEvent<HTMLFormElement>) {
+   959→    e.preventDefault();
+   960→    if (!form.firstName.trim()) {
+   961→      toast.error("Nama depan wajib diisi");
+   962→      return;
+   963→    }
+   964→    setSaving(true);
+   965→    try {
+   966→      const res = await api.updateContact(contact.id, {
+   967→        firstName: form.firstName.trim(),
+   968→        lastName: form.lastName.trim() || null,
+   969→        position: form.position.trim() || null,
+   970→        email: form.email.trim() || null,
+   971→        whatsapp: form.whatsapp.trim() || null,
+   972→        phone: form.phone.trim() || null,
+   973→        city: form.city.trim() || null,
+   974→        country: form.country.trim() || null,
+   975→        preferredChannel: form.preferredChannel,
+   976→        instagram: form.instagram.trim() || null,
+   977→        facebook: form.facebook.trim() || null,
+   978→        tiktok: form.tiktok.trim() || null,
+   979→        companyId: form.companyId === NO_VALUE ? null : form.companyId,
+   980→        actorName: user?.name ?? "System",
+   981→        actorRole: user?.role ?? "system",
+   982→      });
+   983→      toast.success("Perubahan contact tersimpan");
+   984→      setEditing(false);
+   985→      onSaved(res.contact);
+   986→    } catch (err) {
+   987→      toast.error(err instanceof Error ? err.message : "Gagal menyimpan perubahan");
+   988→    } finally {
+   989→      setSaving(false);
+   990→    }
+   991→  }
+   992→
+   993→  async function patchTags(next: string[]) {
+   994→    setTagBusy(true);
+   995→    try {
+   996→      const res = await api.updateContact(contact.id, {
+   997→        tags: next,
+   998→        actorName: user?.name ?? "System",
+   999→        actorRole: user?.role ?? "system",
+  1000→      });
+  1001→      setTags(next);
+  1002→      onSaved(res.contact);
+  1003→    } catch (err) {
+  1004→      toast.error(err instanceof Error ? err.message : "Gagal memperbarui tag");
+  1005→    } finally {
+  1006→      setTagBusy(false);
+  1007→    }
+  1008→  }
+  1009→
+  1010→  function addTag() {
+  1011→    const t = tagInput.trim();
+  1012→    if (!t || tags.includes(t)) {
+  1013→      setTagInput("");
+  1014→      return;
+  1015→    }
+  1016→    setTagInput("");
+  1017→    void patchTags([...tags, t]);
+  1018→  }
+  1019→
+  1020→  function removeTag(t: string) {
+  1021→    void patchTags(tags.filter((x) => x !== t));
+  1022→  }
+  1023→
+  1024→  async function handleDelete() {
+  1025→    setDeleting(true);
+  1026→    try {
+  1027→      const res = await fetch(`/api/contacts/${contact.id}`, {
+  1028→        method: "DELETE",
+  1029→        headers: { "Content-Type": "application/json" },
+  1030→      });
+  1031→      if (!res.ok) {
+  1032→        const data = (await res.json().catch(() => ({}))) as { error?: string };
+  1033→        throw new Error(data.error ?? `HTTP ${res.status}`);
+  1034→      }
+  1035→      toast.success(`Contact "${contact.fullName}" dihapus`);
+  1036→      onDeleted();
+  1037→    } catch (err) {
+  1038→      toast.error(err instanceof Error ? err.message : "Gagal menghapus contact");
+  1039→      setDeleting(false);
+  1040→    }
+  1041→  }
+  1042→
+  1043→  return (
+  1044→    <div className="flex flex-1 flex-col">
+  1045→      <SheetHeader className="border-b border-zinc-100">
+  1046→        <div className="flex items-start gap-3 pr-8">
+  1047→          <AvatarBubble name={contact.fullName} size="lg" />
+  1048→          <div className="min-w-0 flex-1">
+  1049→            <SheetTitle className="leading-tight">{contact.fullName}</SheetTitle>
+  1050→            <SheetDescription className="truncate">
+  1051→              {contact.position || "Tanpa jabatan"}
+  1052→              {company ? ` · ${company.name}` : ""}
+  1053→            </SheetDescription>
+  1054→          </div>
+  1055→          <Button
+  1056→            size="sm"
+  1057→            variant={editing ? "outline" : "secondary"}
+  1058→            onClick={() => setEditing((v) => !v)}
+  1059→            aria-label={editing ? "Batal edit contact" : "Edit contact"}
+  1060→          >
+  1061→            <Pencil className="size-3.5" /> {editing ? "Batal" : "Edit"}
+  1062→          </Button>
+  1063→        </div>
+  1064→      </SheetHeader>
+  1065→
+  1066→      <div className="flex-1 space-y-5 p-4">
+  1067→        {editing ? (
+  1068→          <form onSubmit={handleSave} className="space-y-4 rounded-xl border bg-white p-4 shadow-sm">
+  1069→            <p className="text-sm font-semibold text-zinc-900">Edit Contact</p>
+  1070→            <ContactFormFields
+  1071→              mode="edit"
+  1072→              values={form}
+  1073→              onChange={patchForm}
+  1074→              disabled={saving}
+  1075→              companies={companies}
+  1076→            />
+  1077→            <div className="flex justify-end gap-2">
+  1078→              <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+  1079→                Batal
+  1080→              </Button>
+  1081→              <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={saving}>
+  1082→                {saving && <Loader2 className="size-4 animate-spin" />} Simpan Perubahan
+  1083→              </Button>
+  1084→            </div>
+  1085→          </form>
+  1086→        ) : (
+  1087→          <section aria-label="Informasi contact">
+  1088→            <SectionTitle>Informasi</SectionTitle>
+  1089→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1090→              <InfoRow icon={Mail} label="Email" value={contact.email} />
+  1091→              {contact.emailAlt ? <InfoRow icon={MailPlus} label="Email alternatif" value={contact.emailAlt} /> : null}
+  1092→              <InfoRow icon={MessageCircle} label="WhatsApp" value={contact.whatsapp} />
+  1093→              <InfoRow icon={Phone} label="Telepon" value={contact.phone} />
+  1094→              <InfoRow icon={MapPin} label="Lokasi" value={locationText(contact.city, contact.country)} />
+  1095→              <InfoRow icon={Clock} label="Zona waktu" value={contact.timezone} />
+  1096→              <InfoRow icon={Languages} label="Bahasa" value={LANGUAGE_LABELS[contact.language] ?? contact.language} />
+  1097→              <InfoRow icon={PreferredIcon} label="Kanal preferensi" value={channelLabel(contact.preferredChannel)} />
+  1098→              {contact.linkedin ? <InfoRow icon={Linkedin} label="LinkedIn" value={contact.linkedin} /> : null}
+  1099→              {contact.instagram ? <InfoRow icon={Instagram} label="Instagram" value={contact.instagram} /> : null}
+  1100→              {contact.facebook ? <InfoRow icon={Facebook} label="Facebook" value={contact.facebook} /> : null}
+  1101→              {contact.tiktok ? <InfoRow icon={Music2} label="TikTok" value={contact.tiktok} /> : null}
+  1102→              <div className="flex items-start gap-3">
+  1103→                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+  1104→                  <ShieldCheck className="size-4" />
+  1105→                </span>
+  1106→                <div>
+  1107→                  <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Consent</p>
+  1108→                  <div className="mt-0.5">
+  1109→                    <ConsentBadge status={contact.consentStatus} />
+  1110→                  </div>
+  1111→                </div>
+  1112→              </div>
+  1113→            </div>
+  1114→          </section>
+  1115→        )}
+  1116→
+  1117→        <ConversationHistorySection contactId={contact.id} contactName={contact.fullName} />
+  1118→
+  1119→        <section aria-label="Tag contact">
+  1120→          <SectionTitle>Tag</SectionTitle>
+  1121→          <div className="rounded-xl border bg-white p-3 shadow-sm">
+  1122→            <div className="flex flex-wrap gap-1.5">
+  1123→              {tags.length === 0 && <p className="text-xs text-zinc-400">Belum ada tag — tambahkan untuk segmentasi.</p>}
+  1124→              {tags.map((t) => (
+  1125→                <Badge key={t} variant="secondary" className="gap-1 bg-zinc-100 text-zinc-700">
+  1126→                  {t}
+  1127→                  <button
+  1128→                    type="button"
+  1129→                    aria-label={`Hapus tag ${t}`}
+  1130→                    disabled={tagBusy}
+  1131→                    onClick={() => removeTag(t)}
+  1132→                    className="rounded-full p-0.5 transition-colors hover:bg-zinc-200"
+  1133→                  >
+  1134→                    <X className="size-3" />
+  1135→                  </button>
+  1136→                </Badge>
+  1137→              ))}
+  1138→            </div>
+  1139→            <form
+  1140→              className="mt-2.5 flex gap-2"
+  1141→              onSubmit={(e) => {
+  1142→                e.preventDefault();
+  1143→                addTag();
+  1144→              }}
+  1145→            >
+  1146→              <Input
+  1147→                value={tagInput}
+  1148→                onChange={(e) => setTagInput(e.target.value)}
+  1149→                placeholder="Tambah tag…"
+  1150→                aria-label="Tag baru"
+  1151→                className="h-8 text-xs"
+  1152→                disabled={tagBusy}
+  1153→              />
+  1154→              <Button type="submit" size="sm" variant="outline" className="h-8" disabled={tagBusy || !tagInput.trim()}>
+  1155→                <Plus className="size-3.5" /> Tambah
+  1156→              </Button>
+  1157→            </form>
+  1158→          </div>
+  1159→        </section>
+  1160→
+  1161→        {company && (
+  1162→          <section aria-label="Perusahaan terkait">
+  1163→            <SectionTitle>Perusahaan</SectionTitle>
+  1164→            <button
+  1165→              type="button"
+  1166→              onClick={() => company && onOpenCompany(company)}
+  1167→              aria-label={`Buka detail perusahaan ${company.name}`}
+  1168→              className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+  1169→            >
+  1170→              <AvatarBubble name={company.name} icon={Building2} />
+  1171→              <span className="min-w-0 flex-1">
+  1172→                <span className="block truncate text-sm font-semibold text-zinc-900">{company.name}</span>
+  1173→                <span className="block truncate text-xs text-zinc-500">
+  1174→                  {company.industry || "Industri belum diisi"}
+  1175→                  {company.website ? ` · ${company.website}` : ""}
+  1176→                </span>
+  1177→              </span>
+  1178→              <ExternalLink className="size-4 shrink-0 text-zinc-400" />
+  1179→            </button>
+  1180→          </section>
+  1181→        )}
+  1182→      </div>
+  1183→
+  1184→      <div className="mt-auto space-y-3 border-t border-zinc-100 bg-zinc-50/70 p-4">
+  1185→        <div className="flex items-center justify-between gap-3">
+  1186→          {typeof oppCount === "number" ? (
+  1187→            <p className="flex items-center gap-2 text-sm text-zinc-600">
+  1188→              <Briefcase className="size-4 text-zinc-400" />
+  1189→              Total <span className="font-semibold text-zinc-900">{oppCount}</span> opportunity
+  1190→            </p>
+  1191→          ) : (
+  1192→            <span />
+  1193→          )}
+  1194→          <AlertDialog>
+  1195→            <AlertDialogTrigger asChild>
+  1196→              <Button
+  1197→                variant="outline"
+  1198→                disabled={deleting}
+  1199→                className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+  1200→                aria-label="Hapus contact"
+  1201→              >
+  1202→                <Trash2 className="size-4" /> Hapus Contact
+  1203→              </Button>
+  1204→            </AlertDialogTrigger>
+  1205→            <AlertDialogContent>
+  1206→              <AlertDialogHeader>
+  1207→                <AlertDialogTitle>Hapus contact ini?</AlertDialogTitle>
+  1208→                <AlertDialogDescription>
+  1209→                  &ldquo;{contact.fullName}&rdquo; akan dihapus (soft delete) dan tidak lagi muncul di daftar. Riwayat opportunity dan interaksi tetap tersimpan di database.
+  1210→                </AlertDialogDescription>
+  1211→              </AlertDialogHeader>
+  1212→              <AlertDialogFooter>
+  1213→                <AlertDialogCancel>Batal</AlertDialogCancel>
+  1214→                <AlertDialogAction
+  1215→                  onClick={() => void handleDelete()}
+  1216→                  disabled={deleting}
+  1217→                  className="bg-red-600 text-white hover:bg-red-700"
+  1218→                >
+  1219→                  {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />} Ya, hapus
+  1220→                </AlertDialogAction>
+  1221→              </AlertDialogFooter>
+  1222→            </AlertDialogContent>
+  1223→          </AlertDialog>
+  1224→        </div>
+  1225→      </div>
+  1226→    </div>
+  1227→  );
+  1228→}
+  1229→
+  1230→function ContactDetailSheet({
+  1231→  contact,
+  1232→  open,
+  1233→  onOpenChange,
+  1234→  companies,
+  1235→  onSaved,
+  1236→  onDeleted,
+  1237→  onOpenCompany,
+  1238→}: {
+  1239→  contact: ContactRecord | null;
+  1240→  open: boolean;
+  1241→  onOpenChange: (open: boolean) => void;
+  1242→  companies: CompanyRecord[];
+  1243→  onSaved: (contact: ContactRef) => void;
+  1244→  onDeleted: () => void;
+  1245→  onOpenCompany: (company: CompanyRef) => void;
+  1246→}) {
+  1247→  return (
+  1248→    <Sheet open={open} onOpenChange={onOpenChange}>
+  1249→      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+  1250→        {contact && (
+  1251→          <ContactDetailBody
+  1252→            key={contact.id}
+  1253→            contact={contact}
+  1254→            companies={companies}
+  1255→            onSaved={onSaved}
+  1256→            onDeleted={onDeleted}
+  1257→            onOpenCompany={onOpenCompany}
+  1258→          />
+  1259→        )}
+  1260→      </SheetContent>
+  1261→    </Sheet>
+  1262→  );
+  1263→}
+  1264→
+  1265→// ---------- Detail perusahaan (Sheet, read-only) ----------
+  1266→
+  1267→function CompanyDetailBody({
+  1268→  company,
+  1269→  contacts,
+  1270→  onOpenContact,
+  1271→}: {
+  1272→  company: CompanyRecord;
+  1273→  contacts: ContactRecord[];
+  1274→  onOpenContact: (contact: ContactRecord) => void;
+  1275→}) {
+  1276→  const tags = parseJsonArray(company.tags);
+  1277→  const websiteHref = company.website
+  1278→    ? company.website.startsWith("http")
+  1279→      ? company.website
+  1280→      : `https://${company.website}`
+  1281→    : null;
+  1282→
+  1283→  return (
+  1284→    <div className="flex flex-1 flex-col">
+  1285→      <SheetHeader className="border-b border-zinc-100">
+  1286→        <div className="flex items-start gap-3 pr-8">
+  1287→          <AvatarBubble name={company.name} size="lg" icon={Building2} />
+  1288→          <div className="min-w-0 flex-1">
+  1289→            <SheetTitle className="leading-tight">{company.name}</SheetTitle>
+  1290→            <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+  1291→              <span>{company.industry || "Industri belum diisi"}</span>
+  1292→              {websiteHref && (
+  1293→                <a
+  1294→                  href={websiteHref}
+  1295→                  target="_blank"
+  1296→                  rel="noreferrer"
+  1297→                  className="inline-flex items-center gap-1 text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+  1298→                  aria-label={`Buka website ${company.name}`}
+  1299→                >
+  1300→                  {company.website} <ExternalLink className="size-3" />
+  1301→                </a>
+  1302→              )}
+  1303→            </SheetDescription>
+  1304→          </div>
+  1305→        </div>
+  1306→      </SheetHeader>
+  1307→
+  1308→      <div className="flex-1 space-y-5 p-4">
+  1309→        <section aria-label="Informasi perusahaan">
+  1310→          <SectionTitle>Informasi</SectionTitle>
+  1311→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1312→            <InfoRow icon={Globe} label="Website" value={company.website} />
+  1313→            <InfoRow icon={Building2} label="Industri" value={company.industry} />
+  1314→            <InfoRow icon={MapPin} label="Lokasi" value={locationText(company.city, company.country)} />
+  1315→            <div className="flex items-start gap-3">
+  1316→              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
+  1317→                <Users className="size-4" />
+  1318→              </span>
+  1319→              <div>
+  1320→                <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Ukuran</p>
+  1321→                <div className="mt-0.5">
+  1322→                  <SizeBadge size={company.size} />
+  1323→                </div>
+  1324→              </div>
+  1325→            </div>
+  1326→            <InfoRow icon={Banknote} label="Mata uang default" value={company.defaultCurrency} />
+  1327→            <InfoRow
+  1328→              icon={Banknote}
+  1329→              label="Lifetime value"
+  1330→              value={formatCurrency(company.lifetimeValue, company.defaultCurrency)}
+  1331→            />
+  1332→          </div>
+  1333→        </section>
+  1334→
+  1335→        <section aria-label="Tag perusahaan">
+  1336→          <SectionTitle>Tag</SectionTitle>
+  1337→          <div className="rounded-xl border bg-white p-3 shadow-sm">
+  1338→            <TagList tags={tags} />
+  1339→          </div>
+  1340→        </section>
+  1341→
+  1342→        <section aria-label="Contact perusahaan">
+  1343→          <SectionTitle>
+  1344→            Kontak ({contacts.length}
+  1345→            {contacts.length === 5 ? "+" : ""})
+  1346→          </SectionTitle>
+  1347→          {contacts.length === 0 ? (
+  1348→            <p className="rounded-xl border bg-white p-3 text-xs text-zinc-400 shadow-sm">
+  1349→              Belum ada contact yang terhubung ke perusahaan ini.
+  1350→            </p>
+  1351→          ) : (
+  1352→            <ul className="max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+  1353→              {contacts.map((c) => (
+  1354→                <li key={c.id}>
+  1355→                  <button
+  1356→                    type="button"
+  1357→                    onClick={() => onOpenContact(c)}
+  1358→                    aria-label={`Buka detail contact ${c.fullName}`}
+  1359→                    className="flex w-full items-center gap-3 rounded-xl border bg-white p-3 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+  1360→                  >
+  1361→                    <AvatarBubble name={c.fullName} size="sm" />
+  1362→                    <span className="min-w-0 flex-1">
+  1363→                      <span className="block truncate text-sm font-medium text-zinc-900">{c.fullName}</span>
+  1364→                      <span className="block truncate text-xs text-zinc-500">
+  1365→                        {c.position || c.email || "-"}
+  1366→                        {c.instagram ? (
+  1367→                          <span className="ml-1.5 inline-flex max-w-[45%] items-center gap-1 align-middle text-zinc-400">
+  1368→                            <Instagram className="size-3 shrink-0" aria-hidden="true" />
+  1369→                            <span className="truncate">{c.instagram}</span>
+  1370→                          </span>
+  1371→                        ) : null}
+  1372→                      </span>
+  1373→                    </span>
+  1374→                    <ChannelBadge channel={c.preferredChannel} />
+  1375→                  </button>
+  1376→                </li>
+  1377→              ))}
+  1378→            </ul>
+  1379→          )}
+  1380→        </section>
+  1381→      </div>
+  1382→
+  1383→      <div className="mt-auto space-y-2 border-t border-zinc-100 bg-zinc-50/70 p-4">
+  1384→        <div className="flex flex-wrap gap-1.5">
+  1385→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1386→            {company._count?.opportunities ?? 0} opportunity
+  1387→          </Badge>
+  1388→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1389→            {company._count?.projects ?? 0} project
+  1390→          </Badge>
+  1391→          <Badge variant="secondary" className="bg-zinc-200/70 text-zinc-700">
+  1392→            {company._count?.invoices ?? 0} invoice
+  1393→          </Badge>
+  1394→        </div>
+  1395→        <p className="flex items-center gap-1.5 text-xs text-zinc-400">
+  1396→          <Info className="size-3.5" /> Data perusahaan bersifat read-only di UI — perubahan dilakukan via API.
+  1397→        </p>
+  1398→      </div>
+  1399→    </div>
+  1400→  );
+  1401→}
+  1402→
+  1403→function CompanyDetailSheet({
+  1404→  company,
+  1405→  open,
+  1406→  onOpenChange,
+  1407→  contacts,
+  1408→  onOpenContact,
+  1409→}: {
+  1410→  company: CompanyRecord | null;
+  1411→  open: boolean;
+  1412→  onOpenChange: (open: boolean) => void;
+  1413→  contacts: ContactRecord[];
+  1414→  onOpenContact: (contact: ContactRecord) => void;
+  1415→}) {
+  1416→  return (
+  1417→    <Sheet open={open} onOpenChange={onOpenChange}>
+  1418→      <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
+  1419→        {company && <CompanyDetailBody key={company.id} company={company} contacts={contacts} onOpenContact={onOpenContact} />}
+  1420→      </SheetContent>
+  1421→    </Sheet>
+  1422→  );
+  1423→}
+  1424→
+  1425→// ---------- Dialog: Contact baru ----------
+  1426→
+  1427→function CreateContactDialog({
+  1428→  open,
+  1429→  onOpenChange,
+  1430→  onCreated,
+  1431→}: {
+  1432→  open: boolean;
+  1433→  onOpenChange: (open: boolean) => void;
+  1434→  onCreated: (contact: ContactRef, duplicates: MatchCandidateDTO[]) => void;
+  1435→}) {
+  1436→  const user = useCrmStore((s) => s.user);
+  1437→  const [values, setValues] = useState<ContactFormValues>(EMPTY_CONTACT_FORM);
+  1438→  const [candidates, setCandidates] = useState<MatchCandidateDTO[] | null>(null);
+  1439→  const [checking, setChecking] = useState(false);
+  1440→  const [creating, setCreating] = useState(false);
+  1441→
+  1442→  useEffect(() => {
+  1443→    if (open) {
+  1444→      setValues(EMPTY_CONTACT_FORM);
+  1445→      setCandidates(null);
+  1446→    }
+  1447→  }, [open]);
+  1448→
+  1449→  function patchForm(p: Partial<ContactFormValues>) {
+  1450→    setValues((v) => ({ ...v, ...p }));
+  1451→  }
+  1452→
+  1453→  async function createNow() {
+  1454→    if (!values.firstName.trim()) {
+  1455→      toast.error("Nama depan wajib diisi");
+  1456→      return;
+  1457→    }
+  1458→    setCreating(true);
+  1459→    try {
+  1460→      const res = await api.createContact({
+  1461→        firstName: values.firstName.trim(),
+  1462→        lastName: values.lastName.trim() || undefined,
+  1463→        position: values.position.trim() || undefined,
+  1464→        email: values.email.trim() || undefined,
+  1465→        whatsapp: values.whatsapp.trim() || undefined,
+  1466→        phone: values.phone.trim() || undefined,
+  1467→        companyName: values.companyName.trim() || undefined,
+  1468→        city: values.city.trim() || undefined,
+  1469→        country: values.country.trim() || undefined,
+  1470→        preferredChannel: values.preferredChannel,
+  1471→        instagram: values.instagram.trim() || undefined,
+  1472→        facebook: values.facebook.trim() || undefined,
+  1473→        tiktok: values.tiktok.trim() || undefined,
+  1474→        tags: parseTagsText(values.tagsText),
+  1475→        actorName: user?.name ?? "System",
+  1476→        actorRole: user?.role ?? "system",
+  1477→      });
+  1478→      toast.success(`Contact "${res.contact.fullName}" berhasil dibuat`);
+  1479→      onCreated(res.contact, res.duplicateCandidates ?? []);
+  1480→    } catch (err) {
+  1481→      toast.error(err instanceof Error ? err.message : "Gagal membuat contact");
+  1482→    } finally {
+  1483→      setCreating(false);
+  1484→    }
+  1485→  }
+  1486→
+  1487→  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  1488→    e.preventDefault();
+  1489→    if (!values.firstName.trim()) {
+  1490→      toast.error("Nama depan wajib diisi");
+  1491→      return;
+  1492→    }
+  1493→    setChecking(true);
+  1494→    try {
+  1495→      const res = await api.identify({
+  1496→        email: values.email.trim() || undefined,
+  1497→        whatsapp: values.whatsapp.trim() || undefined,
+  1498→        fullName: `${values.firstName.trim()} ${values.lastName.trim()}`.trim(),
+  1499→        companyName: values.companyName.trim() || undefined,
+  1500→      });
+  1501→      if (res.candidates.length > 0) {
+  1502→        setCandidates(res.candidates);
+  1503→        return;
+  1504→      }
+  1505→      await createNow();
+  1506→    } catch (err) {
+  1507→      toast.error(err instanceof Error ? err.message : "Gagal memeriksa duplikat");
+  1508→    } finally {
+  1509→      setChecking(false);
+  1510→    }
+  1511→  }
+  1512→
+  1513→  function pickExisting() {
+  1514→    toast.info("Menggunakan contact existing");
+  1515→    onOpenChange(false);
+  1516→  }
+  1517→
+  1518→  const busy = checking || creating;
+  1519→
+  1520→  return (
+  1521→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1522→      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-2xl">
+  1523→        <DialogHeader>
+  1524→          <DialogTitle>Contact Baru</DialogTitle>
+  1525→          <DialogDescription>
+  1526→            Tambah identitas calon klien. Sistem otomatis memeriksa kemungkinan duplikat sebelum menyimpan.
+  1527→          </DialogDescription>
+  1528→        </DialogHeader>
+  1529→        <form onSubmit={handleSubmit} className="space-y-4">
+  1530→          <ContactFormFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
+  1531→
+  1532→          {candidates && candidates.length > 0 && (
+  1533→            <Alert className="border-amber-200 bg-amber-50">
+  1534→              <AlertTriangle className="size-4 text-amber-600" />
+  1535→              <AlertTitle className="text-amber-800">Kemungkinan duplikat</AlertTitle>
+  1536→              <AlertDescription className="text-amber-700">
+  1537→                <span className="block text-xs">
+  1538→                  Contact berikut mirip dengan data yang Anda masukkan. Gunakan data existing, atau tetap buat baru.
+  1539→                </span>
+  1540→                <ul className="mt-2 max-h-96 space-y-2 overflow-y-auto crm-scroll pr-1">
+  1541→                  {candidates.map((c) => (
+  1542→                    <li
+  1543→                      key={c.contactId}
+  1544→                      className="flex items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white p-2.5"
+  1545→                    >
+  1546→                      <div className="min-w-0">
+  1547→                        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-zinc-900">
+  1548→                          <span className="truncate">{c.contact?.fullName ?? "Contact tanpa nama"}</span>
+  1549→                          <Badge className={cn("border-transparent", scoreBadgeClass(c.score))}>{c.score}% mirip</Badge>
+  1550→                        </p>
+  1551→                        <p className="truncate text-xs text-zinc-500">
+  1552→                          {c.contact?.email || "-"}
+  1553→                          {c.contact?.company?.name ? ` · ${c.contact.company.name}` : ""}
+  1554→                        </p>
+  1555→                        {c.reasons.length > 0 && (
+  1556→                          <p className="mt-0.5 text-[11px] text-amber-700">Alasan: {c.reasons.join(" · ")}</p>
+  1557→                        )}
+  1558→                      </div>
+  1559→                      <Button
+  1560→                        type="button"
+  1561→                        size="sm"
+  1562→                        variant="outline"
+  1563→                        className="h-7 shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100"
+  1564→                        onClick={pickExisting}
+  1565→                      >
+  1566→                        Pilih ini
+  1567→                      </Button>
+  1568→                    </li>
+  1569→                  ))}
+  1570→                </ul>
+  1571→                <Button
+  1572→                  type="button"
+  1573→                  size="sm"
+  1574→                  className="mt-2.5 bg-zinc-900 text-white hover:bg-zinc-800"
+  1575→                  onClick={() => void createNow()}
+  1576→                  disabled={busy}
+  1577→                >
+  1578→                  {creating && <Loader2 className="size-3.5 animate-spin" />} Tetap buat baru
+  1579→                </Button>
+  1580→              </AlertDescription>
+  1581→            </Alert>
+  1582→          )}
+  1583→
+  1584→          <DialogFooter>
+  1585→            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+  1586→              Batal
+  1587→            </Button>
+  1588→            <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={busy}>
+  1589→              {busy ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+  1590→              {checking ? "Memeriksa duplikat…" : creating ? "Menyimpan…" : "Simpan Contact"}
+  1591→            </Button>
+  1592→          </DialogFooter>
+  1593→        </form>
+  1594→      </DialogContent>
+  1595→    </Dialog>
+  1596→  );
+  1597→}
+  1598→
+  1599→// ---------- Dialog: Perusahaan baru ----------
+  1600→
+  1601→function CreateCompanyDialog({
+  1602→  open,
+  1603→  onOpenChange,
+  1604→  onCreated,
+  1605→}: {
+  1606→  open: boolean;
+  1607→  onOpenChange: (open: boolean) => void;
+  1608→  onCreated: () => void;
+  1609→}) {
+  1610→  const user = useCrmStore((s) => s.user);
+  1611→  const [values, setValues] = useState<CompanyFormValues>(EMPTY_COMPANY_FORM);
+  1612→  const [submitting, setSubmitting] = useState(false);
+  1613→
+  1614→  useEffect(() => {
+  1615→    if (open) setValues(EMPTY_COMPANY_FORM);
+  1616→  }, [open]);
+  1617→
+  1618→  function patchForm(p: Partial<CompanyFormValues>) {
+  1619→    setValues((v) => ({ ...v, ...p }));
+  1620→  }
+  1621→
+  1622→  const setField = (key: keyof CompanyFormValues) => (value: string) => patchForm({ [key]: value } as Partial<CompanyFormValues>);
+  1623→
+  1624→  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  1625→    e.preventDefault();
+  1626→    if (!values.name.trim()) {
+  1627→      toast.error("Nama perusahaan wajib diisi");
+  1628→      return;
+  1629→    }
+  1630→    setSubmitting(true);
+  1631→    try {
+  1632→      const res = await api.createCompany({
+  1633→        name: values.name.trim(),
+  1634→        industry: values.industry.trim() || undefined,
+  1635→        website: values.website.trim() || undefined,
+  1636→        country: values.country.trim() || undefined,
+  1637→        city: values.city.trim() || undefined,
+  1638→        size: values.size === NO_VALUE ? undefined : values.size,
+  1639→        defaultCurrency: values.defaultCurrency,
+  1640→        actorName: user?.name ?? "System",
+  1641→      });
+  1642→      toast.success(`Perusahaan "${res.company.name}" berhasil dibuat`);
+  1643→      onCreated();
+  1644→    } catch (err) {
+  1645→      toast.error(err instanceof Error ? err.message : "Gagal membuat perusahaan");
+  1646→    } finally {
+  1647→      setSubmitting(false);
+  1648→    }
+  1649→  }
+  1650→
+  1651→  return (
+  1652→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1653→      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+  1654→        <DialogHeader>
+  1655→          <DialogTitle>Perusahaan Baru</DialogTitle>
+  1656→          <DialogDescription>Daftarkan akun perusahaan calon klien sebelum menambahkan contactnya.</DialogDescription>
+  1657→        </DialogHeader>
+  1658→        <form onSubmit={handleSubmit} className="space-y-4">
+  1659→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1660→            <FormField label="Nama perusahaan" required className="sm:col-span-2">
+  1661→              <Input value={values.name} onChange={(e) => setField("name")(e.target.value)} placeholder="cth. PT Maju Jaya Abadi" disabled={submitting} />
+  1662→            </FormField>
+  1663→            <FormField label="Industri">
+  1664→              <Input value={values.industry} onChange={(e) => setField("industry")(e.target.value)} placeholder="cth. Perbankan" disabled={submitting} />
+  1665→            </FormField>
+  1666→            <FormField label="Website">
+  1667→              <Input value={values.website} onChange={(e) => setField("website")(e.target.value)} placeholder="cth. majujaya.co.id" disabled={submitting} />
+  1668→            </FormField>
+  1669→            <FormField label="Negara">
+  1670→              <Input value={values.country} onChange={(e) => setField("country")(e.target.value)} placeholder="cth. Indonesia" disabled={submitting} />
+  1671→            </FormField>
+  1672→            <FormField label="Kota">
+  1673→              <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Bandung" disabled={submitting} />
+  1674→            </FormField>
+  1675→            <FormField label="Ukuran">
+  1676→              <Select value={values.size} onValueChange={setField("size")} disabled={submitting}>
+  1677→                <SelectTrigger className="w-full" aria-label="Pilih ukuran perusahaan">
+  1678→                  <SelectValue placeholder="Pilih ukuran" />
+  1679→                </SelectTrigger>
+  1680→                <SelectContent>
+  1681→                  <SelectItem value={NO_VALUE}>— Tanpa ukuran —</SelectItem>
+  1682→                  {SIZE_OPTIONS.map((s) => (
+  1683→                    <SelectItem key={s.value} value={s.value}>
+  1684→                      {s.label}
+  1685→                    </SelectItem>
+  1686→                  ))}
+  1687→                </SelectContent>
+  1688→              </Select>
+  1689→            </FormField>
+  1690→            <FormField label="Mata uang default">
+  1691→              <Select value={values.defaultCurrency} onValueChange={setField("defaultCurrency")} disabled={submitting}>
+  1692→                <SelectTrigger className="w-full" aria-label="Pilih mata uang default">
+  1693→                  <SelectValue placeholder="Pilih mata uang" />
+  1694→                </SelectTrigger>
+  1695→                <SelectContent>
+  1696→                  {CURRENCY_OPTIONS.map((c) => (
+  1697→                    <SelectItem key={c.value} value={c.value}>
+  1698→                      {c.label}
+  1699→                    </SelectItem>
+  1700→                  ))}
+  1701→                </SelectContent>
+  1702→              </Select>
+  1703→            </FormField>
+  1704→          </div>
+  1705→          <DialogFooter>
+  1706→            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+  1707→              Batal
+  1708→            </Button>
+  1709→            <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={submitting}>
+  1710→              {submitting ? <Loader2 className="size-4 animate-spin" /> : <Building2 className="size-4" />}
+  1711→              {submitting ? "Menyimpan…" : "Simpan Perusahaan"}
+  1712→            </Button>
+  1713→          </DialogFooter>
+  1714→        </form>
+  1715→      </DialogContent>
+  1716→    </Dialog>
+  1717→  );
+  1718→}
+  1719→
+  1720→// ---------- Impor CSV (Task 11-a): parser murni & helper ----------
+  1721→
+  1722→const IMPORT_MAX_ROWS = 200;
+  1723→
+  1724→const IMPORT_TEMPLATE = [
+  1725→  "nama,email,whatsapp,perusahaan,jabatan,kota,instagram",
+  1726→  "Hendra Wijaya,hendra@nusantaranet.com,,PT Nusantara Digital Raya,Direktur Digital,Jakarta,@hendra.wjy",
+  1727→  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Owner,Surabaya,",
+  1728→  "Budi Santoso,,+6281398765432,CV Karya Mandiri,Creative Director,Surabaya,",
+  1729→  "Tanpa Kontak,,,PT Contoh Saja,,",
+  1730→].join("\n");
+  1731→
+  1732→const IMPORT_FIELD_ORDER: readonly (keyof ImportRowValues)[] = [
+  1733→  "fullName",
+  1734→  "email",
+  1735→  "whatsapp",
+  1736→  "phone",
+  1737→  "company",
+  1738→  "position",
+  1739→  "country",
+  1740→  "city",
+  1741→  "instagram",
+  1742→  "facebook",
+  1743→  "tiktok",
+  1744→];
+  1745→
+  1746→const IMPORT_HEADER_SYNONYMS: Record<string, keyof ImportRowValues> = {
+  1747→  nama: "fullName",
+  1748→  name: "fullName",
+  1749→  fullname: "fullName",
+  1750→  email: "email",
+  1751→  whatsapp: "whatsapp",
+  1752→  wa: "whatsapp",
+  1753→  telepon: "phone",
+  1754→  telp: "phone",
+  1755→  phone: "phone",
+  1756→  perusahaan: "company",
+  1757→  company: "company",
+  1758→  jabatan: "position",
+  1759→  position: "position",
+  1760→  negara: "country",
+  1761→  country: "country",
+  1762→  kota: "city",
+  1763→  city: "city",
+  1764→  instagram: "instagram",
+  1765→  ig: "instagram",
+  1766→  instagram_handle: "instagram",
+  1767→  handle_ig: "instagram",
+  1768→  facebook: "facebook",
+  1769→  fb: "facebook",
+  1770→  facebook_url: "facebook",
+  1771→  tiktok: "tiktok",
+  1772→  tt: "tiktok",
+  1773→};
+  1774→
+  1775→function emptyImportRow(): ImportRowValues {
+  1776→  return {
+  1777→    fullName: "",
+  1778→    email: "",
+  1779→    whatsapp: "",
+  1780→    phone: "",
+  1781→    company: "",
+  1782→    position: "",
+  1783→    country: "",
+  1784→    city: "",
+  1785→    instagram: "",
+  1786→    facebook: "",
+  1787→    tiktok: "",
+  1788→  };
+  1789→}
+  1790→
+  1791→function isHeaderRow(cells: string[]): boolean {
+  1792→  return cells.some((c) => ["nama", "name", "email", "whatsapp"].includes(c.trim().toLowerCase()));
+  1793→}
+  1794→
+  1795→/** Deteksi separator dari baris pertama: titik koma (hasil ekspor Excel locale Indonesia) atau koma. */
+  1796→function detectCsvSeparator(firstLine: string): string {
+  1797→  const semis = (firstLine.match(/;/g) ?? []).length;
+  1798→  const commas = (firstLine.match(/,/g) ?? []).length;
+  1799→  return semis > commas ? ";" : ",";
+  1800→}
+  1801→
+  1802→/** Parser CSV murni (tanpa dep): quoted field dengan escape "", \r\n/\n, separator koma atau titik koma. */
+  1803→function parseCsv(text: string): string[][] {
+  1804→  const raw = text.replace(/^\uFEFF/, "").trim();
+  1805→  if (!raw) return [];
+  1806→  const firstNewline = raw.search(/\r?\n/);
+  1807→  const sep = detectCsvSeparator(firstNewline === -1 ? raw : raw.slice(0, firstNewline));
+  1808→
+  1809→  const rows: string[][] = [];
+  1810→  let row: string[] = [];
+  1811→  let field = "";
+  1812→  let inQuotes = false;
+  1813→
+  1814→  for (let i = 0; i < raw.length; i++) {
+  1815→    const ch = raw[i];
+  1816→    if (inQuotes) {
+  1817→      if (ch === '"') {
+  1818→        if (raw[i + 1] === '"') {
+  1819→          field += '"';
+  1820→          i++;
+  1821→        } else {
+  1822→          inQuotes = false;
+  1823→        }
+  1824→      } else {
+  1825→        field += ch;
+  1826→      }
+  1827→    } else if (ch === '"') {
+  1828→      inQuotes = true;
+  1829→    } else if (ch === sep) {
+  1830→      row.push(field);
+  1831→      field = "";
+  1832→    } else if (ch === "\n" || ch === "\r") {
+  1833→      if (ch === "\r" && raw[i + 1] === "\n") i++;
+  1834→      row.push(field);
+  1835→      field = "";
+  1836→      rows.push(row);
+  1837→      row = [];
+  1838→    } else {
+  1839→      field += ch;
+  1840→    }
+  1841→  }
+  1842→  row.push(field);
+  1843→  if (row.length > 1 || row[0] !== "") rows.push(row);
+  1844→
+  1845→  // Lewati baris yang seluruh selnya kosong.
+  1846→  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+  1847→}
+  1848→
+  1849→/** Petakan baris hasil parse ke bentuk API: via header sinonim, atau posisi kolom bila tanpa header. */
+  1850→function mapCsvRows(rows: string[][]): ImportRowValues[] {
+  1851→  if (rows.length === 0) return [];
+  1852→  const header = isHeaderRow(rows[0]);
+  1853→  const cols = header
+  1854→    ? rows[0].map((c) => IMPORT_HEADER_SYNONYMS[c.trim().toLowerCase()] ?? null)
+  1855→    : IMPORT_FIELD_ORDER;
+  1856→  const body = header ? rows.slice(1) : rows;
+  1857→  return body.map((cells) => {
+  1858→    const out = emptyImportRow();
+  1859→    cols.forEach((key, colIdx) => {
+  1860→      if (key) out[key] = (cells[colIdx] ?? "").trim();
+  1861→    });
+  1862→    return out;
+  1863→  });
+  1864→}
+  1865→
+  1866→function importActionBorderClass(action: ImportPreviewRowDTO["action"]): string {
+  1867→  if (action === "auto_create") return "border-l-emerald-500";
+  1868→  if (action === "review") return "border-l-amber-500";
+  1869→  return "border-l-rose-500";
+  1870→}
+  1871→
+  1872→// ---------- Dialog: Impor CSV (3 langkah) ----------
+  1873→
+  1874→function ImportCsvDialog({
+  1875→  open,
+  1876→  onOpenChange,
+  1877→  onImported,
+  1878→}: {
+  1879→  open: boolean;
+  1880→  onOpenChange: (open: boolean) => void;
+  1881→  onImported: () => void;
+  1882→}) {
+  1883→  const user = useCrmStore((s) => s.user);
+  1884→  const [step, setStep] = useState<"input" | "review" | "done">("input");
+  1885→  const [csvText, setCsvText] = useState("");
+  1886→  const [fileName, setFileName] = useState<string | null>(null);
+  1887→  const [preview, setPreview] = useState<ImportPreviewResponseDTO | null>(null);
+  1888→  const [decisions, setDecisions] = useState<Record<string, string>>({});
+  1889→  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  1890→  const [analyzing, setAnalyzing] = useState(false);
+  1891→  const [committing, setCommitting] = useState(false);
+  1892→  const [commitResult, setCommitResult] = useState<ImportCommitResponseDTO | null>(null);
+  1893→
+  1894→  useEffect(() => {
+  1895→    if (open) {
+  1896→      setStep("input");
+  1897→      setCsvText("");
+  1898→      setFileName(null);
+  1899→      setPreview(null);
+  1900→      setDecisions({});
+  1901→      setExpanded({});
+  1902→      setAnalyzing(false);
+  1903→      setCommitting(false);
+  1904→      setCommitResult(null);
+  1905→    }
+  1906→  }, [open]);
+  1907→
+  1908→  const parsedRows = useMemo(() => mapCsvRows(parseCsv(csvText)), [csvText]);
+  1909→  const overLimit = parsedRows.length > IMPORT_MAX_ROWS;
+  1910→
+  1911→  function handleFile(e: ChangeEvent<HTMLInputElement>) {
+  1912→    const file = e.target.files?.[0];
+  1913→    if (!file) return;
+  1914→    setFileName(file.name);
+  1915→    const reader = new FileReader();
+  1916→    reader.onload = () => {
+  1917→      setCsvText(typeof reader.result === "string" ? reader.result : "");
+  1918→    };
+  1919→    reader.onerror = () => toast.error("Gagal membaca file CSV");
+  1920→    reader.readAsText(file);
+  1921→    e.target.value = ""; // agar file yang sama bisa diunggah ulang
+  1922→  }
+  1923→
+  1924→  async function analyze() {
+  1925→    if (parsedRows.length === 0) {
+  1926→      toast.error("Tidak ada baris untuk dianalisis — unggah file atau tempel data CSV");
+  1927→      return;
+  1928→    }
+  1929→    if (overLimit) {
+  1930→      toast.error(`Maksimal ${IMPORT_MAX_ROWS} baris per impor (terdeteksi ${parsedRows.length})`);
+  1931→      return;
+  1932→    }
+  1933→    setAnalyzing(true);
+  1934→    try {
+  1935→      const res = await api.importContacts({
+  1936→        rows: parsedRows,
+  1937→        commit: false,
+  1938→        actorName: user?.name ?? "System",
+  1939→        actorRole: user?.role ?? "system",
+  1940→      });
+  1941→      const data = res as ImportPreviewResponseDTO;
+  1942→      const nextDecisions: Record<string, string> = {};
+  1943→      const nextExpanded: Record<string, boolean> = {};
+  1944→      for (const row of data.preview) {
+  1945→        nextDecisions[String(row.index)] = row.status === "invalid" ? "skip" : row.suggested;
+  1946→        nextExpanded[String(row.index)] = row.action === "review";
+  1947→      }
+  1948→      setDecisions(nextDecisions);
+  1949→      setExpanded(nextExpanded);
+  1950→      setPreview(data);
+  1951→      setStep("review");
+  1952→    } catch (err) {
+  1953→      toast.error(err instanceof Error ? err.message : "Gagal menganalisis data impor");
+  1954→    } finally {
+  1955→      setAnalyzing(false);
+  1956→    }
+  1957→  }
+  1958→
+  1959→  function setDecision(index: number, value: string) {
+  1960→    setDecisions((d) => ({ ...d, [String(index)]: value }));
+  1961→  }
+  1962→
+  1963→  function toggleExpanded(index: number) {
+  1964→    setExpanded((e) => ({ ...e, [String(index)]: !e[String(index)] }));
+  1965→  }
+  1966→
+  1967→  const importCount = preview
+  1968→    ? preview.preview.filter((r) => (decisions[String(r.index)] ?? r.suggested) !== "skip").length
+  1969→    : 0;
+  1970→
+  1971→  async function commit() {
+  1972→    if (!preview) return;
+  1973→    setCommitting(true);
+  1974→    try {
+  1975→      const res = await api.importContacts({
+  1976→        rows: parsedRows,
+  1977→        decisions,
+  1978→        commit: true,
+  1979→        actorName: user?.name ?? "System",
+  1980→        actorRole: user?.role ?? "system",
+  1981→      });
+  1982→      const data = res as ImportCommitResponseDTO;
+  1983→      setCommitResult(data);
+  1984→      setStep("done");
+  1985→      if (data.summary.created + data.summary.linked > 0) {
+  1986→        toast.success(`Impor selesai — ${data.summary.created} baru, ${data.summary.linked} digabung`);
+  1987→      } else {
+  1988→        toast.info("Impor selesai — tidak ada kontak yang dibuat atau digabung");
+  1989→      }
+  1990→      onImported(); // segarkan daftar kontak di belakang dialog
+  1991→    } catch (err) {
+  1992→      toast.error(err instanceof Error ? err.message : "Gagal mengimpor kontak");
+  1993→    } finally {
+  1994→      setCommitting(false);
+  1995→    }
+  1996→  }
+  1997→
+  1998→  function backToInput() {
+  1999→    setPreview(null);
+  2000→    setDecisions({});
+
+[showing lines 1-2000 of 3187; use offset=2001 with limit to continue reading]

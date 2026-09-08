@@ -1,0 +1,654 @@
+   787→                    {connectedCount === CHANNEL_TYPE_KEYS.length ? (
+   788→                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+   789→                        <BadgeCheck className="h-3 w-3" aria-hidden /> Semua kanal utama terhubung
+   790→                      </Badge>
+   791→                    ) : null}
+   792→                  </div>
+   793→                  <div
+   794→                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100"
+   795→                    role="progressbar"
+   796→                    aria-label="Kanal terhubung"
+   797→                    aria-valuemin={0}
+   798→                    aria-valuemax={CHANNEL_TYPE_KEYS.length}
+   799→                    aria-valuenow={connectedCount}
+   800→                  >
+   801→                    <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${connectedPct}%` }} />
+   802→                  </div>
+   803→                  <p className="mt-1.5 text-[11px] text-zinc-500">
+   804→                    Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, gunakan Setup berpandu di modul Kanal.
+   805→                  </p>
+   806→                </div>
+   807→
+   808→                {/* Semua tipe kanal + status koneksi */}
+   809→                {CHANNEL_TYPE_KEYS.map((key) => {
+   810→                  const meta = CHANNEL_TYPES[key];
+   811→                  const Icon = CHANNEL_ICON[key] ?? Link2;
+   812→                  const color = CHANNEL_COLOR[key] ?? "#52525b";
+   813→                  const label = channelLabel(key);
+   814→                  const cfg = cfgByChannel.get(key);
+   815→                  return (
+   816→                    <div key={key} className="rounded-xl border bg-white p-3.5">
+   817→                      <div className="flex flex-wrap items-center gap-3">
+   818→                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${color}1a` }} aria-hidden>
+   819→                          <Icon className="h-4.5 w-4.5" style={{ color }} />
+   820→                        </span>
+   821→                        <div className="min-w-0 flex-1">
+   822→                          <p className="flex items-center gap-1.5 truncate text-sm font-medium text-zinc-900">
+   823→                            <span className="truncate">{label}</span>
+   824→                            {cfg?.isDemo ? <Badge variant="outline" className="shrink-0 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Demo</Badge> : null}
+   825→                          </p>
+   826→                          <p className="truncate font-mono text-xs text-zinc-500">
+   827→                            {cfg?.accountRef ?? (meta?.accountRefPlaceholder ? `mis. ${meta.accountRefPlaceholder}` : "—")}
+   828→                          </p>
+   829→                          {cfg?.status === "error" && cfg.statusNote ? (
+   830→                            <p className="truncate text-[11px] text-amber-700">{cfg.statusNote}</p>
+   831→                          ) : null}
+   832→                          {cfg ? (
+   833→                            <p className="truncate text-[11px] text-zinc-400">
+   834→                              {cfg.lastTestedAt ? `Diuji ${fmtWhen(cfg.lastTestedAt)}` : cfg.connectedAt ? `Terhubung sejak ${fmtWhen(cfg.connectedAt)}` : "—"}
+   835→                            </p>
+   836→                          ) : null}
+   837→                        </div>
+   838→                        {cfg ? (
+   839→                          cfg.status === "connected" ? (
+   840→                            <Badge variant="outline" className="shrink-0 border-transparent bg-emerald-50 text-emerald-700">
+   841→                              <BadgeCheck className="h-3 w-3" aria-hidden /> Terhubung
+   842→                            </Badge>
+   843→                          ) : cfg.status === "error" ? (
+   844→                            <Badge variant="outline" className="shrink-0 border-transparent bg-amber-50 text-amber-700">
+   845→                              <TriangleAlert className="h-3 w-3" aria-hidden /> Error
+   846→                            </Badge>
+   847→                          ) : (
+   848→                            <Badge variant="outline" className="shrink-0 border-transparent bg-zinc-100 text-zinc-600">Terputus</Badge>
+   849→                          )
+   850→                        ) : (
+   851→                          <Badge variant="outline" className="shrink-0 border-zinc-200 bg-zinc-50 text-zinc-500">Belum terhubung</Badge>
+   852→                        )}
+   853→                        <div className="flex shrink-0 items-center gap-2">
+   854→                          {cfg ? (
+   855→                            <>
+   856→                              {cfg.status !== "connected" ? (
+   857→                                <Button
+   858→                                  type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+   859→                                  disabled={reconnectingId !== null || connectingKey !== null}
+   860→                                  onClick={() => void reconnectChannel(cfg.id, label)}
+   861→                                >
+   862→                                  {reconnectingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+   863→                                  Sambungkan ulang
+   864→                                </Button>
+   865→                              ) : null}
+   866→                              <Button
+   867→                                type="button" size="sm" variant="ghost" className="h-9 text-zinc-500 hover:text-rose-600"
+   868→                                onClick={() => void disconnectChannel(cfg.id, cfg.displayName)}
+   869→                              >
+   870→                                Putuskan
+   871→                              </Button>
+   872→                            </>
+   873→                          ) : (
+   874→                            <Button
+   875→                              type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+   876→                              disabled={connectingKey !== null || reconnectingId !== null}
+   877→                              onClick={() => void connectDemo(key)}
+   878→                            >
+   879→                              {connectingKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
+   880→                              Hubungkan (Demo)
+   881→                            </Button>
+   882→                          )}
+   883→                        </div>
+   884→                      </div>
+   885→                      {!cfg ? (
+   886→                        <p className="mt-2 border-t pt-2 text-[11px] text-zinc-400">Setup kredensial nyata via modul Kanal.</p>
+   887→                      ) : null}
+   888→                    </div>
+   889→                  );
+   890→                })}
+   891→              </div>
+   892→            )}
+   893→          </TabsContent>
+   894→        </Tabs>
+   895→      </DialogContent>
+   896→    </Dialog>
+   897→  );
+   898→}
+   899→
+   900→// ============ BrandLogo (dipakai lintas modul) ============
+   901→export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "color">; size?: "sm" | "md" | "lg" }) {
+   902→  const dim = size === "sm" ? "h-8 w-8 text-sm" : size === "lg" ? "h-14 w-14 text-2xl" : "h-10 w-10 text-lg";
+   903→  return (
+   904→    <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-white`} aria-hidden>
+   905→      {brand.logoUrl ? (
+   906→         
+   907→        <img src={brand.logoUrl} alt="" className="max-h-full max-w-full object-contain p-1" />
+   908→      ) : (
+   909→        <span className="font-bold" style={{ color: brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
+   910→      )}
+   911→    </span>
+   912→  );
+   913→}
+   914→
+   915→// ============ Editor katalog layanan & workflow ============
+   916→
+   917→function CatalogEditor({
+   918→  catalog, busyKey, onAddCategory, onAddService, onAddStage, onToggleMilestone, onRemove, onSaveCost,
+   919→  onEditService, onEditStage,
+   920→}: {
+   921→  catalog: BrandServiceCatalog;
+   922→  busyKey: string | null;
+   923→  onAddCategory: (name: string) => Promise<boolean>;
+   924→  onAddService: (categoryId: string, name: string, unit: string, basePrice: string) => Promise<boolean>;
+   925→  onAddStage: (serviceId: string, phase: string, name: string, isMilestone: boolean) => Promise<boolean>;
+   926→  onToggleMilestone: (stage: { id: string; isMilestone: boolean; name: string }, serviceId: string) => Promise<boolean>;
+   927→  onRemove: (kind: "category" | "service" | "stage", id: string, label: string) => Promise<boolean>;
+   928→  onSaveCost: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+   929→  onEditService: (serviceId: string, name: string, unit: string, basePrice: string) => Promise<boolean>;
+   930→  onEditStage: (stageId: string, serviceId: string, phase: string, name: string) => Promise<boolean>;
+   931→}) {
+   932→  const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
+   933→  const [openSvc, setOpenSvc] = useState<Record<string, boolean>>({});
+   934→  const [newCatName, setNewCatName] = useState("");
+   935→  const [catForms, setCatForms] = useState<Record<string, { name: string; unit: string; price: string }>>({});
+   936→  const [stageForms, setStageForms] = useState<Record<string, { phase: string; name: string; milestone: boolean }>>({});
+   937→  // Ronde 39 — state edit inline layanan & langkah workflow
+   938→  const [svcEdit, setSvcEdit] = useState<Record<string, { name: string; unit: string; price: string }>>({});
+   939→  const [stgEdit, setStgEdit] = useState<Record<string, { phase: string; name: string }>>({});
+   940→
+   941→  const servicesByCat = useMemo(() => {
+   942→    const map = new Map<string | null, ServiceDTO[]>();
+   943→    for (const s of catalog.services) {
+   944→      const key = s.categoryId ?? null;
+   945→      const list = map.get(key) ?? [];
+   946→      list.push(s);
+   947→      map.set(key, list);
+   948→    }
+   949→    return map;
+   950→  }, [catalog.services]);
+   951→
+   952→  const uncategorized = servicesByCat.get(null) ?? [];
+   953→
+   954→  return (
+   955→    <div className="space-y-4">
+   956→      <p className="text-xs leading-relaxed text-zinc-500">
+   957→        Kategori & layanan khas brand ini. Tiap layanan punya <span className="font-medium text-zinc-700">workflow produksi</span> sendiri
+   958→        (fase → langkah, sebagian ditandai <span className="font-medium text-zinc-700">milestone</span> yang menjadi tahapan project).
+   959→      </p>
+   960→
+   961→      {catalog.categories.map((cat: ServiceCategoryDTO) => {
+   962→        const svcs = servicesByCat.get(cat.id) ?? [];
+   963→        const open = openCat[cat.id] ?? true;
+   964→        return (
+   965→          <div key={cat.id} className="overflow-hidden rounded-xl border">
+   966→            <div className="flex items-center gap-2 bg-zinc-50/80 px-4 py-3">
+   967→              <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenCat((m) => ({ ...m, [cat.id]: !open }))}>
+   968→                <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform ${open ? "" : "-rotate-90"}`} aria-hidden />
+   969→                <span className="truncate text-sm font-bold text-zinc-900">{cat.name}</span>
+   970→                <Badge variant="outline" className="border-transparent bg-zinc-200/70 px-1.5 text-[10px] text-zinc-600">{svcs.length} layanan</Badge>
+   971→                {cat.description ? <span className="hidden truncate text-xs text-zinc-500 sm:inline">— {cat.description}</span> : null}
+   972→              </button>
+   973→              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+   974→                aria-label={`Hapus kategori ${cat.name}`} onClick={() => void onRemove("category", cat.id, cat.name)}>
+   975→                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   976→              </Button>
+   977→            </div>
+   978→            {open ? (
+   979→              <div className="divide-y">
+   980→                {svcs.map((svc) => {
+   981→                  const svcOpen = openSvc[svc.id] ?? false;
+   982→                  const form = stageForms[svc.id] ?? { phase: "", name: "", milestone: false };
+   983→                  return (
+   984→                    <div key={svc.id} className="px-4 py-3">
+   985→                      <div className="flex items-start gap-2">
+   986→                        {svcEdit[svc.id] ? (
+   987→                          /* Ronde 39 — mode edit layanan: nama/unit/harga dasar inline */
+   988→                          <div className="min-w-0 flex-1 space-y-2 rounded-lg border border-zinc-300 bg-white p-2.5">
+   989→                            <div className="grid gap-2 sm:grid-cols-[1fr_120px_150px]">
+   990→                              <div className="space-y-1">
+   991→                                <Label className="text-[11px]">Nama layanan</Label>
+   992→                                <Input className="h-8 text-xs" value={svcEdit[svc.id].name}
+   993→                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], name: e.target.value } }))} />
+   994→                              </div>
+   995→                              <div className="space-y-1">
+   996→                                <Label className="text-[11px]">Satuan</Label>
+   997→                                <Input className="h-8 text-xs" value={svcEdit[svc.id].unit} placeholder="mis. video"
+   998→                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], unit: e.target.value } }))} />
+   999→                              </div>
+  1000→                              <div className="space-y-1">
+  1001→                                <Label className="text-[11px]">Harga dasar (Rp)</Label>
+  1002→                                <Input className="h-8 text-xs" inputMode="numeric" value={svcEdit[svc.id].price} placeholder="mis. 25000000"
+  1003→                                  onChange={(e) => setSvcEdit((m) => ({ ...m, [svc.id]: { ...svcEdit[svc.id], price: e.target.value } }))} />
+  1004→                              </div>
+  1005→                            </div>
+  1006→                            <div className="flex justify-end gap-2">
+  1007→                              <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
+  1008→                                onClick={() => setSvcEdit((m) => { const { [svc.id]: _drop, ...rest } = m; return rest; })}>
+  1009→                                Batal
+  1010→                              </Button>
+  1011→                              <Button type="button" size="sm" className="h-7 text-xs"
+  1012→                                disabled={busyKey === `svc-edit:${svc.id}` || !svcEdit[svc.id].name.trim()}
+  1013→                                onClick={() => void onEditService(svc.id, svcEdit[svc.id].name, svcEdit[svc.id].unit, svcEdit[svc.id].price)
+  1014→                                  .then((res) => { if (res) setSvcEdit((m) => { const { [svc.id]: _drop, ...rest } = m; return rest; }); return res; })}>
+  1015→                                {busyKey === `svc-edit:${svc.id}` ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
+  1016→                                Simpan
+  1017→                              </Button>
+  1018→                            </div>
+  1019→                          </div>
+  1020→                        ) : (
+  1021→                          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenSvc((m) => ({ ...m, [svc.id]: !svcOpen }))}>
+  1022→                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${svcOpen ? "" : "-rotate-90"}`} aria-hidden />
+  1023→                            <div className="min-w-0">
+  1024→                              <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
+  1025→                              <p className="text-xs text-zinc-500">
+  1026→                                {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
+  1027→                              </p>
+  1028→                            </div>
+  1029→                          </button>
+  1030→                        )}
+  1031→                        {svcEdit[svc.id] ? null : (
+  1032→                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
+  1033→                            aria-label={`Edit layanan ${svc.name}`}
+  1034→                            onClick={() => setSvcEdit((m) => ({ ...m, [svc.id]: {
+  1035→                              name: svc.name, unit: svc.unit ?? "", price: svc.basePrice != null ? String(svc.basePrice) : "",
+  1036→                            } }))}>
+  1037→                            <Pencil className="h-3.5 w-3.5" aria-hidden />
+  1038→                          </Button>
+  1039→                        )}
+  1040→                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-rose-600"
+  1041→                          aria-label={`Hapus layanan ${svc.name}`} onClick={() => void onRemove("service", svc.id, svc.name)}>
+  1042→                          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+  1043→                        </Button>
+  1044→                      </div>
+  1045→
+  1046→                      {/* Rincian biaya (template harga) — Ronde 29-b */}
+  1047→                      <ServiceCostEditor service={svc} onSave={onSaveCost} />
+  1048→
+  1049→                      {svcOpen ? (
+  1050→                        <div className="mt-3 space-y-2.5 pl-6">
+  1051→                          {/* Workflow */}
+  1052→                          {svc.workflow.length > 0 ? (
+  1053→                            <ol className="space-y-1.5">
+  1054→                              {svc.workflow.map((w, idx) => (
+  1055→                                <li key={w.id} className="rounded-lg border bg-zinc-50/60 px-3 py-2">
+  1056→                                  {stgEdit[w.id] ? (
+  1057→                                    /* Ronde 39 — mode edit langkah: fase + nama inline */
+  1058→                                    <div className="space-y-2">
+  1059→                                      <div className="grid gap-2 sm:grid-cols-[160px_1fr]">
+  1060→                                        <div className="space-y-1">
+  1061→                                          <Label className="text-[11px]">Fase</Label>
+  1062→                                          <Input className="h-8 text-xs" value={stgEdit[w.id].phase} placeholder="mis. Production"
+  1063→                                            onChange={(e) => setStgEdit((m) => ({ ...m, [w.id]: { ...stgEdit[w.id], phase: e.target.value } }))} />
+  1064→                                        </div>
+  1065→                                        <div className="space-y-1">
+  1066→                                          <Label className="text-[11px]">Nama langkah</Label>
+  1067→                                          <Input className="h-8 text-xs" value={stgEdit[w.id].name}
+  1068→                                            onChange={(e) => setStgEdit((m) => ({ ...m, [w.id]: { ...stgEdit[w.id], name: e.target.value } }))} />
+  1069→                                        </div>
+  1070→                                      </div>
+  1071→                                      <div className="flex justify-end gap-2">
+  1072→                                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
+  1073→                                          onClick={() => setStgEdit((m) => { const { [w.id]: _drop, ...rest } = m; return rest; })}>
+  1074→                                          Batal
+  1075→                                        </Button>
+  1076→                                        <Button type="button" size="sm" className="h-7 text-xs"
+  1077→                                          disabled={busyKey === `stg:${svc.id}` || !stgEdit[w.id].name.trim()}
+  1078→                                          onClick={() => void onEditStage(w.id, svc.id, stgEdit[w.id].phase, stgEdit[w.id].name)
+  1079→                                            .then((res) => { if (res) setStgEdit((m) => { const { [w.id]: _drop, ...rest } = m; return rest; }); return res; })}>
+  1080→                                          {busyKey === `stg:${svc.id}` ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
+  1081→                                          Simpan
+  1082→                                        </Button>
+  1083→                                      </div>
+  1084→                                    </div>
+  1085→                                  ) : (
+  1086→                                    <div className="flex items-center gap-2">
+  1087→                                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white" aria-hidden>{idx + 1}</span>
+  1088→                                      <div className="min-w-0 flex-1">
+  1089→                                        <p className="truncate text-xs font-medium text-zinc-800">
+  1090→                                          {w.name}
+  1091→                                          {w.isMilestone ? (
+  1092→                                            <Badge variant="outline" className="ml-1.5 border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">Milestone</Badge>
+  1093→                                          ) : null}
+  1094→                                        </p>
+  1095→                                        <p className="truncate text-[11px] text-zinc-500">{w.phase}</p>
+  1096→                                      </div>
+  1097→                                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
+  1098→                                        aria-label={`Edit langkah ${w.name}`}
+  1099→                                        onClick={() => setStgEdit((m) => ({ ...m, [w.id]: { phase: w.phase, name: w.name } }))}>
+  1100→                                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+  1101→                                      </Button>
+  1102→                                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
+  1103→                                        disabled={busyKey === `stg:${svc.id}`}
+  1104→                                        onClick={() => void onToggleMilestone(w, svc.id)}>
+  1105→                                        {w.isMilestone ? "Lepas" : "Jadikan milestone"}
+  1106→                                      </Button>
+  1107→                                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+  1108→                                        aria-label={`Hapus langkah ${w.name}`} onClick={() => void onRemove("stage", w.id, `${w.phase} · ${w.name}`)}>
+  1109→                                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+  1110→                                      </Button>
+  1111→                                    </div>
+  1112→                                  )}
+  1113→                                </li>
+  1114→                              ))}
+  1115→                            </ol>
+  1116→                          ) : (
+  1117→                            <p className="text-xs italic text-zinc-400">Belum ada workflow — tambahkan fase produksi di bawah.</p>
+  1118→                          )}
+  1119→
+  1120→                          {/* Form tambah langkah */}
+  1121→                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed p-2.5">
+  1122→                            <div className="w-32 space-y-1">
+  1123→                              <Label className="text-[11px]">Fase</Label>
+  1124→                              <Input className="h-8 text-xs" value={form.phase} placeholder="mis. Production"
+  1125→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, phase: e.target.value } }))} />
+  1126→                            </div>
+  1127→                            <div className="min-w-[160px] flex-1 space-y-1">
+  1128→                              <Label className="text-[11px]">Langkah</Label>
+  1129→                              <Input className="h-8 text-xs" value={form.name} placeholder="mis. Creative Concept & Story Board"
+  1130→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, name: e.target.value } }))} />
+  1131→                            </div>
+  1132→                            <label className="flex items-center gap-1.5 pb-2 text-xs text-zinc-600">
+  1133→                              <input type="checkbox" className="accent-zinc-900" checked={form.milestone}
+  1134→                                onChange={(e) => setStageForms((m) => ({ ...m, [svc.id]: { ...form, milestone: e.target.checked } }))} />
+  1135→                              Milestone
+  1136→                            </label>
+  1137→                            <Button type="button" size="sm" variant="outline" className="h-8"
+  1138→                              disabled={busyKey === `stg:${svc.id}` || !form.name.trim()}
+  1139→                              onClick={() => void onAddStage(svc.id, form.phase, form.name, form.milestone)
+  1140→                                .then(() => setStageForms((m) => ({ ...m, [svc.id]: { phase: "", name: "", milestone: false } })))}>
+  1141→                              <Plus className="h-3.5 w-3.5" aria-hidden /> Langkah
+  1142→                            </Button>
+  1143→                          </div>
+  1144→                        </div>
+  1145→                      ) : null}
+  1146→                    </div>
+  1147→                  );
+  1148→                })}
+  1149→
+  1150→                {/* Form tambah layanan */}
+  1151→                <ServiceAddForm
+  1152→                  busy={busyKey === `svc:${cat.id}`}
+  1153→                  form={catForms[cat.id] ?? { name: "", unit: "", price: "" }}
+  1154→                  onChange={(form) => setCatForms((m) => ({ ...m, [cat.id]: form }))}
+  1155→                  onSubmit={(f) =>
+  1156→                    onAddService(cat.id, f.name, f.unit, f.price)
+  1157→                      .then((res) => {
+  1158→                        if (res) setCatForms((m) => ({ ...m, [cat.id]: { name: "", unit: "", price: "" } }));
+  1159→                        return res;
+  1160→                      })
+  1161→                  }
+  1162→                />
+  1163→              </div>
+  1164→            ) : null}
+  1165→          </div>
+  1166→        );
+  1167→      })}
+  1168→
+  1169→      {/* Tanpa kategori */}
+  1170→      {uncategorized.length > 0 ? (
+  1171→        <div className="rounded-xl border border-dashed p-3">
+  1172→          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Tanpa kategori</p>
+  1173→          <div className="flex flex-wrap gap-1.5">
+  1174→            {uncategorized.map((s) => (
+  1175→              <span key={s.id} className="group inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs text-zinc-600">
+  1176→                {s.name}
+  1177→                <button type="button" className="text-zinc-300 hover:text-rose-600" aria-label={`Hapus ${s.name}`} onClick={() => void onRemove("service", s.id, s.name)}>
+  1178→                  <X className="h-3 w-3" aria-hidden />
+  1179→                </button>
+  1180→              </span>
+  1181→            ))}
+  1182→          </div>
+  1183→        </div>
+  1184→      ) : null}
+  1185→
+  1186→      {/* Form kategori baru */}
+  1187→      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-dashed p-3.5">
+  1188→        <div className="min-w-[180px] flex-1 space-y-1">
+  1189→          <Label className="text-xs">Kategori layanan baru</Label>
+  1190→          <Input className="h-9" value={newCatName} placeholder="mis. Animasi 3D"
+  1191→            onChange={(e) => setNewCatName(e.target.value)} />
+  1192→        </div>
+  1193→        <Button type="button" size="sm" className="h-9" disabled={busyKey === "cat:new" || !newCatName.trim()}
+  1194→          onClick={() => void onAddCategory(newCatName).then((res) => { if (res) setNewCatName(""); return res; })}>
+  1195→          <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah kategori
+  1196→        </Button>
+  1197→      </div>
+  1198→    </div>
+  1199→  );
+  1200→}
+  1201→
+  1202→function ServiceAddForm({
+  1203→  busy, form, onChange, onSubmit,
+  1204→}: {
+  1205→  busy: boolean;
+  1206→  form: { name: string; unit: string; price: string };
+  1207→  onChange: (form: { name: string; unit: string; price: string }) => void;
+  1208→  onSubmit: (form: { name: string; unit: string; price: string }) => Promise<boolean>;
+  1209→}) {
+  1210→  return (
+  1211→    <div className="flex flex-wrap items-end gap-2 bg-zinc-50/60 px-4 py-3">
+  1212→      <div className="min-w-[160px] flex-1 space-y-1">
+  1213→        <Label className="text-[11px]">Layanan baru</Label>
+  1214→        <Input className="h-8 text-xs" value={form.name} placeholder="mis. Pembuatan Video Pembelajaran 3D"
+  1215→          onChange={(e) => onChange({ ...form, name: e.target.value })} />
+  1216→      </div>
+  1217→      <div className="w-24 space-y-1">
+  1218→        <Label className="text-[11px]">Satuan</Label>
+  1219→        <Input className="h-8 text-xs" value={form.unit} placeholder="video"
+  1220→          onChange={(e) => onChange({ ...form, unit: e.target.value })} />
+  1221→      </div>
+  1222→      <div className="w-32 space-y-1">
+  1223→        <Label className="text-[11px]">Harga acuan</Label>
+  1224→        <Input className="h-8 text-xs" value={form.price} placeholder="35000000" inputMode="numeric"
+  1225→          onChange={(e) => onChange({ ...form, price: e.target.value })} />
+  1226→      </div>
+  1227→      <Button type="button" size="sm" variant="outline" className="h-8" disabled={busy || !form.name.trim()} onClick={() => void onSubmit(form)}>
+  1228→        <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah
+  1229→      </Button>
+  1230→    </div>
+  1231→  );
+  1232→}
+  1233→
+  1234→// ============ Rincian biaya per layanan (template harga marketing) — Ronde 29-b ============
+  1235→
+  1236→interface CostDraftItem {
+  1237→  name: string;
+  1238→  /** String agar input bebas mengetik angka (separator diabaikan saat parse). */
+  1239→  amount: string;
+  1240→  note?: string | null;
+  1241→}
+  1242→
+  1243→function costDraftFromService(svc: ServiceDTO): CostDraftItem[] {
+  1244→  return (svc.costItems ?? []).map((it) => ({ name: it.name, amount: String(it.amount ?? 0), note: it.note ?? null }));
+  1245→}
+  1246→
+  1247→/** Parse nominal "28.000.000" / "28000000" → number (≥0); kosong/non-angka → 0. */
+  1248→function parseAmount(raw: string): number {
+  1249→  const digits = raw.replace(/[^\d]/g, "");
+  1250→  return digits === "" ? 0 : Number(digits);
+  1251→}
+  1252→
+  1253→/** Saran harga = total biaya × (1 + margin%) dibulatkan ke 100 ribu terdekat. */
+  1254→function suggestedPriceOf(total: number, marginPct: number): number {
+  1255→  return Math.round((total * (1 + marginPct / 100)) / 100_000) * 100_000;
+  1256→}
+  1257→
+  1258→/**
+  1259→ * Blok "Rincian Biaya" per layanan — expand/collapse dgn state LOKAL
+  1260→ * (mengetik di sini tidak me-render ulang seluruh dialog).
+  1261→ */
+  1262→function ServiceCostEditor({
+  1263→  service,
+  1264→  onSave,
+  1265→}: {
+  1266→  service: ServiceDTO;
+  1267→  onSave: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+  1268→}) {
+  1269→  const [open, setOpen] = useState(false);
+  1270→  const [items, setItems] = useState<CostDraftItem[]>(() => costDraftFromService(service));
+  1271→  const [margin, setMargin] = useState<string>(() => (service.targetMarginPct != null ? String(service.targetMarginPct) : "30"));
+  1272→  const [saving, setSaving] = useState(false);
+  1273→
+  1274→  // Sinkronkan draf saat data server berubah (setelah simpan / katalog dimuat ulang)
+  1275→  useEffect(() => {
+  1276→    setItems(costDraftFromService(service));
+  1277→    setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
+  1278→  }, [service]);
+  1279→
+  1280→  const hasItems = (service.costItems ?? []).length > 0;
+  1281→  const serverTotal = service.costTotal ?? (service.costItems ?? []).reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  1282→  const serverSaran = service.suggestedPrice ?? suggestedPriceOf(serverTotal, service.targetMarginPct ?? 30);
+  1283→
+  1284→  const parsed = useMemo(
+  1285→    () => items.map((it) => ({ name: it.name.trim(), amount: parseAmount(it.amount), note: it.note ?? null })),
+  1286→    [items]
+  1287→  );
+  1288→  const invalid = parsed.some((it) => it.name === "" || !Number.isFinite(it.amount) || it.amount < 0);
+  1289→  const total = parsed.reduce((sum, it) => sum + it.amount, 0);
+  1290→  const marginNum = margin.trim() === "" ? 30 : Number(margin.replace(",", "."));
+  1291→  const marginPct = Number.isFinite(marginNum) ? Math.min(95, Math.max(0, marginNum)) : 30;
+  1292→  const saran = suggestedPriceOf(total, marginPct);
+  1293→  const basePrice = service.basePrice ?? null;
+  1294→
+  1295→  function addItem() {
+  1296→    setItems((m) => [...m, { name: "", amount: "", note: null }]);
+  1297→  }
+  1298→
+  1299→  function resetDraft() {
+  1300→    setItems(costDraftFromService(service));
+  1301→    setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
+  1302→  }
+  1303→
+  1304→  async function save() {
+  1305→    if (invalid || saving) return;
+  1306→    setSaving(true);
+  1307→    try {
+  1308→      const payload: ServiceCostItem[] = parsed.map((it) => ({ name: it.name, amount: it.amount, note: it.note }));
+  1309→      await onSave(service.id, payload, margin.trim() === "" ? null : marginPct);
+  1310→      // Sukses → katalog dimuat ulang, draf direset otomatis via useEffect [service]
+  1311→    } finally {
+  1312→      setSaving(false);
+  1313→    }
+  1314→  }
+  1315→
+  1316→  return (
+  1317→    <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50/60">
+  1318→      <div className="flex items-center gap-1.5 px-2.5 py-2">
+  1319→        <button
+  1320→          type="button"
+  1321→          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+  1322→          aria-label={`Rincian biaya ${service.name}`}
+  1323→          aria-expanded={open}
+  1324→          onClick={() => setOpen((o) => !o)}
+  1325→        >
+  1326→          {open ? (
+  1327→            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+  1328→          ) : (
+  1329→            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+  1330→          )}
+  1331→          <span className="shrink-0 text-xs font-semibold text-zinc-700">Rincian Biaya</span>
+  1332→          {!open ? (
+  1333→            hasItems ? (
+  1334→              <span className="min-w-0 truncate text-[11px] text-zinc-500">
+  1335→                {service.costItems?.length} butir · Total biaya {fmtIDR(serverTotal)} · Saran harga {fmtIDR(serverSaran)}
+  1336→              </span>
+  1337→            ) : (
+  1338→              <span className="text-[11px] italic text-zinc-400">Belum ada rincian biaya</span>
+  1339→            )
+  1340→          ) : null}
+  1341→        </button>
+  1342→        {!open && !hasItems ? (
+  1343→          <Button
+  1344→            type="button" variant="outline" className="h-7 shrink-0 px-2 text-[11px]"
+  1345→            onClick={() => { setOpen(true); if (items.length === 0) addItem(); }}
+  1346→          >
+  1347→            <Plus className="h-3 w-3" aria-hidden /> Mulai isi
+  1348→          </Button>
+  1349→        ) : null}
+  1350→      </div>
+  1351→
+  1352→      {open ? (
+  1353→        <div className="space-y-2.5 border-t px-3 py-3">
+  1354→          {items.length > 0 ? (
+  1355→            <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+  1356→              {items.map((it, idx) => (
+  1357→                <div key={idx}>
+  1358→                  <div className="flex items-center gap-1.5">
+  1359→                    <Input
+  1360→                      aria-label={`Nama butir biaya ${idx + 1}`}
+  1361→                      className="h-8 min-w-0 flex-1 text-xs"
+  1362→                      placeholder="mis. Talenta / Sewa alat"
+  1363→                      value={it.name}
+  1364→                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, name: e.target.value } : row)))}
+  1365→                    />
+  1366→                    <Input
+  1367→                      aria-label={`Nominal butir biaya ${idx + 1} (rupiah)`}
+  1368→                      className="h-8 w-32 shrink-0 text-right font-mono text-xs"
+  1369→                      inputMode="numeric"
+  1370→                      placeholder="0"
+  1371→                      value={it.amount}
+  1372→                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, amount: e.target.value } : row)))}
+  1373→                    />
+  1374→                    <Button
+  1375→                      type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
+  1376→                      aria-label={`Hapus butir ${it.name.trim() || idx + 1}`}
+  1377→                      onClick={() => setItems((m) => m.filter((_, i) => i !== idx))}
+  1378→                    >
+  1379→                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+  1380→                    </Button>
+  1381→                  </div>
+  1382→                  {it.note ? <p className="pl-1 text-[11px] italic text-zinc-400">{it.note}</p> : null}
+  1383→                </div>
+  1384→              ))}
+  1385→            </div>
+  1386→          ) : (
+  1387→            <p className="text-xs italic text-zinc-400">Belum ada rincian biaya — tambahkan butir komponen biaya (talenta, sewa alat, transport, dsb.).</p>
+  1388→          )}
+  1389→
+  1390→          <Button type="button" variant="outline" className="h-8" onClick={addItem}>
+  1391→            <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah butir
+  1392→          </Button>
+  1393→
+  1394→          <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg border border-dashed bg-white px-3 py-2.5">
+  1395→            <div>
+  1396→              <p className="text-[11px] text-zinc-500">Total biaya</p>
+  1397→              <p className="text-sm font-bold text-zinc-900">{fmtIDR(total)}</p>
+  1398→            </div>
+  1399→            <div className="space-y-1">
+  1400→              <Label htmlFor={`cost-margin-${service.id}`} className="text-[11px]">Margin target %</Label>
+  1401→              <Input
+  1402→                id={`cost-margin-${service.id}`}
+  1403→                className="h-8 w-20 text-xs"
+  1404→                inputMode="decimal"
+  1405→                placeholder="30"
+  1406→                value={margin}
+  1407→                onChange={(e) => setMargin(e.target.value)}
+  1408→              />
+  1409→            </div>
+  1410→            <div className="text-right">
+  1411→              <p className="text-[11px] text-zinc-500">Saran harga</p>
+  1412→              <p className="text-sm font-bold text-orange-600">{fmtIDR(saran)}</p>
+  1413→            </div>
+  1414→          </div>
+  1415→
+  1416→          <div className="flex flex-wrap items-center gap-2">
+  1417→            {basePrice != null ? (
+  1418→              basePrice < saran ? (
+  1419→                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">Harga acuan di bawah saran</Badge>
+  1420→              ) : (
+  1421→                <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">Sesuai saran</Badge>
+  1422→              )
+  1423→            ) : null}
+  1424→            {basePrice != null ? <span className="text-[11px] text-zinc-500">Harga acuan: {fmtIDR(basePrice)}</span> : null}
+  1425→            <div className="flex-1" />
+  1426→            {invalid ? <p className="text-[11px] text-rose-600">Nama butir wajib diisi &amp; nominal ≥ 0.</p> : null}
+  1427→            <Button type="button" variant="ghost" className="h-8" disabled={saving} onClick={resetDraft}>
+  1428→              Batal
+  1429→            </Button>
+  1430→            <Button type="button" className="h-8" disabled={saving || invalid} onClick={() => void save()}>
+  1431→              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Save className="h-3.5 w-3.5" aria-hidden />}
+  1432→              Simpan rincian
+  1433→            </Button>
+  1434→          </div>
+  1435→        </div>
+  1436→      ) : null}
+  1437→    </div>
+  1438→  );
+  1439→}
+  1440→
