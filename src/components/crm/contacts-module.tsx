@@ -123,6 +123,17 @@ import { formatCurrency, formatDateTime, initials, normalizePhone, parseJsonArra
 import { cn } from "@/lib/utils";
 import { emailError, nationalPhoneError, waMeLink } from "@/lib/crm/validate";
 import { FieldHintInLabel } from "@/components/crm/field-hint";
+// Ronde 44 — form contact & perusahaan BERSAMA (satu sumber dgn Konversi Lead & Peluang Baru)
+import {
+  ContactFields,
+  CompanyDetailModal,
+  buildPhonePayload,
+  buildWhatsappPayload,
+  EMPTY_CONTACT_FORM,
+  NO_VALUE,
+  splitPhoneParts,
+  type ContactFormValues,
+} from "@/components/crm/contact-company-forms";
 
 // ---------- Tipe lokal ----------
 
@@ -149,40 +160,7 @@ interface CompanyRecord extends CompanyRef {
   _count?: { opportunities: number; projects: number; invoices: number };
 }
 
-interface ContactFormValues {
-  firstName: string;
-  lastName: string;
-  position: string;
-  email: string;
-  whatsapp: string;
-  /** Ronde 40-B — kode negara terpilih utk WhatsApp ("+62") atau "" = tanpa kode (legacy). */
-  whatsappDial: string;
-  phone: string;
-  /** Ronde 42 — kode negara utk Telepon juga (dropdown dial, terpisah dari negara —
-   *  kasus WNI pakai nomor Malaysia dll). */
-  phoneDial: string;
-  companyName: string;
-  companyId: string;
-  city: string;
-  country: string;
-  /** Ronde 41 — mata uang preferensi kontak (ISO 4217); otomatis mengikuti negara, bisa dioverride. */
-  currency: string;
-  preferredChannel: string;
-  instagram: string;
-  facebook: string;
-  tiktok: string;
-  tagsText: string;
-}
-
-interface CompanyFormValues {
-  name: string;
-  industry: string;
-  website: string;
-  country: string;
-  city: string;
-  size: string;
-  defaultCurrency: string;
-}
+// Ronde 44 — ContactFormValues & CompanyFormValues pindah ke contact-company-forms.tsx (shared)
 
 /** Satu baris hasil parse CSV — bentuk persis yang dikirim ke API impor massal. */
 type ImportRowValues = {
@@ -233,13 +211,6 @@ const CHANNEL_BADGE_CLASS: Record<string, string> = {
 
 const LANGUAGE_LABELS: Record<string, string> = { id: "Bahasa Indonesia", en: "English" };
 
-const SIZE_OPTIONS = [
-  { value: "startup", label: "Startup" },
-  { value: "sme", label: "SME" },
-  { value: "enterprise", label: "Enterprise" },
-  { value: "government", label: "Government" },
-];
-
 const SIZE_LABELS: Record<string, string> = {
   enterprise: "Enterprise",
   government: "Government",
@@ -247,44 +218,8 @@ const SIZE_LABELS: Record<string, string> = {
   startup: "Startup",
 };
 
-const CURRENCY_OPTIONS = [
-  { value: "IDR", label: "IDR — Rupiah" },
-  { value: "USD", label: "USD — US Dollar" },
-  { value: "SGD", label: "SGD — Dollar Singapura" },
-];
-
-const EMPTY_CONTACT_FORM: ContactFormValues = {
-  firstName: "",
-  lastName: "",
-  position: "",
-  email: "",
-  whatsapp: "",
-  whatsappDial: "",
-  phone: "",
-  phoneDial: "",
-  companyName: "",
-  companyId: "none",
-  city: "",
-  country: "",
-  currency: "",
-  preferredChannel: "whatsapp",
-  instagram: "",
-  facebook: "",
-  tiktok: "",
-  tagsText: "",
-};
-
-const EMPTY_COMPANY_FORM: CompanyFormValues = {
-  name: "",
-  industry: "",
-  website: "",
-  country: "",
-  city: "",
-  size: "none",
-  defaultCurrency: "IDR",
-};
-
-const NO_VALUE = "none";
+// Ronde 44 — EMPTY_CONTACT_FORM / EMPTY_COMPANY_FORM / SIZE_OPTIONS / CURRENCY_OPTIONS /
+// NO_VALUE pindah ke contact-company-forms.tsx (shared)
 
 function hashColor(name: string): string {
   let h = 0;
@@ -309,58 +244,8 @@ function locationText(city?: string | null, country?: string | null): string {
   return [city, country].filter(Boolean).join(", ") || "-";
 }
 
-/**
- * Ronde 40-B — gabung dial + nomor nasional utk payload WhatsApp.
- * Tanpa dial → raw dipertahankan (server tetap normalisasi legacy 0xx → 62xx).
- */
-function buildWhatsappPayload(dial: string, national: string): string | null {
-  const raw = (national ?? "").trim();
-  if (!raw) return null;
-  if (!dial) return raw;
-  return normalizePhone(raw, dial) ?? raw;
-}
-
-/** Ronde 42 — sama dgn WhatsApp, tapi utk field Telepon (dial terpisah dari negara). */
-function buildPhonePayload(dial: string, national: string): string | null {
-  return buildWhatsappPayload(dial, national);
-}
-
-/**
- * Ronde 40-B — pisah nomor tersimpan menjadi { dial, national } utk prefill form.
- * "+628123456789" → { dial: "+62", national: "8123456789" }; nomor lokal (08…)
- * yang tidak cocok dial mana pun tetap utuh tanpa kode.
- */
-function splitPhoneParts(full: string): { dial: string; national: string } {
-  const trimmed = (full ?? "").trim();
-  if (!trimmed) return { dial: "", national: "" };
-  const digits = trimmed.replace(/\D/g, "");
-  if (!digits) return { dial: "", national: trimmed };
-  const candidates = COUNTRIES
-    .filter((c) => digits.startsWith(c.dial.slice(1)))
-    .sort((a, b) => b.dial.length - a.dial.length);
-  const best = candidates[0];
-  // sisa nomor harus cukup panjang agar nomor lokal pendek tidak salah potong
-  if (best && digits.length - (best.dial.length - 1) >= 6) {
-    return { dial: best.dial, national: digits.slice(best.dial.length - 1) };
-  }
-  return { dial: "", national: trimmed };
-}
-
-/** Ronde 40-B — preview E.164 di bawah input WhatsApp (mis. "+6281234567890"). */
-function whatsappE164Preview(dial: string, national: string): string | null {
-  const raw = (national ?? "").trim();
-  if (!raw) return null;
-  if (dial) {
-    const n = normalizePhone(raw, dial);
-    return n ? `+${n}` : null;
-  }
-  // tanpa kode: hanya bila tampak nomor lokal Indonesia (diawali 0 → server normalkan ke +62…)
-  if (raw.replace(/\D/g, "").startsWith("0")) {
-    const n = normalizePhone(raw);
-    return n ? `+${n}` : null;
-  }
-  return null;
-}
+// Ronde 44 — buildWhatsappPayload / buildPhonePayload / splitPhoneParts / whatsappE164Preview
+// pindah ke contact-company-forms.tsx (shared lintas form)
 
 function consentMeta(status: string): { label: string; className: string } {
   if (status === "granted") return { label: "Consent: Disetujui", className: "bg-emerald-100 text-emerald-700" };
@@ -675,265 +560,7 @@ function FormField({
   );
 }
 
-// ---------- Ronde 40-B — combobox kode dial (Popover + Command); negara & mata uang pindah ke country-combobox.tsx (Ronde 41) ----------
-
-/** Combobox kode negara (dial) utk nomor WhatsApp. Value = "+62" | "" (tanpa kode). */
-function DialCodeCombobox({
-  value,
-  onSelect,
-  disabled,
-}: {
-  value: string;
-  onSelect: (dial: string) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Kode negara WhatsApp"
-          disabled={disabled}
-          className={cn("w-full justify-between px-2.5 font-normal", !value && "text-zinc-400")}
-        >
-          <span className="min-w-0 truncate text-left">{value || "Kode"}</span>
-          <ChevronDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[min(18rem,calc(100vw-2rem))] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Cari kode/negara…" />
-          <CommandList className="crm-scroll max-h-64">
-            <CommandEmpty>Tidak ditemukan.</CommandEmpty>
-            <CommandGroup>
-              <CommandItem
-                value="tanpa kode negara"
-                onSelect={() => {
-                  onSelect("");
-                  setOpen(false);
-                }}
-              >
-                <Check className={cn("size-4 shrink-0", !value ? "opacity-100" : "opacity-0")} aria-hidden="true" />
-                <span className="text-zinc-500">Tanpa kode negara</span>
-              </CommandItem>
-              {COUNTRIES.map((c) => (
-                <CommandItem
-                  key={c.iso2}
-                  value={`${c.name} ${c.dial} ${c.currency}`}
-                  onSelect={() => {
-                    onSelect(c.dial);
-                    setOpen(false);
-                  }}
-                >
-                  <Check
-                    className={cn("size-4 shrink-0", value === c.dial ? "opacity-100" : "opacity-0")}
-                    aria-hidden="true"
-                  />
-                  <span className="w-12 shrink-0 font-medium tabular-nums">{c.dial}</span>
-                  <span className="min-w-0 flex-1 truncate text-zinc-500">{c.name}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function ContactFormFields({
-  values,
-  onChange,
-  disabled,
-  mode,
-  companies,
-}: {
-  values: ContactFormValues;
-  onChange: (patch: Partial<ContactFormValues>) => void;
-  disabled?: boolean;
-  mode: "create" | "edit";
-  companies: CompanyRecord[];
-}) {
-  const setField = (key: keyof ContactFormValues) => (value: string) =>
-    onChange({ [key]: value } as Partial<ContactFormValues>);
-
-  // Ronde 40-B — preview E.164 live di bawah input WhatsApp
-  const waPreview = whatsappE164Preview(values.whatsappDial, values.whatsapp);
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Nama depan" required>
-          <Input value={values.firstName} onChange={(e) => setField("firstName")(e.target.value)} placeholder="cth. Ratna" disabled={disabled} />
-        </FormField>
-        <FormField label="Nama belakang">
-          <Input value={values.lastName} onChange={(e) => setField("lastName")(e.target.value)} placeholder="cth. Wijaya" disabled={disabled} />
-        </FormField>
-        <FormField label="Jabatan di Perusahaan">
-          <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
-        </FormField>
-        <FormField
-          label={
-            <>
-              Email
-              <FieldHintInLabel tip="Alamat email kantor aktif — dipakai identifikasi lead, pengiriman quotation & invoice." />
-            </>
-          }
-        >
-          <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
-        </FormField>
-        <FormField
-          className="sm:col-span-2"
-          label={
-            <>
-              WhatsApp
-              <FieldHintInLabel tip="Pilih kode negara di dropdown (searchable), lalu tulis nomor TANPA awalan 0 — cth. 81234567890. Marketing bisa langsung klik tombol WhatsApp di detail kontak." />
-            </>
-          }
-        >
-          <div className="flex gap-2">
-            <div className="w-[122px] shrink-0 sm:w-[150px]">
-              <DialCodeCombobox value={values.whatsappDial} onSelect={setField("whatsappDial")} disabled={disabled} />
-            </div>
-            <Input
-              value={values.whatsapp}
-              onChange={(e) => setField("whatsapp")(e.target.value)}
-              placeholder="81234567890"
-              inputMode="tel"
-              aria-label="Nomor WhatsApp (tanpa kode negara)"
-              disabled={disabled}
-            />
-          </div>
-          {waPreview && <p className="text-[11px] text-zinc-400">Tersimpan sebagai {waPreview}</p>}
-        </FormField>
-        <FormField
-          label={
-            <>
-              Telepon
-              <FieldHintInLabel tip="Kode negara dipilih dari dropdown (bisa berbeda dari negara kontak — mis. WNI pakai nomor Malaysia), lalu nomor nasional tanpa 0." />
-            </>
-          }
-        >
-          {/* Ronde 42 — kode negara dropdown (searchable) + nomor nasional tanpa 0,
-              konsisten dgn WhatsApp; dial terpisah dari field Negara (kasus WNI pakai
-              nomor Malaysia dll). */}
-          <div className="flex gap-2">
-            <div className="w-[122px] shrink-0 sm:w-[150px]">
-              <DialCodeCombobox value={values.phoneDial} onSelect={setField("phoneDial")} disabled={disabled} />
-            </div>
-            <Input
-              value={values.phone}
-              onChange={(e) => setField("phone")(e.target.value)}
-              placeholder="8215550123"
-              inputMode="tel"
-              aria-label="Nomor telepon (tanpa kode negara)"
-              disabled={disabled}
-            />
-          </div>
-          {(() => {
-            const preview = whatsappE164Preview(values.phoneDial, values.phone);
-            return preview ? <p className="text-[11px] text-zinc-400">Tersimpan sebagai {preview}</p> : null;
-          })()}
-        </FormField>
-
-        {mode === "create" ? (
-          <FormField label="Perusahaan">
-            <Input
-              value={values.companyName}
-              onChange={(e) => setField("companyName")(e.target.value)}
-              placeholder="cth. PT Maju Jaya (dibuat otomatis bila baru)"
-              disabled={disabled}
-            />
-          </FormField>
-        ) : (
-          <FormField label="Perusahaan">
-            <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
-              <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
-                <SelectValue placeholder="Pilih perusahaan" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
-                {companies.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FormField>
-        )}
-
-        <FormField label="Kota">
-          <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
-        </FormField>
-        <FormField
-          label={
-            <>
-              Negara
-              <FieldHintInLabel tip="Pilih negara domisili kontak — otomatis menyarankan mata uangnya (bisa dioverride). Dipakai untuk nilai brief/quotation/invoice." />
-            </>
-          }
-        >
-          {/* Ronde 41 — pilih negara sekaligus menyarankan mata uangnya (bisa dioverride di field berikutnya). */}
-          <CountryCombobox
-            value={values.country}
-            onSelect={(c) => {
-              setField("country")(c.name);
-              setField("currency")(c.currency);
-            }}
-            disabled={disabled}
-          />
-        </FormField>
-        <FormField label="Mata uang">
-          <CurrencySelect
-            value={values.currency}
-            onValueChange={setField("currency")}
-            disabled={disabled}
-          />
-        </FormField>
-        <FormField label="Kanal preferensi">
-          <Select value={values.preferredChannel} onValueChange={setField("preferredChannel")} disabled={disabled}>
-            <SelectTrigger className="w-full" aria-label="Pilih kanal preferensi">
-              <SelectValue placeholder="Pilih kanal" />
-            </SelectTrigger>
-            <SelectContent>
-              {CHANNELS.map((c) => (
-                <SelectItem key={c.key} value={c.key}>
-                  {c.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </FormField>
-      </div>
-
-      <section aria-label="Media sosial" className="space-y-2">
-        <SectionTitle>Media Sosial</SectionTitle>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label="Instagram">
-            <Input value={values.instagram} onChange={(e) => setField("instagram")(e.target.value)} placeholder="cth. @rani.creativehouse" disabled={disabled} />
-          </FormField>
-          <FormField label="Facebook">
-            <Input value={values.facebook} onChange={(e) => setField("facebook")(e.target.value)} placeholder="cth. facebook.com/nama" disabled={disabled} />
-          </FormField>
-          <FormField label="TikTok">
-            <Input value={values.tiktok} onChange={(e) => setField("tiktok")(e.target.value)} placeholder="cth. @namabrand" disabled={disabled} />
-          </FormField>
-        </div>
-      </section>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Tag (pisahkan dengan koma)" className="sm:col-span-2">
-          <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
-        </FormField>
-      </div>
-    </div>
-  );
-}
+// ---------- Ronde 44 — field-set contact & combobox dial pindah ke contact-company-forms.tsx (shared) ----------
 
 // ---------- Riwayat percakapan (Task 24-b): timeline chat bubble per kontak ----------
 
@@ -1350,7 +977,7 @@ function ContactDetailBody({
         {editing ? (
           <form onSubmit={handleSave} className="space-y-4 rounded-xl border bg-white p-4 shadow-sm">
             <p className="text-sm font-semibold text-zinc-900">Edit Contact</p>
-            <ContactFormFields
+            <ContactFields
               mode="edit"
               values={form}
               onChange={patchForm}
@@ -1767,6 +1394,9 @@ function CreateContactDialog({
     if (!validateForm()) return;
     setCreating(true);
     try {
+      // Ronde 44 — perusahaan tertaut dari modal Detail Perusahaan dipakai langsung (companyId);
+      // tanpa tautan → biarkan server membuat/menautkan by companyName seperti sebelumnya.
+      const linkedCompany = values.companyId && values.companyId !== NO_VALUE;
       const res = await api.createContact({
         firstName: values.firstName.trim(),
         lastName: values.lastName.trim() || undefined,
@@ -1774,7 +1404,9 @@ function CreateContactDialog({
         email: values.email.trim() || undefined,
         whatsapp: finalWhatsapp() || undefined,
         phone: buildPhonePayload(values.phoneDial, values.phone) || undefined,
-        companyName: values.companyName.trim() || undefined,
+        ...(linkedCompany
+          ? { companyId: values.companyId }
+          : { companyName: values.companyName.trim() || undefined }),
         city: values.city.trim() || undefined,
         country: values.country.trim() || undefined,
         currency: values.currency.trim() || undefined,
@@ -1835,7 +1467,7 @@ function CreateContactDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <ContactFormFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
+          <ContactFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
 
           {candidates && candidates.length > 0 && (
             <Alert className="border-amber-200 bg-amber-50">
@@ -1915,145 +1547,16 @@ function CreateCompanyDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
 }) {
-  const user = useCrmStore((s) => s.user);
-  const [values, setValues] = useState<CompanyFormValues>(EMPTY_COMPANY_FORM);
-  const [submitting, setSubmitting] = useState(false);
-  // Ronde 40-B — penanda mata uang diisi otomatis dari negara (user masih bisa override)
-  const [currencyAutoSynced, setCurrencyAutoSynced] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setValues(EMPTY_COMPANY_FORM);
-      setCurrencyAutoSynced(false);
-    }
-  }, [open]);
-
-  function patchForm(p: Partial<CompanyFormValues>) {
-    setValues((v) => ({ ...v, ...p }));
-  }
-
-  const setField = (key: keyof CompanyFormValues) => (value: string) => patchForm({ [key]: value } as Partial<CompanyFormValues>);
-
-  // Ronde 40-B — opsi mata uang: 3 default + mata uang hasil auto-sync negara (bila belum ada)
-  const currencyOptions = useMemo(() => {
-    const opts = [...CURRENCY_OPTIONS];
-    if (values.defaultCurrency && !opts.some((o) => o.value === values.defaultCurrency)) {
-      opts.push({ value: values.defaultCurrency, label: values.defaultCurrency });
-    }
-    return opts;
-  }, [values.defaultCurrency]);
-
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!values.name.trim()) {
-      toast.error("Nama perusahaan wajib diisi");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await api.createCompany({
-        name: values.name.trim(),
-        industry: values.industry.trim() || undefined,
-        website: values.website.trim() || undefined,
-        country: values.country.trim() || undefined,
-        city: values.city.trim() || undefined,
-        size: values.size === NO_VALUE ? undefined : values.size,
-        defaultCurrency: values.defaultCurrency,
-        actorName: user?.name ?? "System",
-      });
-      toast.success(`Perusahaan "${res.company.name}" berhasil dibuat`);
-      onCreated();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Gagal membuat perusahaan");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
+  // Ronde 44 — dialog Perusahaan Baru kini memakai modal Detail Perusahaan bersama
+  // (CompanyDetailModal) — field identik dengan modal di Konversi Lead & Peluang Baru,
+  // plus anti-duplikat by name (pakai existing bila perusahaan sudah terdaftar).
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Perusahaan Baru</DialogTitle>
-          <DialogDescription>Daftarkan akun perusahaan calon klien sebelum menambahkan contactnya.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <FormField label="Nama perusahaan" required className="sm:col-span-2">
-              <Input value={values.name} onChange={(e) => setField("name")(e.target.value)} placeholder="cth. PT Maju Jaya Abadi" disabled={submitting} />
-            </FormField>
-            <FormField label="Industri">
-              <Input value={values.industry} onChange={(e) => setField("industry")(e.target.value)} placeholder="cth. Perbankan" disabled={submitting} />
-            </FormField>
-            <FormField label="Website">
-              <Input value={values.website} onChange={(e) => setField("website")(e.target.value)} placeholder="cth. majujaya.co.id" disabled={submitting} />
-            </FormField>
-            <FormField label="Negara">
-              <CountryCombobox
-                value={values.country}
-                onSelect={(c) => {
-                  // auto-sync: mata uang ikut negara — user masih bisa ubah manual setelahnya
-                  patchForm({ country: c.name, defaultCurrency: c.currency });
-                  setCurrencyAutoSynced(true);
-                }}
-                disabled={submitting}
-              />
-            </FormField>
-            <FormField label="Kota">
-              <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Bandung" disabled={submitting} />
-            </FormField>
-            <FormField label="Ukuran">
-              <Select value={values.size} onValueChange={setField("size")} disabled={submitting}>
-                <SelectTrigger className="w-full" aria-label="Pilih ukuran perusahaan">
-                  <SelectValue placeholder="Pilih ukuran" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_VALUE}>— Tanpa ukuran —</SelectItem>
-                  {SIZE_OPTIONS.map((s) => (
-                    <SelectItem key={s.value} value={s.value}>
-                      {s.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-            <FormField label="Mata uang default">
-              <Select
-                value={values.defaultCurrency}
-                onValueChange={(v) => {
-                  setField("defaultCurrency")(v);
-                  setCurrencyAutoSynced(false);
-                }}
-                disabled={submitting}
-              >
-                <SelectTrigger className="w-full" aria-label="Pilih mata uang default">
-                  <SelectValue placeholder="Pilih mata uang" />
-                </SelectTrigger>
-                <SelectContent>
-                  {currencyOptions.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {currencyAutoSynced && (
-                <p className="text-[11px] text-zinc-400">Mata uang otomatis mengikuti negara</p>
-              )}
-            </FormField>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-              Batal
-            </Button>
-            <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={submitting}>
-              {submitting ? <Loader2 className="size-4 animate-spin" /> : <Building2 className="size-4" />}
-              {submitting ? "Menyimpan…" : "Simpan Perusahaan"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <CompanyDetailModal
+      open={open}
+      onOpenChange={onOpenChange}
+      initial={{}}
+      onSaved={() => onCreated()}
+    />
   );
 }
 

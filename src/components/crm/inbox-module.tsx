@@ -17,9 +17,19 @@ import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo
 import type {
   Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ServiceCategoryDTO, ServiceDTO, ThreadMessageDTO,
 } from "@/lib/crm/types";
-import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
 import { AddCatalogMenu } from "@/components/crm/catalog-add-buttons";
-import { emailError } from "@/lib/crm/validate";
+// Ronde 44 — form contact BERSAMA (identik dgn "Kontak Baru") + validasi + auto-estimasi
+import {
+  buildPhonePayload,
+  buildWhatsappPayload,
+  ContactFields,
+  EMPTY_CONTACT_FORM,
+  NO_VALUE,
+  serviceSuggestedPrice,
+  splitPhoneParts,
+  validateContactValues,
+  type ContactFormValues,
+} from "@/components/crm/contact-company-forms";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -106,22 +116,13 @@ function isResponded(lead: InboxLead): boolean {
   return Boolean(lead.respondedAt);
 }
 
-interface ContactFormState {
-  firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
-  /** Ronde 23 — jabatan di perusahaan + handle Instagram (lead kerap datang dari IG). */
-  position: string; instagram: string;
-  /** Ronde 41 — negara + mata uang kontak (mata uang otomatis mengikuti negara, bisa dioverride). */
-  country: string; currency: string;
-}
+/** Ronde 44 — form contact kini bentuk BERSAMA dari contact-company-forms.tsx (identik dgn Kontak Baru). */
+type ContactFormState = ContactFormValues;
 interface OpportunityFormState {
   brandId: string; title: string; serviceCategory: string; serviceName: string;
   estimatedValue: string; priority: string;
 }
 
-const EMPTY_CONTACT_FORM: ContactFormState = {
-  firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
-  country: "", currency: "",
-};
 const EMPTY_OPP_FORM: OpportunityFormState = {
   brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", priority: "medium",
 };
@@ -727,20 +728,30 @@ const IDENTITY_FIELDS: { key: keyof IdentityData; label: string; messageLabel: s
   { key: "whatsapp", label: "WhatsApp", messageLabel: "Nomor WhatsApp aktif" },
 ];
 
-/** ContactRef (terhubung/kandidat) → bentuk form — dipakai modal identitas & konversi. */
+/** ContactRef (terhubung/kandidat) → bentuk form BERSAMA — dipakai modal identitas & konversi. */
 function contactToForm(c: ContactRef): ContactFormState {
   const parts = (c.fullName ?? "").trim().split(/\s+/);
+  const wa = splitPhoneParts(c.whatsapp ?? "");
+  const tel = splitPhoneParts(c.phone ?? "");
   return {
     firstName: parts[0] ?? "",
     lastName: parts.slice(1).join(" "),
-    email: c.email?.trim() ?? "",
-    whatsapp: c.whatsapp?.trim() ?? "",
-    companyName: c.company?.name?.trim() ?? "",
-    city: c.city?.trim() ?? "",
     position: c.position?.trim() ?? "",
-    instagram: c.instagram?.trim() ?? "",
+    email: c.email?.trim() ?? "",
+    whatsapp: wa.national,
+    whatsappDial: wa.dial,
+    phone: tel.national,
+    phoneDial: tel.dial,
+    companyName: c.company?.name?.trim() ?? "",
+    companyId: c.companyId || NO_VALUE,
+    city: c.city?.trim() ?? "",
     country: c.country?.trim() ?? "",
     currency: c.currency?.trim() ?? "",
+    preferredChannel: c.preferredChannel || "whatsapp",
+    instagram: c.instagram?.trim() ?? "",
+    facebook: c.facebook?.trim() ?? "",
+    tiktok: c.tiktok?.trim() ?? "",
+    tagsText: "",
   };
 }
 
@@ -1395,7 +1406,8 @@ function IdentityModal({
           lastName: draft.lastName.trim(),
           position: draft.position.trim(),
           email: draft.email.trim(),
-          whatsapp: draft.whatsapp.trim(),
+          // Ronde 44 — gabung kode dial + nomor nasional (form kini bentuk bersama)
+          whatsapp: buildWhatsappPayload(draft.whatsappDial, draft.whatsapp) || draft.whatsapp.trim(),
           instagram: draft.instagram.trim(),
           city: draft.city.trim(),
           companyName: draft.companyName.trim(),
@@ -1787,6 +1799,21 @@ function ConvertModal({
     onOppFormChange({ ...oppForm, serviceCategory: v, serviceName: nextServiceName });
   }
 
+  // Ronde 44 — auto-fill Estimasi Nilai dari saran harga layanan (suggestedPrice ?? basePrice).
+  // Menimpa hanya bila input kosong ATAU isian sebelumnya juga hasil auto-fill (tidak merampas isian manual).
+  const [autoEstValue, setAutoEstValue] = useState("");
+  function handleConvertServiceChange(v: string) {
+    const serviceName = v === "none" ? "" : v;
+    let estimatedValue = oppForm.estimatedValue;
+    const suggestion = serviceSuggestedPrice(catalog?.services, serviceName);
+    if (suggestion != null && (estimatedValue.trim() === "" || estimatedValue === autoEstValue)) {
+      estimatedValue = String(suggestion);
+      setAutoEstValue(estimatedValue);
+    }
+    onOppFormChange({ ...oppForm, serviceName, estimatedValue });
+  }
+  const estAutoFilled = oppForm.estimatedValue.trim() !== "" && oppForm.estimatedValue === autoEstValue;
+
   // Ronde 41 — mata uang estimasi mengikuti kontak (bila diisi) atau brand
   const estimasiCurrency = contactForm.currency || selectedOppBrand?.primaryCurrency || "IDR";
 
@@ -1831,7 +1858,7 @@ function ConvertModal({
             </Button>
           </div>
 
-          {/* form contact baru */}
+          {/* form contact baru — Ronde 44: field-set BERSAMA identik dgn "Kontak Baru" modul Contacts */}
           {mode === "new" ? (
             <div className="space-y-3 rounded-lg border border-zinc-200 p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Contact Baru</p>
@@ -1843,98 +1870,12 @@ function ConvertModal({
                   </span>
                 </p>
               ) : null}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-first-name" className="text-xs">Nama Depan <span className="text-rose-600">*</span></Label>
-                  <Input
-                    id="convert-first-name"
-                    value={contactForm.firstName}
-                    onChange={(e) => onContactFormChange({ ...contactForm, firstName: e.target.value })}
-                    placeholder="cth. Dian"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-last-name" className="text-xs">Nama Belakang</Label>
-                  <Input
-                    id="convert-last-name"
-                    value={contactForm.lastName}
-                    onChange={(e) => onContactFormChange({ ...contactForm, lastName: e.target.value })}
-                    placeholder="cth. Permata"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-email" className="text-xs">Email</Label>
-                  <Input
-                    id="convert-email"
-                    type="email"
-                    value={contactForm.email}
-                    onChange={(e) => onContactFormChange({ ...contactForm, email: e.target.value })}
-                    placeholder="nama@perusahaan.co.id"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-whatsapp" className="text-xs">WhatsApp</Label>
-                  <Input
-                    id="convert-whatsapp"
-                    value={contactForm.whatsapp}
-                    onChange={(e) => onContactFormChange({ ...contactForm, whatsapp: e.target.value })}
-                    placeholder="+62 8xx xxxx xxxx"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-company" className="text-xs">Perusahaan</Label>
-                  <Input
-                    id="convert-company"
-                    value={contactForm.companyName}
-                    onChange={(e) => onContactFormChange({ ...contactForm, companyName: e.target.value })}
-                    placeholder="cth. PT Agro Makmur"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-position" className="text-xs">Jabatan di Perusahaan</Label>
-                  <Input
-                    id="convert-position"
-                    value={contactForm.position}
-                    onChange={(e) => onContactFormChange({ ...contactForm, position: e.target.value })}
-                    placeholder="cth. Marketing Manager"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-city" className="text-xs">Kota</Label>
-                  <Input
-                    id="convert-city"
-                    value={contactForm.city}
-                    onChange={(e) => onContactFormChange({ ...contactForm, city: e.target.value })}
-                    placeholder="cth. Medan"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="convert-instagram" className="text-xs">Instagram</Label>
-                  <Input
-                    id="convert-instagram"
-                    value={contactForm.instagram}
-                    onChange={(e) => onContactFormChange({ ...contactForm, instagram: e.target.value })}
-                    placeholder="cth. @rani.creativehouse"
-                  />
-                </div>
-                {/* Ronde 41 — negara (auto text) + mata uang: dasar nilai brief/quotation/invoice */}
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Negara</Label>
-                  <CountryCombobox
-                    value={contactForm.country}
-                    onSelect={(c) => onContactFormChange({ ...contactForm, country: c.name, currency: c.currency })}
-                    ariaLabel="Pilih negara kontak"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Mata Uang</Label>
-                  <CurrencySelect
-                    value={contactForm.currency}
-                    onValueChange={(v) => onContactFormChange({ ...contactForm, currency: v })}
-                    ariaLabel="Pilih mata uang kontak"
-                  />
-                </div>
-              </div>
+              <ContactFields
+                mode="create"
+                values={contactForm}
+                onChange={(patch) => onContactFormChange({ ...contactForm, ...patch })}
+                companies={[]}
+              />
             </div>
           ) : null}
 
@@ -2008,7 +1949,7 @@ function ConvertModal({
                   <Label className="text-xs">Layanan</Label>
                   <Select
                     value={oppForm.serviceName || "none"}
-                    onValueChange={(v) => onOppFormChange({ ...oppForm, serviceName: v === "none" ? "" : v })}
+                    onValueChange={handleConvertServiceChange}
                   >
                     <SelectTrigger className="w-full" aria-label="Layanan">
                       <SelectValue placeholder="Pilih layanan" />
@@ -2040,9 +1981,16 @@ function ConvertModal({
                   onChange={(e) => onOppFormChange({ ...oppForm, estimatedValue: e.target.value })}
                   placeholder="Belum diketahui — kosongkan bila belum ada"
                 />
-                <p className="text-[11px] text-zinc-400">
-                  Mata uang mengikuti kontak ({contactForm.country || "negara belum dipilih"}) / brand — dipakai brief, quotation & invoice.
-                </p>
+                {estAutoFilled ? (
+                  <p className="flex items-center gap-1 text-[11px] text-emerald-600">
+                    <Sparkles className="size-3" aria-hidden="true" />
+                    Terisi otomatis dari saran harga layanan {oppForm.serviceName} — masih bisa diubah.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-zinc-400">
+                    Mata uang mengikuti kontak ({contactForm.country || "negara belum dipilih"}) / brand — dipakai brief, quotation &amp; invoice.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -2467,10 +2415,13 @@ export default function InboxModule() {
       // FIX r22: email hanya diisi bila benar-benar alamat email valid — handle IG BUKAN email.
       const emailCandidate = extractEmailFromText(rawSender);
       const looksLikePhone = /^\+?[\d][\d\s\-()+]{5,}$/.test(rawSender);
+      // Ronde 44 — nomor dari pengirim dipisah jadi kode dial + nasional (form bersama)
+      const waParts = looksLikePhone ? splitPhoneParts(rawSender) : { dial: "", national: "" };
       setContactForm({
         ...EMPTY_CONTACT_FORM,
         email: emailCandidate ?? "",
-        whatsapp: looksLikePhone ? rawSender : "",
+        whatsapp: waParts.national,
+        whatsappDial: waParts.dial,
         instagram: lead.channel === "instagram" && isSocialHandle(rawSender) ? rawSender : "",
       });
     }
@@ -2675,20 +2626,11 @@ export default function InboxModule() {
       toast.error("Brand wajib dipilih untuk opportunity.");
       return;
     }
-    if (convertMode === "new" && !contactForm.firstName.trim()) {
-      toast.error("Nama depan contact wajib diisi.");
-      return;
-    }
-    // Ronde 42 — validasi format email & nomor WhatsApp contact baru sebelum konversi
     if (convertMode === "new") {
-      const vEmail = emailError(contactForm.email);
-      if (vEmail) {
-        toast.error(vEmail);
-        return;
-      }
-      const digits = contactForm.whatsapp.replace(/\D/g, "");
-      if (contactForm.whatsapp.trim() && digits.length < 8) {
-        toast.error("Nomor WhatsApp terlalu pendek — tulis nomor lengkap termasuk kode negara (mis. 62812…).");
+      // Ronde 44 — validasi IDENTIK dgn form Kontak Baru (nama, email, nomor WA/telepon)
+      const vErr = validateContactValues(contactForm);
+      if (vErr) {
+        toast.error(vErr);
         return;
       }
     }
@@ -2721,15 +2663,23 @@ export default function InboxModule() {
         firstName: contactForm.firstName.trim(),
         ...(contactForm.lastName.trim() ? { lastName: contactForm.lastName.trim() } : {}),
         ...(contactForm.email.trim() ? { email: contactForm.email.trim() } : {}),
-        ...(contactForm.whatsapp.trim() ? { whatsapp: contactForm.whatsapp.trim() } : {}),
-        ...(contactForm.companyName.trim() ? { companyName: contactForm.companyName.trim() } : {}),
-        // Jabatan + Instagram (lead berasal dari IG) ikut dikirim saat konversi.
+        // Ronde 44 — nomor digabung dgn kode dial (E.164) sebelum dikirim
+        whatsapp: buildWhatsappPayload(contactForm.whatsappDial, contactForm.whatsapp) || undefined,
+        phone: buildPhonePayload(contactForm.phoneDial, contactForm.phone) || undefined,
+        // Ronde 44 — perusahaan: tertaut via modal Detail Perusahaan (companyId, detail lengkap)
+        // ATAU cukup nama (server auto-buat/find)
+        ...(contactForm.companyId && contactForm.companyId !== NO_VALUE
+          ? { companyId: contactForm.companyId }
+          : { ...(contactForm.companyName.trim() ? { companyName: contactForm.companyName.trim() } : {}) }),
         ...(contactForm.position.trim() ? { position: contactForm.position.trim() } : {}),
         ...(contactForm.instagram.trim() ? { instagram: contactForm.instagram.trim() } : {}),
+        ...(contactForm.facebook.trim() ? { facebook: contactForm.facebook.trim() } : {}),
+        ...(contactForm.tiktok.trim() ? { tiktok: contactForm.tiktok.trim() } : {}),
         ...(contactForm.city.trim() ? { city: contactForm.city.trim() } : {}),
         // Ronde 41 — negara + mata uang kontak: dasar mata uang opportunity/brief/quotation/invoice
         ...(contactForm.country.trim() ? { country: contactForm.country.trim() } : {}),
         ...(contactForm.currency.trim() ? { currency: contactForm.currency.trim() } : {}),
+        ...(contactForm.preferredChannel ? { preferredChannel: contactForm.preferredChannel } : {}),
       };
     }
 

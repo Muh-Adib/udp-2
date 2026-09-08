@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Loader2, Lock, Plus } from "lucide-react";
+import { Loader2, Lock, Plus, Sparkles, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -27,12 +27,24 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { FieldHintInLabel } from "@/components/crm/field-hint";
 import { AddCatalogMenu } from "@/components/crm/catalog-add-buttons";
+// Ronde 44 — form contact BERSAMA (identik dgn "Kontak Baru") + auto-estimasi dari saran harga
+import {
+  buildPhonePayload,
+  buildWhatsappPayload,
+  ContactFields,
+  EMPTY_CONTACT_FORM,
+  NO_VALUE,
+  serviceSuggestedPrice,
+  validateContactValues,
+  type ContactFormValues,
+} from "@/components/crm/contact-company-forms";
 import { api } from "@/lib/crm/api-client";
 import {
   BRAND_SERVICES, LEAD_SOURCES, PRIORITIES, SERVICE_CATEGORIES,
 } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type { ContactRef, OpportunityDTO, ServiceCategoryDTO, ServiceDTO } from "@/lib/crm/types";
+import { cn } from "@/lib/utils";
 
 const PRIORITY_LABELS: Record<string, string> = { low: "Rendah", medium: "Sedang", high: "Tinggi", urgent: "Urgent" };
 
@@ -72,6 +84,12 @@ export default function OpportunityFormDialog({
   const [contacts, setContacts] = useState<ContactRef[] | null>(null);
   const [contactQuery, setContactQuery] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Ronde 44 — dua mode kontak: pilih existing ATAU buat baru inline (field identik Kontak Baru).
+  const [contactMode, setContactMode] = useState<"existing" | "new">("existing");
+  const [newContact, setNewContact] = useState<ContactFormValues>(EMPTY_CONTACT_FORM);
+  // Ronde 44 — nilai estimasi terakhir yang di-auto-fill dari saran harga layanan.
+  const [autoEstValue, setAutoEstValue] = useState("");
 
   // Ronde 40-C — katalog live dari DB brand (null = belum termuat/gagal → fallback statis).
   const [catalog, setCatalog] = useState<{ categories: ServiceCategoryDTO[]; services: ServiceDTO[] } | null>(null);
@@ -136,6 +154,9 @@ export default function OpportunityFormDialog({
     setTargetDeadline("");
     setBrief("");
     setContactQuery("");
+    setContactMode("existing"); // Ronde 44 — reset mode kontak tiap buka
+    setNewContact(EMPTY_CONTACT_FORM);
+    setAutoEstValue("");
   }, [open, editData]);
 
   // Ronde 40-C — katalog layanan live per brand: fetch saat brand berubah (guard cancel).
@@ -226,6 +247,30 @@ export default function OpportunityFormDialog({
     }
   }
 
+  // Ronde 44 — auto-fill Estimasi Nilai dari saran harga layanan (suggestedPrice ?? basePrice).
+  // Menimpa hanya bila input kosong ATAU isian sebelumnya juga hasil auto-fill.
+  function handleServiceSelect(v: string) {
+    const next = v === "none" ? "" : v;
+    const current = estimatedValue;
+    const suggestion = serviceSuggestedPrice(catalog?.services, next);
+    let nextValue = current;
+    if (suggestion != null && (current.trim() === "" || current === autoEstValue)) {
+      nextValue = String(suggestion);
+      setAutoEstValue(nextValue);
+    }
+    setServiceName(next);
+    setEstimatedValue(nextValue);
+  }
+  const estAutoFilled = estimatedValue.trim() !== "" && estimatedValue === autoEstValue;
+
+  /** Ronde 44 — ganti mode kontak; prefill nama dari teks pencarian bila tampak seperti nama. */
+  function switchContactMode(m: "existing" | "new") {
+    setContactMode(m);
+    if (m === "new" && contactQuery.trim() && !contactQuery.includes("@") && !newContact.firstName.trim()) {
+      setNewContact((v) => ({ ...v, firstName: contactQuery.trim() }));
+    }
+  }
+
   async function submit() {
     if (!user) {
       toast.error("Sesi tidak ditemukan — muat ulang halaman");
@@ -261,15 +306,52 @@ export default function OpportunityFormDialog({
       return;
     }
     if (!brandId) { toast.error("Pilih brand untuk opportunity ini"); return; }
-    if (!contactId) { toast.error("Pilih kontak yang terkait opportunity ini"); return; }
     if (!title.trim()) { toast.error("Judul opportunity wajib diisi"); return; }
+    // Ronde 44 — mode "existing" butuh kontak terpilih; mode "new" butuh form contact valid.
+    if (contactMode === "existing" && !contactId) {
+      toast.error("Pilih kontak yang terkait opportunity ini");
+      return;
+    }
+    if (contactMode === "new") {
+      const vErr = validateContactValues(newContact);
+      if (vErr) { toast.error(vErr); return; }
+    }
 
     setSaving(true);
     try {
+      // Ronde 44 — buat contact baru dulu (field identik Kontak Baru), lalu opportunity.
+      let finalContactId = contactId;
+      if (contactMode === "new") {
+        const linkedCompany = newContact.companyId && newContact.companyId !== NO_VALUE;
+        const created = await api.createContact({
+          firstName: newContact.firstName.trim(),
+          ...(newContact.lastName.trim() ? { lastName: newContact.lastName.trim() } : {}),
+          ...(newContact.position.trim() ? { position: newContact.position.trim() } : {}),
+          ...(newContact.email.trim() ? { email: newContact.email.trim() } : {}),
+          whatsapp: buildWhatsappPayload(newContact.whatsappDial, newContact.whatsapp) || undefined,
+          phone: buildPhonePayload(newContact.phoneDial, newContact.phone) || undefined,
+          ...(linkedCompany
+            ? { companyId: newContact.companyId }
+            : { ...(newContact.companyName.trim() ? { companyName: newContact.companyName.trim() } : {}) }),
+          ...(newContact.city.trim() ? { city: newContact.city.trim() } : {}),
+          ...(newContact.country.trim() ? { country: newContact.country.trim() } : {}),
+          ...(newContact.currency.trim() ? { currency: newContact.currency.trim() } : {}),
+          preferredChannel: newContact.preferredChannel || "whatsapp",
+          ...(newContact.instagram.trim() ? { instagram: newContact.instagram.trim() } : {}),
+          ...(newContact.facebook.trim() ? { facebook: newContact.facebook.trim() } : {}),
+          ...(newContact.tiktok.trim() ? { tiktok: newContact.tiktok.trim() } : {}),
+          actorName: user.name,
+          actorRole: user.role,
+        });
+        finalContactId = created.contact.id;
+        toast.success(`Contact "${created.contact.fullName}" dibuat`, {
+          description: "Kontak langsung tertaut ke opportunity ini.",
+        });
+      }
       const res = await api.createOpportunity({
         title: title.trim(),
         brandId,
-        contactId,
+        contactId: finalContactId,
         serviceCategory: serviceCategory === "none" ? undefined : serviceCategory,
         ...(serviceName ? { serviceName } : {}),
         priority,
@@ -383,32 +465,75 @@ export default function OpportunityFormDialog({
               </div>
             ) : (
               <>
-                <Input
-                  value={contactQuery}
-                  onChange={(e) => setContactQuery(e.target.value)}
-                  placeholder="Cari nama / email kontak…"
-                  aria-label="Cari kontak"
-                />
-                <Select
-                  value={contactId}
-                  onValueChange={setContactId}
-                  disabled={contacts === null || (!!editData && !canChangeLink)}
-                >
-                  <SelectTrigger className="w-full" aria-label="Pilih kontak">
-                    <SelectValue placeholder={contacts === null ? "Memuat kontak…" : "Pilih kontak"} />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-60">
-                    {contactOptions.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-zinc-400">Tidak ada kontak cocok.</div>
-                    ) : (
-                      contactOptions.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.fullName}{c.email ? ` · ${c.email}` : ""}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
+                {/* Ronde 44 — dua mode: pilih kontak existing ATAU buat kontak baru inline.
+                    Field buat-kontak-baru identik dgn "Kontak Baru" modul Contacts. */}
+                {!editData ? (
+                  <div className="flex items-center gap-1 rounded-lg border bg-zinc-100 p-0.5" role="tablist" aria-label="Mode kontak">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={contactMode === "existing"}
+                      onClick={() => switchContactMode("existing")}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                        contactMode === "existing" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                      )}
+                    >
+                      <Users className="size-3.5" aria-hidden /> Kontak Existing
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={contactMode === "new"}
+                      onClick={() => switchContactMode("new")}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                        contactMode === "new" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                      )}
+                    >
+                      <UserPlus className="size-3.5" aria-hidden /> Buat Kontak Baru
+                    </button>
+                  </div>
+                ) : null}
+                {contactMode === "new" ? (
+                  <div className="rounded-lg border border-zinc-200 p-3">
+                    <ContactFields
+                      mode="create"
+                      values={newContact}
+                      onChange={(patch) => setNewContact((v) => ({ ...v, ...patch }))}
+                      companies={[]}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <Input
+                      value={contactQuery}
+                      onChange={(e) => setContactQuery(e.target.value)}
+                      placeholder="Cari nama / email kontak…"
+                      aria-label="Cari kontak"
+                    />
+                    <Select
+                      value={contactId}
+                      onValueChange={setContactId}
+                      disabled={contacts === null || (!!editData && !canChangeLink)}
+                    >
+                      <SelectTrigger className="w-full" aria-label="Pilih kontak">
+                        <SelectValue placeholder={contacts === null ? "Memuat kontak…" : "Pilih kontak"} />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-60">
+                        {contactOptions.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-zinc-400">Tidak ada kontak cocok — pindah ke “Buat Kontak Baru”.</div>
+                        ) : (
+                          contactOptions.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.fullName}{c.email ? ` · ${c.email}` : ""}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -459,7 +584,7 @@ export default function OpportunityFormDialog({
                 <FieldHintInLabel tip="Jasa spesifik dari katalog brand — dipakai sebagai template estimasi (saran harga) dan workflow produksi project nantinya." />
               </Label>
               {serviceNameOptions.length > 0 ? (
-                <Select value={serviceName || "none"} onValueChange={(v) => setServiceName(v === "none" ? "" : v)}>
+                <Select value={serviceName || "none"} onValueChange={handleServiceSelect}>
                   <SelectTrigger className="w-full" aria-label="Layanan">
                     <SelectValue placeholder="Pilih layanan" />
                   </SelectTrigger>
@@ -490,6 +615,12 @@ export default function OpportunityFormDialog({
                 onChange={(e) => setEstimatedValue(e.target.value)}
                 placeholder="cth. 25000000"
               />
+              {estAutoFilled ? (
+                <p className="flex items-center gap-1 text-[11px] text-emerald-600">
+                  <Sparkles className="size-3" aria-hidden="true" />
+                  Terisi otomatis dari saran harga layanan {serviceName} — masih bisa diubah.
+                </p>
+              ) : null}
             </div>
             {/* Ronde 40-C — field Owner dihapus: owner = pembuat (diisi server dari sesi). */}
           </div>
@@ -546,7 +677,10 @@ export default function OpportunityFormDialog({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Batal</Button>
-          <Button onClick={() => void submit()} disabled={saving || !title.trim() || (!editData && (!brandId || !contactId))}>
+          <Button
+            onClick={() => void submit()}
+            disabled={saving || !title.trim() || (!editData && (!brandId || (contactMode === "existing" && !contactId)))}
+          >
             {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Plus className="size-4" aria-hidden="true" />}
             {saving ? "Menyimpan…" : editData ? "Simpan Perubahan" : "Buat Opportunity"}
           </Button>

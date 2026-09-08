@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
-import { extractEmailFromText } from "@/lib/crm/utils";
+import { extractEmailFromText, extractDomain } from "@/lib/crm/utils";
 import { findCountry } from "@/lib/crm/countries";
 import { contactIdentityTokens, threadKeyForWithContact } from "@/lib/crm/thread";
 import { resolveActor } from "@/lib/crm/auth";
@@ -20,6 +20,13 @@ import { resolveActor } from "@/lib/crm/auth";
  * (2) mata uang opportunity mengalir dari kontak → brand → IDR;
  * (3) konversi kini membentuk DRAFT BRIEF AWAL (ClientBrief status draft)
  * berisi pesan lead sbg tujuan awal + layanan terpilih — bisa diedit di tab Brief.
+ *
+ * Ronde 44: perusahaan tertaut penuh — bila contact.companyId diberikan (dibuat
+ * dari modal Detail Perusahaan di form konversi) perusahaan existing langsung
+ * dipakai; bila hanya companyName, perusahaan dibuat/dipakai dengan detail
+ * (industry, website, city, size, address) dari body.contact.company bila ada.
+ * Contact baru juga menyimpan phone, preferredChannel, facebook & tiktok
+ * (field-set form konversi kini identik dgn form Kontak Baru modul Contacts).
  */
 export async function POST(req: NextRequest) {
   const body = await readBody(req);
@@ -99,24 +106,41 @@ export async function POST(req: NextRequest) {
           contactId = existing.id;
           companyId = existing.companyId;
         } else {
-          // Company
+          // ===== Perusahaan =====
+          // Ronde 44 — urutan resolusi: companyId eksplisit (dari modal Detail Perusahaan,
+          // detail lengkap tersimpan saat itu) → perusahaan existing by name → buat baru.
           const companyName = c.companyName ? String(c.companyName).trim() : "";
+          const companyPayload = (c.company ?? body.company ?? {}) as Record<string, unknown>;
+          if (c.companyId) {
+            const linked = await tx.company.findFirst({
+              where: { id: String(c.companyId), deletedAt: null },
+              select: { id: true },
+            });
+            if (linked) companyId = linked.id;
+          }
           // Ronde 41 — mata uang kontak: body ?? turunan negara (peta COUNTRIES)
           const contactCountry = c.country ? String(c.country) : null;
           const contactCurrency = c.currency
             ? String(c.currency).toUpperCase()
             : (contactCountry ? (findCountry(contactCountry)?.currency ?? null) : null);
-          if (companyName) {
+          if (!companyId && companyName) {
             let company = await tx.company.findFirst({ where: { name: companyName, deletedAt: null } });
             if (!company) {
+              const companyWebsite = companyPayload.website ? String(companyPayload.website) : null;
               company = await tx.company.create({
                 data: {
                   name: companyName,
-                  industry: c.industry ? String(c.industry) : null,
-                  country: contactCountry,
-                  city: c.city ? String(c.city) : null,
-                  // Ronde 41 — mata uang default perusahaan mengikuti mata uang kontak
-                  defaultCurrency: contactCurrency ?? "IDR",
+                  industry: companyPayload.industry ? String(companyPayload.industry) : (c.industry ? String(c.industry) : null),
+                  website: companyWebsite,
+                  websiteDomain: extractDomain(companyWebsite),
+                  country: contactCountry ?? (companyPayload.country ? String(companyPayload.country) : null),
+                  city: c.city ? String(c.city) : (companyPayload.city ? String(companyPayload.city) : null),
+                  size: companyPayload.size ? String(companyPayload.size) : null,
+                  address: companyPayload.address ? String(companyPayload.address) : null,
+                  // Ronde 41/44 — mata uang default perusahaan: eksplisit ?? mata uang kontak ?? IDR
+                  defaultCurrency: companyPayload.defaultCurrency
+                    ? String(companyPayload.defaultCurrency).toUpperCase()
+                    : (contactCurrency ?? "IDR"),
                 },
               });
             }
@@ -131,10 +155,14 @@ export async function POST(req: NextRequest) {
               // agar scanner duplikat lintas sumber tetap mengenali lead dari IG.
               socialProfile: socialHandle,
               instagram: c.instagram ? String(c.instagram).trim() : null,
+              // Ronde 44 — medsos terstruktur lain dari form bersama
+              facebook: c.facebook ? String(c.facebook).trim() : null,
+              tiktok: c.tiktok ? String(c.tiktok).trim() : null,
               country: contactCountry ?? "Indonesia",
               currency: contactCurrency ?? (contactCountry ? (findCountry(contactCountry)?.currency ?? null) : null),
               city: c.city ? String(c.city) : null,
-              preferredChannel: interaction.channel,
+              // Ronde 44 — kanal preferensi dari form bersama (default: kanal lead masuk)
+              preferredChannel: c.preferredChannel ? String(c.preferredChannel) : interaction.channel,
               companyId,
             },
           });
