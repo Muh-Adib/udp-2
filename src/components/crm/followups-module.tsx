@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  BellRing, Building2, CalendarClock, CalendarDays, CheckCircle2, ClipboardList,
-  FileText, Link2, ListFilter, Mail, MessageCircle, Paperclip, Phone, Plus, RefreshCw, Send,
-  Sparkles, Video, type LucideIcon,
+  BellRing, CalendarClock, CalendarDays, CheckCircle2, Clapperboard,
+  FileText, Link2, ListFilter, Mail, MessageCircle, Paperclip, Pencil, Phone, Plus, RefreshCw, RotateCcw,
+  Send, Sparkles, Video, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -24,20 +24,23 @@ import { Textarea } from "@/components/ui/textarea";
 import TaskFormDialog from "@/components/crm/task-form-dialog";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
+import { NOTIF_CHANGED_EVENT } from "@/lib/crm/notif-prefs";
 import type { FollowUpTemplateDTO, TaskAttachment, TaskDTO } from "@/lib/crm/types";
-import { formatDate, initials, parseJsonArray, timeAgo } from "@/lib/crm/utils";
+import { formatDate, formatDateTime, initials, parseJsonArray, timeAgo } from "@/lib/crm/utils";
 
 // ============ Meta tipe task & prioritas ============
 
+// Ronde 42 — tipe disesuaikan permintaan user ("internal"→Produksi/Revisi, "admin"→Administrasi)
 const TASK_TYPES: { key: string; label: string; icon: LucideIcon; cls: string }[] = [
   { key: "follow_up", label: "Follow-up", icon: BellRing, cls: "bg-amber-100 text-amber-700" },
   { key: "meeting", label: "Meeting", icon: Video, cls: "bg-violet-100 text-violet-700" },
-  { key: "internal", label: "Internal", icon: Building2, cls: "bg-zinc-100 text-zinc-600" },
-  { key: "admin", label: "Admin", icon: ClipboardList, cls: "bg-cyan-100 text-cyan-700" },
+  { key: "production", label: "Produksi", icon: Clapperboard, cls: "bg-cyan-100 text-cyan-700" },
+  { key: "revision", label: "Revisi", icon: RotateCcw, cls: "bg-rose-100 text-rose-700" },
+  { key: "admin", label: "Administrasi", icon: CalendarClock, cls: "bg-zinc-100 text-zinc-600" },
 ];
 
 function taskTypeMeta(type: string) {
-  return TASK_TYPES.find((t) => t.key === type) ?? { key: type, label: type, icon: ClipboardList, cls: "bg-zinc-100 text-zinc-600" };
+  return TASK_TYPES.find((t) => t.key === type) ?? { key: type, label: type, icon: CalendarClock, cls: "bg-zinc-100 text-zinc-600" };
 }
 
 function priorityMeta(p: string): { label: string; cls: string } {
@@ -150,11 +153,13 @@ function SectionHeading({ title, count }: { title: string; count: number }) {
   );
 }
 
-function TaskCard({ task, onToggle, busy, onSend }: {
+function TaskCard({ task, onToggle, busy, onSend, onEdit }: {
   task: TaskDTO;
   onToggle: (t: TaskDTO) => void;
   busy: boolean;
   onSend: (t: TaskDTO) => void;
+  /** Ronde 42 — buka dialog detail & edit. */
+  onEdit: (t: TaskDTO) => void;
 }) {
   const type = taskTypeMeta(task.type);
   const prio = priorityMeta(task.priority);
@@ -215,16 +220,23 @@ function TaskCard({ task, onToggle, busy, onSend }: {
             <Badge variant="outline" className={`border-transparent px-1.5 ${prio.cls}`}>{prio.label}</Badge>
             {overdue && <Badge className="border-transparent bg-rose-100 text-rose-700">Overdue</Badge>}
           </div>
-          <p className={`text-sm font-semibold leading-snug text-zinc-900 ${done ? "line-through decoration-zinc-400" : ""}`}>
+          {/* Ronde 42 — judul bisa diklik: membuka modal detail & edit (bukan hanya action button) */}
+          <button
+            type="button"
+            onClick={() => onEdit(task)}
+            className={`block w-full text-left text-sm font-semibold leading-snug text-zinc-900 transition-colors hover:text-zinc-600 hover:underline ${done ? "line-through decoration-zinc-400" : ""}`}
+            aria-label={`Buka detail tugas ${task.title}`}
+            title="Klik untuk melihat & mengedit tugas ini"
+          >
             {task.title}
-          </p>
+          </button>
           {task.description ? (
             <p className="line-clamp-2 text-xs text-zinc-500">{task.description}</p>
           ) : null}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-500">
             {task.dueDate ? (
               <span className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-rose-600" : "text-zinc-600"}`}>
-                <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden /> {formatDate(task.dueDate)}
+                <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden /> {task.type === "meeting" ? formatDateTime(task.dueDate) : formatDate(task.dueDate)}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-zinc-400">
@@ -319,6 +331,18 @@ function TaskCard({ task, onToggle, busy, onSend }: {
             ?
           </span>
         )}
+        {/* Ronde 42 — tombol edit eksplisit (modal detail & edit) */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
+          onClick={() => onEdit(task)}
+          aria-label={`Edit tugas ${task.title}`}
+          title="Lihat & edit tugas"
+        >
+          <Pencil className="h-3.5 w-3.5" aria-hidden />
+        </Button>
       </div>
       {attachmentList.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5 border-t pt-2">
@@ -724,6 +748,8 @@ export default function FollowupsModule() {
   const [createOpen, setCreateOpen] = useState(false);
   // Fase 3 — kirim & catat pesan outbound dari task follow-up
   const [sendTarget, setSendTarget] = useState<TaskDTO | null>(null);
+  // Ronde 42 — modal detail & edit task (judul/kartu diklik → mode edit)
+  const [editTarget, setEditTarget] = useState<TaskDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -804,6 +830,8 @@ export default function FollowupsModule() {
       const res = await api.updateTask(t.id, { status: nextStatus });
       setTasks((prev) => (prev ?? []).map((x) => (x.id === t.id ? res.task : x)));
       toast.success(nextStatus === "done" ? "Task ditandai selesai" : "Task dibuka kembali");
+      // Ronde 42 — lonceng notifikasi segar seketika: notifikasi task ini hilang/tambah tanpa menunggu poll
+      window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal memperbarui task");
     } finally {
@@ -826,7 +854,7 @@ export default function FollowupsModule() {
     ) : (
       <div className="space-y-3">
         {list.map((t) => (
-          <TaskCard key={t.id} task={t} onToggle={handleToggle} busy={busyId === t.id} onSend={setSendTarget} />
+          <TaskCard key={t.id} task={t} onToggle={handleToggle} busy={busyId === t.id} onSend={setSendTarget} onEdit={setEditTarget} />
         ))}
       </div>
     );
@@ -939,11 +967,24 @@ export default function FollowupsModule() {
         </div>
       </div>
 
-      {/* Ronde 40-E — dialog tugas bersama (multi-assignee + lampiran + opportunity picker) */}
+      {/* Ronde 40-E — dialog tugas bersama (multi-assignee + lampiran + opportunity picker).
+          Ronde 42 — mode EDIT: klik kartu/judul/pensil task membuka detail yang bisa diubah. */}
       <TaskFormDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onSaved={() => { void load(true); }}
+        open={createOpen || editTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreateOpen(false);
+            setEditTarget(null);
+          } else {
+            setCreateOpen(true);
+          }
+        }}
+        editTask={editTarget}
+        onSaved={(saved) => {
+          setTasks((prev) => (prev ?? []).map((x) => (x.id === saved.id ? saved : x)));
+          setEditTarget(null);
+          window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
+        }}
       />
 
       {/* Dialog kirim & catat pesan outbound (Fase 3) */}

@@ -164,3 +164,20 @@ export function workflowFor(category?: string | null): string[] {
   if (c.includes("immersive") || c.includes("tour") || c.includes("projection") || c.includes("ar") || c.includes("vr")) return PROJECT_WORKFLOWS.immersive;
   return PROJECT_WORKFLOWS.video;
 }
+
+// ============ Ronde 42 — Tipe task BERSAMA (Follow-up Center + form tugas) ============
+// Tipe disesuaikan permintaan user: "internal" diganti tipe yang bermakna untuk
+// alur agensi (produksi/revisi), "admin" diperjelas labelnya jadi "Administrasi".
+// Setiap tipe punya hint singkat — ditampilkan sebagai tooltip & deskripsi opsi.
+export const TASK_TYPES: { key: string; label: string; hint: string }[] = [
+  { key: "follow_up", label: "Follow-up", hint: "Tindak lanjut ke lead/klien — chat, telepon, atau kirim penawaran." },
+  { key: "meeting", label: "Meeting", hint: "Rapat/presentasi dengan jam mulai — dapat reminder otomatis 1 jam sebelumnya." },
+  { key: "production", label: "Produksi", hint: "Pekerjaan produksi: shooting, editing, render, dsb." },
+  { key: "revision", label: "Revisi", hint: "Menangani permintaan revisi dari klien atau internal." },
+  { key: "admin", label: "Administrasi", hint: "Urusan dokumen: kontrak, PO, invoice, arsip, dan pelaporan." },
+];
+
+/** Label tipe task utk tampilan (fallback ke nilai mentah bila tak dikenal — data lama). */
+export function taskTypeLabel(type?: string | null): string {
+  return TASK_TYPES.find((t) => t.key === type)?.label ?? type ?? "Task";
+}

@@ -677,6 +677,8 @@ function EstimationTab({
   pendingApprovals,
   onSaved,
   onChanged,
+  serviceName,
+  brandId,
 }: {
   opportunityId: string;
   initialEstimation: EstimationDTO | null;
@@ -688,6 +690,9 @@ function EstimationTab({
   onSaved: (estimation: EstimationDTO) => void;
   /** Ronde 40-E — reload detail penuh (dipakai setelah keputusan approval). */
   onChanged: () => void;
+  /** Ronde 42 — layanan terpilih di opportunity → saran harga dari katalog brand. */
+  serviceName?: string | null;
+  brandId?: string | null;
 }) {
   const [est, setEst] = useState<EstimationDTO | null>(initialEstimation);
   const [form, setForm] = useState<EstimationForm>(() =>
@@ -784,6 +789,41 @@ function EstimationTab({
   }, [est?.status, est?.id, pendingApprovals]);
 
   const locked = est?.status === "pending_approval" || est?.status === "approved";
+
+  // Ronde 42 — SARAN HARGA dari katalog layanan brand: layanan yang dipilih di opportunity
+  // punya rincian biaya + margin target → saran harga (dihitung server). Auto-terapkan saat
+  // estimasi masih draft kosong; tombol "Terapkan" selalu tersedia (kecuali terkunci).
+  const [suggestion, setSuggestion] = useState<{ name: string; suggestedPrice: number } | null>(null);
+  useEffect(() => {
+    if (!serviceName || !brandId) {
+      setSuggestion(null);
+      return;
+    }
+    let cancelled = false;
+    api.brandServices(brandId)
+      .then((res) => {
+        if (cancelled) return;
+        const svc = res.services.find((s) => s.name === serviceName);
+        if (svc?.suggestedPrice && svc.suggestedPrice > 0) {
+          setSuggestion({ name: svc.name, suggestedPrice: svc.suggestedPrice });
+        } else {
+          setSuggestion(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestion(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceName, brandId]);
+
+  // Auto-terapkan sekali: estimasi draft + revenue masih kosong + saran tersedia
+  useEffect(() => {
+    if (!suggestion) return;
+    if (est && est.status !== "draft") return;
+    setForm((f) => (f.revenue.trim() === "" ? { ...f, revenue: String(suggestion.suggestedPrice) } : f));
+  }, [suggestion, est?.status]);
   // Ronde 40-E — Σ subtotal item (hanya baris bernama, subtotal dibulatkan spt server)
   const itemsTotal = useMemo(
     () =>
@@ -1236,6 +1276,26 @@ function EstimationTab({
                 aria-label={`Harga penawaran (${currency})`}
               />
             </div>
+            {/* Ronde 42 — saran harga dari katalog layanan brand */}
+            {suggestion ? (
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs">
+                <span className="text-emerald-800">
+                  Saran harga katalog <strong>{suggestion.name}</strong>: {currency}{" "}
+                  {new Intl.NumberFormat("id-ID").format(suggestion.suggestedPrice)}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 border-emerald-300 px-2 text-[11px] text-emerald-800 hover:bg-emerald-100"
+                  disabled={disabled}
+                  onClick={() => setField("revenue", String(suggestion.suggestedPrice))}
+                  aria-label={`Terapkan saran harga ${suggestion.suggestedPrice}`}
+                >
+                  Terapkan
+                </Button>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -3010,6 +3070,8 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       pendingApprovals={data.pendingApprovals}
                       onSaved={handleEstimationSaved}
                       onChanged={handleDetailChanged}
+                      serviceName={data.serviceName}
+                      brandId={data.brandId}
                     />
                   </TabsContent>
 

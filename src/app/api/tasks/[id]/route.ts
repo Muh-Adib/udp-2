@@ -17,6 +17,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if ("title" in body) data.title = String(body.title);
   if ("description" in body) data.description = body.description ? String(body.description) : null;
   if ("priority" in body) data.priority = String(body.priority);
+  // Ronde 42 — tipe task bisa diubah (follow_up/meeting/production/revision/admin)
+  if ("type" in body && body.type) data.type = String(body.type);
   if ("status" in body) {
     data.status = String(body.status);
     data.completedAt = body.status === "done" ? new Date() : null;

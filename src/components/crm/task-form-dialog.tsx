@@ -49,6 +49,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FieldHintInLabel } from "@/components/crm/field-hint";
+import { TASK_TYPES } from "@/lib/crm/constants";
 import { api } from "@/lib/crm/api-client";
 import { initials } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
@@ -56,12 +58,8 @@ import type { TaskDTO } from "@/lib/crm/types";
 
 // ---------- Konstanta form ----------
 
-const TASK_TYPE_OPTIONS = [
-  { key: "follow_up", label: "Follow-up" },
-  { key: "meeting", label: "Meeting" },
-  { key: "internal", label: "Internal" },
-  { key: "admin", label: "Admin" },
-] as const;
+// Ronde 42 — tipe task dari konstanta bersama (hint ditampilkan sbg tooltip & sub-text opsi)
+const TASK_TYPE_OPTIONS = TASK_TYPES.map((t) => ({ key: t.key, label: t.label, hint: t.hint }));
 
 const TASK_PRIORITY_OPTIONS = [
   { key: "low", label: "Rendah" },
@@ -95,6 +93,64 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// ---------- Ronde 42 — helper prefill mode EDIT ----------
+
+/** Parse daftar nama assignee dari TaskDTO (assignees JSON/array, fallback assigneeName). */
+function assigneesFromDto(task: TaskDTO): string[] {
+  let parsed: string[] = [];
+  if (Array.isArray(task.assignees)) parsed = task.assignees.filter((n): n is string => typeof n === "string");
+  else if (typeof task.assignees === "string") {
+    try {
+      const v: unknown = JSON.parse(task.assignees);
+      if (Array.isArray(v)) parsed = v.filter((n): n is string => typeof n === "string");
+    } catch {
+      parsed = [];
+    }
+  }
+  if (parsed.length === 0 && task.assigneeName) return [task.assigneeName];
+  return parsed;
+}
+
+/** Lampiran tersimpan → draft editor (link/file). */
+function taskAttachmentsFromDto(task: TaskDTO): AttachmentDraft[] {
+  let list: unknown = task.attachments;
+  if (typeof task.attachments === "string") {
+    try {
+      list = JSON.parse(task.attachments);
+    } catch {
+      list = [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(
+      (a): a is { type: string; name: string; url: string; size?: number } =>
+        !!a && typeof a === "object" && typeof (a as { url?: unknown }).url === "string"
+    )
+    .map((a) =>
+      a.type === "file"
+        ? { type: "file" as const, name: a.name, url: a.url, size: a.size ?? 0 }
+        : { type: "link" as const, name: a.name, url: a.url }
+    );
+}
+
+/** ISO dueDate → nilai siap input: meeting "YYYY-MM-DDTHH:mm", lainnya "YYYY-MM-DD". */
+function prefillDue(type: string, iso?: string | null): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    if (type === "meeting") {
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${hh}:${mm}`;
+    }
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
 export interface TaskFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -104,6 +160,8 @@ export interface TaskFormDialogProps {
   lockedOpportunity?: { id: string; title: string } | null;
   /** Nama assignee yang sudah terpilih saat dialog dibuka. */
   presetAssignees?: string[];
+  /** Ronde 42 — bila diisi → mode EDIT (prefill + PATCH), sekaligus "melihat" detail task. */
+  editTask?: TaskDTO | null;
 }
 
 export default function TaskFormDialog({
@@ -112,7 +170,9 @@ export default function TaskFormDialog({
   onSaved,
   lockedOpportunity,
   presetAssignees,
+  editTask,
 }: TaskFormDialogProps) {
+  const isEdit = !!editTask;
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [type, setType] = useState<string>("follow_up");
@@ -139,20 +199,35 @@ export default function TaskFormDialog({
 
   const [saving, setSaving] = useState(false);
 
-  // Reset + muat data dasar saat dialog dibuka
+  // Reset + muat data dasar saat dialog dibuka (Ronde 42 — mode edit prefill dari editTask)
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setDescription("");
-    setType("follow_up");
-    setPriority("medium");
-    setDueDate("");
-    setAssignees(presetAssignees ? [...presetAssignees] : []);
-    setOpportunity(lockedOpportunity ? { id: lockedOpportunity.id, title: lockedOpportunity.title, brandName: null } : null);
+    if (editTask) {
+      setTitle(editTask.title);
+      setDescription(editTask.description ?? "");
+      setType(editTask.type);
+      setPriority(editTask.priority || "medium");
+      setDueDate(prefillDue(editTask.type, editTask.dueDate));
+      setAssignees(assigneesFromDto(editTask));
+      setOpportunity(
+        editTask.opportunityId || lockedOpportunity
+          ? { id: (lockedOpportunity?.id ?? editTask.opportunityId) as string, title: lockedOpportunity?.title ?? editTask.opportunity?.title ?? "", brandName: editTask.opportunity?.brand?.name ?? null }
+          : null
+      );
+      setAttachments(taskAttachmentsFromDto(editTask));
+    } else {
+      setTitle("");
+      setDescription("");
+      setType("follow_up");
+      setPriority("medium");
+      setDueDate("");
+      setAssignees(presetAssignees ? [...presetAssignees] : []);
+      setOpportunity(lockedOpportunity ? { id: lockedOpportunity.id, title: lockedOpportunity.title, brandName: null } : null);
+      setAttachments([]);
+    }
     setOppOpen(false);
     setOppQuery("");
     setOppOptions([]);
-    setAttachments([]);
     setLinkRowOpen(false);
     setLinkUrl("");
 
@@ -172,7 +247,7 @@ export default function TaskFormDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, editTask, lockedOpportunity, presetAssignees]);
 
   // Pencarian opportunity debounced (server-side q)
   useEffect(() => {
@@ -205,6 +280,17 @@ export default function TaskFormDialog({
 
   function toggleAssignee(name: string) {
     setAssignees((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  }
+
+  /** Ronde 42 — saat tipe berubah, format nilai tenggat menyesuaikan (date ↔ datetime-local). */
+  function handleTypeChange(next: string) {
+    setType(next);
+    if (next === "meeting") {
+      // dari "YYYY-MM-DD" → "YYYY-MM-DDT09:00" (jam default 09:00 agar reminder bermakna)
+      setDueDate((v) => (v && v.length === 10 ? `${v}T09:00` : v));
+    } else if (dueDate.length > 10) {
+      setDueDate(dueDate.slice(0, 10));
+    }
   }
 
   function confirmLink() {
@@ -265,25 +351,33 @@ export default function TaskFormDialog({
       toast.error("Tugas wajib terhubung dengan opportunity");
       return;
     }
+    // Ronde 42 — meeting WAJIB punya tanggal + jam (reminder 1 jam sebelumnya butuh jam mulai)
+    if (type === "meeting" && (!dueDate || dueDate.length <= 10)) {
+      toast.error("Meeting wajib punya tanggal & jam mulai — reminder 1 jam sebelumnya dihitung dari sini");
+      return;
+    }
+    const payload = {
+      title: title.trim(),
+      description: description.trim() || null,
+      type,
+      priority,
+      dueDate: dueDate || null,
+      opportunityId: oppId,
+      assignees,
+      attachments: attachments.map((a) =>
+        a.type === "file" ? { type: "file", name: a.name, url: a.url, size: a.size } : { type: "link", name: a.name, url: a.url }
+      ),
+    };
     setSaving(true);
     try {
-      const res = await api.createTask({
-        title: title.trim(),
-        description: description.trim() || undefined,
-        type,
-        priority,
-        dueDate: dueDate || undefined,
-        opportunityId: oppId,
-        assignees,
-        attachments: attachments.map((a) =>
-          a.type === "file" ? { type: "file", name: a.name, url: a.url, size: a.size } : { type: "link", name: a.name, url: a.url }
-        ),
-      });
-      toast.success("Tugas dibuat");
+      const res = isEdit && editTask
+        ? await api.updateTask(editTask.id, payload)
+        : await api.createTask(payload);
+      toast.success(isEdit ? "Tugas diperbarui" : "Tugas dibuat");
       onOpenChange(false);
       onSaved?.(res.task);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Gagal membuat tugas");
+      toast.error(e instanceof Error ? e.message : isEdit ? "Gagal memperbarui tugas" : "Gagal membuat tugas");
     } finally {
       setSaving(false);
     }
@@ -298,16 +392,20 @@ export default function TaskFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Tugas Baru</DialogTitle>
+          <DialogTitle>{isEdit ? "Detail & Edit Tugas" : "Tugas Baru"}</DialogTitle>
           <DialogDescription>
-            Buat tugas dengan penanggung jawab, opportunity terkait, dan lampiran pendukung.
+            {isEdit
+              ? "Lihat dan ubah detail tugas — assignee, tenggat, lampiran, dan opportunity terkait."
+              : "Buat tugas dengan penanggung jawab, opportunity terkait, dan lampiran pendukung."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="crm-scroll max-h-[85vh] space-y-4 overflow-y-auto pr-1">
           {/* Judul */}
           <div className="space-y-1.5">
-            <Label htmlFor="tf-title">Judul *</Label>
+            <Label htmlFor="tf-title" className="flex items-center gap-1">
+              Judul * <FieldHintInLabel tip="Nama pekerjaan yang jelas — tampil di Follow-up Center, notifikasi, dan filter tugas saya." />
+            </Label>
             <Input
               id="tf-title"
               value={title}
@@ -321,22 +419,29 @@ export default function TaskFormDialog({
           {/* Tipe + Prioritas + Tenggat */}
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="tf-type">Tipe</Label>
-              <Select value={type} onValueChange={setType} disabled={saving}>
+              <Label htmlFor="tf-type" className="flex items-center gap-1">
+                Tipe <FieldHintInLabel tip="Jenis pekerjaan: Follow-up (tindak lanjut klien), Meeting (rapat — ada reminder 1 jam sebelumnya), Produksi (shooting/editing), Revisi, atau Administrasi (dokumen & kontrak)." />
+              </Label>
+              <Select value={type} onValueChange={handleTypeChange} disabled={saving}>
                 <SelectTrigger id="tf-type" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {TASK_TYPE_OPTIONS.map((t) => (
                     <SelectItem key={t.key} value={t.key}>
-                      {t.label}
+                      <span className="flex flex-col">
+                        <span>{t.label}</span>
+                        <span className="text-[10px] font-normal text-zinc-400">{t.hint}</span>
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="tf-priority">Prioritas</Label>
+              <Label htmlFor="tf-priority" className="flex items-center gap-1">
+                Prioritas <FieldHintInLabel tip="Tingkat kepentingan — Urgent/Tinggi muncul lebih dulu di urutan tugas tim." />
+              </Label>
               <Select value={priority} onValueChange={setPriority} disabled={saving}>
                 <SelectTrigger id="tf-priority" className="w-full">
                   <SelectValue />
@@ -351,22 +456,33 @@ export default function TaskFormDialog({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="tf-due">Tenggat</Label>
+              <Label htmlFor="tf-due" className="flex items-center gap-1">
+                {type === "meeting" ? "Jadwal (tanggal & jam)" : "Tenggat"}
+                <FieldHintInLabel
+                  tip={
+                    type === "meeting"
+                      ? "Tanggal DAN jam mulai meeting. Semua assignee menerima reminder notifikasi 1 jam sebelum jadwal ini."
+                      : "Batas waktu penyelesaian — lewat tanggal ini task masuk kelompok Overdue dan memicu notifikasi."
+                  }
+                />
+              </Label>
               <Input
                 id="tf-due"
-                type="date"
+                type={type === "meeting" ? "datetime-local" : "date"}
+                step={type === "meeting" ? 300 : undefined}
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
                 disabled={saving}
-                aria-label="Tanggal tenggat tugas"
+                aria-label={type === "meeting" ? "Tanggal dan jam meeting" : "Tanggal tenggat tugas"}
               />
             </div>
           </div>
 
           {/* Assignee multi (chip cloud) */}
           <div className="space-y-1.5">
-            <Label>
-              Assignee * <span className="font-normal text-zinc-400">— pilih minimal satu</span>
+            <Label className="flex items-center gap-1">
+              Assignee * <FieldHintInLabel tip="Klik nama anggota tim yang mengerjakan. Bisa lebih dari satu — nama pertama jadi penanggung jawab utama. Semua assignee melihat task ini di daftar “Tugas saya”." />
+              <span className="font-normal text-zinc-400">— pilih minimal satu</span>
             </Label>
             {users === null ? (
               <p className="flex items-center gap-2 rounded-lg border border-dashed p-3 text-xs text-zinc-400">
@@ -418,7 +534,9 @@ export default function TaskFormDialog({
 
           {/* Opportunity (wajib) */}
           <div className="space-y-1.5">
-            <Label htmlFor="tf-opp-trigger">Opportunity *</Label>
+            <Label htmlFor="tf-opp-trigger" className="flex items-center gap-1">
+              Opportunity * <FieldHintInLabel tip="Tugas selalu terhubung ke satu peluang di pipeline — konteks brand, kontak, dan percakapan diambil dari sini. Cari berdasarkan judul." />
+            </Label>
             {lockedOpportunity ? (
               <div
                 className="flex items-center gap-2 rounded-lg border bg-zinc-50 px-3 py-2 text-sm text-zinc-700"
@@ -495,7 +613,9 @@ export default function TaskFormDialog({
 
           {/* Deskripsi */}
           <div className="space-y-1.5">
-            <Label htmlFor="tf-desc">Deskripsi</Label>
+            <Label htmlFor="tf-desc" className="flex items-center gap-1">
+              Deskripsi <FieldHintInLabel tip="Detail pekerjaan: ekspektasi hasil, catatan untuk assignee, referensi materi, dsb. (opsional)." />
+            </Label>
             <Textarea
               id="tf-desc"
               rows={3}
@@ -508,8 +628,9 @@ export default function TaskFormDialog({
 
           {/* Lampiran */}
           <div className="space-y-1.5">
-            <Label>
-              Lampiran <span className="font-normal text-zinc-400">— maks {MAX_ATTACHMENTS}, file ≤5 MB</span>
+            <Label className="flex items-center gap-1">
+              Lampiran <FieldHintInLabel tip="Tautan referensi (Google Drive, Figma, dsb.) atau file pendukung maksimal 5 MB per file, total maksimal 5 lampiran." />
+              <span className="font-normal text-zinc-400">— maks {MAX_ATTACHMENTS}, file ≤5 MB</span>
             </Label>
             {attachments.length > 0 ? (
               <ul className="space-y-1.5">
@@ -626,14 +747,14 @@ export default function TaskFormDialog({
             className="bg-zinc-900 hover:bg-zinc-800"
             onClick={() => void submit()}
             disabled={saving || !canSubmit || readingFile}
-            aria-label="Simpan tugas baru"
+            aria-label={isEdit ? "Simpan perubahan tugas" : "Simpan tugas baru"}
           >
             {saving ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (
               <Plus className="size-4" aria-hidden="true" />
             )}
-            {saving ? "Menyimpan…" : "Buat Tugas"}
+            {saving ? "Menyimpan…" : isEdit ? "Simpan Perubahan" : "Buat Tugas"}
           </Button>
         </DialogFooter>
       </DialogContent>

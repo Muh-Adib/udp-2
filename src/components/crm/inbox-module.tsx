@@ -18,6 +18,8 @@ import type {
   Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ServiceCategoryDTO, ServiceDTO, ThreadMessageDTO,
 } from "@/lib/crm/types";
 import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
+import { AddCatalogMenu } from "@/components/crm/catalog-add-buttons";
+import { emailError } from "@/lib/crm/validate";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1735,6 +1737,18 @@ function ConvertModal({
   }, [oppForm.brandId]);
   const catalog = catalogState && catalogState.brandId === oppForm.brandId ? catalogState : null;
 
+  // Ronde 42 — tambah kategori/layanan langsung dari modal konversi (Direktur/Admin)
+  const user42 = useCrmStore((s) => s.user);
+  const canEditCatalog = user42?.role === "director" || user42?.role === "super_admin";
+  const reloadCatalog = useCallback(() => {
+    if (!oppForm.brandId) return;
+    api.brandServices(oppForm.brandId)
+      .then((res) => setCatalogState({ brandId: oppForm.brandId, categories: res.categories, services: res.services }))
+      .catch(() => {
+        /* biarkan katalog lama */
+      });
+  }, [oppForm.brandId]);
+
   // Kategori: nama kategori live dari katalog brand; fallback konstanta statis.
   const kategoriOptions = useMemo(() => {
     const live = catalog && catalog.categories.length > 0
@@ -1966,7 +1980,17 @@ function ConvertModal({
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label className="text-xs">Kategori Layanan</Label>
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs">Kategori Layanan</Label>
+                  {/* Ronde 42 — tambah kategori/layanan baru langsung dari konversi (Direktur/Admin) */}
+                  <AddCatalogMenu
+                    brandId={oppForm.brandId}
+                    categories={catalog?.categories ?? []}
+                    onAdded={reloadCatalog}
+                    canEdit={canEditCatalog && !!oppForm.brandId}
+                    categoryNameHint={oppForm.serviceCategory || undefined}
+                  />
+                </div>
                 {/* Ronde 41 — opsi dari katalog live brand (fallback statis) */}
                 <Select value={oppForm.serviceCategory} onValueChange={handleConvertCategoryChange}>
                   <SelectTrigger className="w-full" aria-label="Kategori layanan">
@@ -2654,6 +2678,19 @@ export default function InboxModule() {
     if (convertMode === "new" && !contactForm.firstName.trim()) {
       toast.error("Nama depan contact wajib diisi.");
       return;
+    }
+    // Ronde 42 — validasi format email & nomor WhatsApp contact baru sebelum konversi
+    if (convertMode === "new") {
+      const vEmail = emailError(contactForm.email);
+      if (vEmail) {
+        toast.error(vEmail);
+        return;
+      }
+      const digits = contactForm.whatsapp.replace(/\D/g, "");
+      if (contactForm.whatsapp.trim() && digits.length < 8) {
+        toast.error("Nomor WhatsApp terlalu pendek — tulis nomor lengkap termasuk kode negara (mis. 62812…).");
+        return;
+      }
     }
 
     const opportunity: Record<string, unknown> = {

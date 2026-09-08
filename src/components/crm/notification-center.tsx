@@ -34,6 +34,7 @@ const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: stri
   approval: FileCheck2,
   cr: GitPullRequestArrow,
   task: ListChecks,
+  meeting: CalendarClock, // Ronde 42 — reminder meeting 1 jam sebelum jadwal
   deadline: CalendarClock,
   invoice: ReceiptText,
 };
@@ -217,10 +218,23 @@ export default function NotificationCenter() {
     const id = setInterval(() => {
       if (document.hidden) return;
       if (realtimeRef.current) return; // push realtime menang — hindari fetch dobel
-      void load(true);
+      // load() dipicu oleh listener NOTIF_CHANGED_EVENT di bawah (satu jalur, tanpa fetch dobel)
       window.dispatchEvent(new CustomEvent(NOTIF_CHANGED_EVENT));
     }, 60_000);
     return () => clearInterval(id);
+  }, [user]);
+
+  // Ronde 42 — sinkron lintas modul: aksi di Follow-up Center (task selesai), Inbox (lead
+  // direspons), approval, dsb. men-dispatch NOTIF_CHANGED_EVENT → lonceng SEGAR seketika,
+  // notifikasi yang "sudah tertangani" hilang tanpa menunggu poll/socket berikutnya.
+  useEffect(() => {
+    if (!user) return;
+    const onNotifChanged = () => {
+      if (document.hidden) return;
+      void load(true);
+    };
+    window.addEventListener(NOTIF_CHANGED_EVENT, onNotifChanged);
+    return () => window.removeEventListener(NOTIF_CHANGED_EVENT, onNotifChanged);
   }, [user, load]);
 
   // Push realtime via mini service socket.io (port 3005) — onChanged memakai refetch yang sama.
@@ -375,6 +389,9 @@ export default function NotificationCenter() {
     }
     if (NAV_MODULES.has(n.module)) setActiveModule(n.module as ModuleKey);
     setOpen(false);
+    // Ronde 42 — refresh segera setelah navigasi: notifikasi yang sudah tertangani
+    // (task selesai, lead direspons, approval diputuskan) langsung hilang dari lonceng.
+    void load(true);
   }
 
   function handleDismiss(e: React.MouseEvent, n: NotificationDTO) {

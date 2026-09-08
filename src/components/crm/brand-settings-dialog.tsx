@@ -951,7 +951,8 @@ function CatalogEditor({
   onEditStage: (stageId: string, serviceId: string, phase: string, name: string) => Promise<boolean>;
 }) {
   const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
-  const [openSvc, setOpenSvc] = useState<Record<string, boolean>>({});
+  // Ronde 42 — workflow langkah kini SELALU tampil (keluhan: sebelumnya hanya rincian biaya
+  // yang terlihat untuk template quotation) — state collapse per layanan dihapus.
   const [newCatName, setNewCatName] = useState("");
   const [catForms, setCatForms] = useState<Record<string, { name: string; unit: string; price: string }>>({});
   const [stageForms, setStageForms] = useState<Record<string, { phase: string; name: string; milestone: boolean }>>({});
@@ -999,7 +1000,6 @@ function CatalogEditor({
             {open ? (
               <div className="divide-y">
                 {svcs.map((svc) => {
-                  const svcOpen = openSvc[svc.id] ?? false;
                   const form = stageForms[svc.id] ?? { phase: "", name: "", milestone: false };
                   return (
                     <div key={svc.id} className="px-4 py-3">
@@ -1039,15 +1039,14 @@ function CatalogEditor({
                             </div>
                           </div>
                         ) : (
-                          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpenSvc((m) => ({ ...m, [svc.id]: !svcOpen }))}>
-                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${svcOpen ? "" : "-rotate-90"}`} aria-hidden />
+                          <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium text-zinc-900">{svc.name}</p>
                               <p className="text-xs text-zinc-500">
                                 {[svc.unit, svc.basePrice != null ? fmtIDR(svc.basePrice) : null, `${svc.workflow.length} langkah workflow`].filter(Boolean).join(" · ")}
                               </p>
                             </div>
-                          </button>
+                          </div>
                         )}
                         {svcEdit[svc.id] ? null : (
                           <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-zinc-400 hover:text-zinc-900"
@@ -1067,9 +1066,9 @@ function CatalogEditor({
                       {/* Rincian biaya (template harga) — Ronde 29-b */}
                       <ServiceCostEditor service={svc} onSave={onSaveCost} />
 
-                      {svcOpen ? (
-                        <div className="mt-3 space-y-2.5 pl-6">
-                          {/* Workflow */}
+                      {/* Workflow produksi — Ronde 42: selalu tampil (sebelumnya tersembunyi
+                          di balik collapse, sehingga yang tampak hanya rincian biaya) */}
+                      <div className="mt-3 space-y-2.5 pl-6">
                           {svc.workflow.length > 0 ? (
                             <ol className="space-y-1.5">
                               {svc.workflow.map((w, idx) => (
@@ -1162,8 +1161,7 @@ function CatalogEditor({
                               <Plus className="h-3.5 w-3.5" aria-hidden /> Langkah
                             </Button>
                           </div>
-                        </div>
-                      ) : null}
+                      </div>
                     </div>
                   );
                 })}

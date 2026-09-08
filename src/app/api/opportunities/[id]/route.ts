@@ -144,6 +144,40 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
 
+  // Ronde 42 — SATU PINTU perubahan relasi: ganti brand/kontak HANYA oleh pimpinan
+  // (super_admin/director). Role lain ditolak 403 — UI menampilkan tooltip otorisasi.
+  if ("brandId" in body || "contactId" in body) {
+    if (!isLeadership) {
+      return fail("Hanya Direktur/Admin yang dapat mengubah brand atau kontak opportunity", 403);
+    }
+    if ("brandId" in body) {
+      const brandId = body.brandId ? String(body.brandId) : "";
+      if (!brandId) return fail("Brand wajib dipilih");
+      const brand = await db.brand.findUnique({ where: { id: brandId } });
+      if (!brand) return fail("Brand tidak ditemukan", 400);
+      if (brandId !== current.brandId) {
+        data.brandId = brandId;
+        changes.push({ field: "brand", oldValue: current.brand?.name ?? current.brandId, newValue: brand.name });
+        // Mata uang mengikuti brand baru bila masih memakai mata uang brand lama (atau kosong)
+        if (!current.currency || current.currency === current.brand?.primaryCurrency) {
+          data.currency = brand.primaryCurrency;
+        }
+      }
+    }
+    if ("contactId" in body) {
+      const contactId = body.contactId ? String(body.contactId) : "";
+      if (!contactId) return fail("Kontak wajib dipilih");
+      const contact = await db.contact.findUnique({ where: { id: contactId } });
+      if (!contact) return fail("Kontak tidak ditemukan", 400);
+      if (contactId !== current.contactId) {
+        data.contactId = contactId;
+        // Perusahaan ikut kontak baru (denormalisasi konsisten)
+        if (contact.companyId) data.companyId = contact.companyId;
+        changes.push({ field: "contact", oldValue: current.contactId, newValue: contactId });
+      }
+    }
+  }
+
   if (body.stage && body.stage !== current.stage) {
     const newStage = String(body.stage);
     if (newStage === "lost") {

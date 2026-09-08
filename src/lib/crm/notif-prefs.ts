@@ -34,6 +34,7 @@ export const NOTIF_TYPES: { key: NotificationType; label: string; hint: string }
   { key: "approval", label: "Approval", hint: "Pengajuan estimasi & diskon" },
   { key: "cr", label: "Change Request", hint: "CR menunggu persetujuan klien" },
   { key: "task", label: "Task Overdue", hint: "Task follow-up lewat tenggat" },
+  { key: "meeting", label: "Reminder Meeting", hint: "Meeting dimulai kurang dari 1 jam lagi" },
   { key: "deadline", label: "Deadline Proyek", hint: "Milestone & proyek mendekati due" },
   { key: "invoice", label: "Invoice", hint: "Tagihan jatuh tempo & pembayaran" },
 ];

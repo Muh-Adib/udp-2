@@ -230,6 +230,62 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // 4b. Ronde 42 — REMINDER MEETING: task tipe "meeting" yang dimulai ≤60 menit lagi
+  //     (atau baru saja mulai ≤30 menit lewat) — menginformasikan SEMUA assignee-nya,
+  //     dengan jam mulai eksplisit (tanggal + JAM, bukan hanya tanggal).
+  {
+    const now = Date.now();
+    const from = new Date(now - 30 * 60 * 1000); // sudah mulai ≤30 menit — tetap ditampilkan
+    const until = new Date(now + 60 * 60 * 1000); // mulai ≤60 menit lagi
+    const meetings = await db.task.findMany({
+      where: {
+        type: "meeting",
+        status: "open",
+        dueDate: { gte: from, lte: until },
+        ...(DECIDER_ROLES.has(role)
+          ? {}
+          : { OR: [{ assigneeName: user.name }, { assignees: { contains: user.name } }] }),
+      },
+      include: { opportunity: { include: { brand: true } } },
+      orderBy: { dueDate: "asc" },
+      take: 20,
+    });
+    for (const t of meetings) {
+      if (
+        !DECIDER_ROLES.has(role) &&
+        t.assigneeName !== user.name &&
+        !parseTaskAssignees(t.assignees).includes(user.name)
+      ) {
+        continue;
+      }
+      if (brandWhere && t.opportunity?.brandId !== brandFilter) continue;
+      const start = t.dueDate ?? from;
+      const diffMin = Math.round((start.getTime() - now) / 60000);
+      const hhmm = start.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+      const when =
+        diffMin > 0
+          ? diffMin >= 55
+            ? `dimulai ${hhmm} (±1 jam lagi)`
+            : `dimulai ${hhmm} (${diffMin} menit lagi)`
+          : diffMin >= -5
+            ? `sedang berlangsung — mulai ${hhmm}`
+            : `mulai ${hhmm} (${Math.abs(diffMin)} menit lalu)`;
+      push({
+        key: `meeting:${t.id}`,
+        type: "meeting",
+        severity: "warning",
+        title: `Meeting ${when}: ${t.title}`,
+        description: `${t.opportunity ? `${t.opportunity.title} · ` : ""}Assignee ${parseTaskAssignees(t.assignees).join(", ") || t.assigneeName || "-"}.`,
+        module: "followups",
+        brandName: t.opportunity?.brand?.name ?? null,
+        brandColor: t.opportunity?.brand?.color ?? null,
+        entityLabel: null,
+        at: start.toISOString(),
+        ageHours: 0,
+      });
+    }
+  }
+
   // 5. Deadline project dekat (≤7 hari) atau terlampaui
   if (OPS_ROLES.has(role)) {
     const now = new Date();

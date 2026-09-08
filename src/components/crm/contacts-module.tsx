@@ -121,6 +121,8 @@ import type {
 } from "@/lib/crm/types";
 import { formatCurrency, formatDateTime, initials, normalizePhone, parseJsonArray } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
+import { emailError, nationalPhoneError, waMeLink } from "@/lib/crm/validate";
+import { FieldHintInLabel } from "@/components/crm/field-hint";
 
 // ---------- Tipe lokal ----------
 
@@ -156,6 +158,9 @@ interface ContactFormValues {
   /** Ronde 40-B — kode negara terpilih utk WhatsApp ("+62") atau "" = tanpa kode (legacy). */
   whatsappDial: string;
   phone: string;
+  /** Ronde 42 — kode negara utk Telepon juga (dropdown dial, terpisah dari negara —
+   *  kasus WNI pakai nomor Malaysia dll). */
+  phoneDial: string;
   companyName: string;
   companyId: string;
   city: string;
@@ -256,6 +261,7 @@ const EMPTY_CONTACT_FORM: ContactFormValues = {
   whatsapp: "",
   whatsappDial: "",
   phone: "",
+  phoneDial: "",
   companyName: "",
   companyId: "none",
   city: "",
@@ -312,6 +318,11 @@ function buildWhatsappPayload(dial: string, national: string): string | null {
   if (!raw) return null;
   if (!dial) return raw;
   return normalizePhone(raw, dial) ?? raw;
+}
+
+/** Ronde 42 — sama dgn WhatsApp, tapi utk field Telepon (dial terpisah dari negara). */
+function buildPhonePayload(dial: string, national: string): string | null {
+  return buildWhatsappPayload(dial, national);
 }
 
 /**
@@ -647,14 +658,15 @@ function FormField({
   className,
   children,
 }: {
-  label: string;
+  /** Ronde 42 — label bisa berupa string ATAU ReactNode (utk menyematkan FieldHint). */
+  label: ReactNode;
   required?: boolean;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
-      <span className="text-xs font-medium text-zinc-600">
+      <span className="flex items-center gap-1 text-xs font-medium text-zinc-600">
         {label}
         {required && <span className="text-rose-600"> *</span>}
       </span>
@@ -764,10 +776,25 @@ function ContactFormFields({
         <FormField label="Jabatan di Perusahaan">
           <Input value={values.position} onChange={(e) => setField("position")(e.target.value)} placeholder="cth. Marketing Manager" disabled={disabled} />
         </FormField>
-        <FormField label="Email">
+        <FormField
+          label={
+            <>
+              Email
+              <FieldHintInLabel tip="Alamat email kantor aktif — dipakai identifikasi lead, pengiriman quotation & invoice." />
+            </>
+          }
+        >
           <Input type="email" value={values.email} onChange={(e) => setField("email")(e.target.value)} placeholder="nama@perusahaan.com" disabled={disabled} />
         </FormField>
-        <FormField label="WhatsApp" className="sm:col-span-2">
+        <FormField
+          className="sm:col-span-2"
+          label={
+            <>
+              WhatsApp
+              <FieldHintInLabel tip="Pilih kode negara di dropdown (searchable), lalu tulis nomor TANPA awalan 0 — cth. 81234567890. Marketing bisa langsung klik tombol WhatsApp di detail kontak." />
+            </>
+          }
+        >
           <div className="flex gap-2">
             <div className="w-[122px] shrink-0 sm:w-[150px]">
               <DialCodeCombobox value={values.whatsappDial} onSelect={setField("whatsappDial")} disabled={disabled} />
@@ -783,8 +810,34 @@ function ContactFormFields({
           </div>
           {waPreview && <p className="text-[11px] text-zinc-400">Tersimpan sebagai {waPreview}</p>}
         </FormField>
-        <FormField label="Telepon">
-          <Input value={values.phone} onChange={(e) => setField("phone")(e.target.value)} placeholder="cth. 021-5550123" disabled={disabled} />
+        <FormField
+          label={
+            <>
+              Telepon
+              <FieldHintInLabel tip="Kode negara dipilih dari dropdown (bisa berbeda dari negara kontak — mis. WNI pakai nomor Malaysia), lalu nomor nasional tanpa 0." />
+            </>
+          }
+        >
+          {/* Ronde 42 — kode negara dropdown (searchable) + nomor nasional tanpa 0,
+              konsisten dgn WhatsApp; dial terpisah dari field Negara (kasus WNI pakai
+              nomor Malaysia dll). */}
+          <div className="flex gap-2">
+            <div className="w-[122px] shrink-0 sm:w-[150px]">
+              <DialCodeCombobox value={values.phoneDial} onSelect={setField("phoneDial")} disabled={disabled} />
+            </div>
+            <Input
+              value={values.phone}
+              onChange={(e) => setField("phone")(e.target.value)}
+              placeholder="8215550123"
+              inputMode="tel"
+              aria-label="Nomor telepon (tanpa kode negara)"
+              disabled={disabled}
+            />
+          </div>
+          {(() => {
+            const preview = whatsappE164Preview(values.phoneDial, values.phone);
+            return preview ? <p className="text-[11px] text-zinc-400">Tersimpan sebagai {preview}</p> : null;
+          })()}
         </FormField>
 
         {mode === "create" ? (
@@ -817,7 +870,14 @@ function ContactFormFields({
         <FormField label="Kota">
           <Input value={values.city} onChange={(e) => setField("city")(e.target.value)} placeholder="cth. Jakarta" disabled={disabled} />
         </FormField>
-        <FormField label="Negara">
+        <FormField
+          label={
+            <>
+              Negara
+              <FieldHintInLabel tip="Pilih negara domisili kontak — otomatis menyarankan mata uangnya (bisa dioverride). Dipakai untuk nilai brief/quotation/invoice." />
+            </>
+          }
+        >
           {/* Ronde 41 — pilih negara sekaligus menyarankan mata uangnya (bisa dioverride di field berikutnya). */}
           <CountryCombobox
             value={values.country}
@@ -1096,6 +1156,7 @@ function ContactDetailBody({
   const [saving, setSaving] = useState(false);
   // Ronde 40-B — nomor tersimpan dipisah jadi dial + nasional utk prefill form
   const waInit = splitPhoneParts(contact.whatsapp ?? "");
+  const phoneInit = splitPhoneParts(contact.phone ?? "");
   const [form, setForm] = useState<ContactFormValues>({
     firstName: contact.firstName ?? "",
     lastName: contact.lastName ?? "",
@@ -1103,7 +1164,8 @@ function ContactDetailBody({
     email: contact.email ?? "",
     whatsapp: waInit.national,
     whatsappDial: waInit.dial,
-    phone: contact.phone ?? "",
+    phone: phoneInit.national,
+    phoneDial: phoneInit.dial,
     companyName: contact.company?.name ?? "",
     companyId: contact.companyId || NO_VALUE,
     city: contact.city ?? "",
@@ -1134,6 +1196,22 @@ function ContactDetailBody({
       toast.error("Nama depan wajib diisi");
       return;
     }
+    // Ronde 42 — validasi format email & nomor (WhatsApp/Telepon) sebelum simpan
+    const vEmail = emailError(form.email);
+    if (vEmail) {
+      toast.error(vEmail);
+      return;
+    }
+    const vWa = nationalPhoneError(form.whatsapp, !form.whatsappDial);
+    if (vWa) {
+      toast.error(`WhatsApp: ${vWa}`);
+      return;
+    }
+    const vPhone = nationalPhoneError(form.phone, !form.phoneDial);
+    if (vPhone) {
+      toast.error(`Telepon: ${vPhone}`);
+      return;
+    }
     setSaving(true);
     try {
       const res = await api.updateContact(contact.id, {
@@ -1142,7 +1220,7 @@ function ContactDetailBody({
         position: form.position.trim() || null,
         email: form.email.trim() || null,
         whatsapp: buildWhatsappPayload(form.whatsappDial, form.whatsapp) || null,
-        phone: form.phone.trim() || null,
+        phone: buildPhonePayload(form.phoneDial, form.phone) || null,
         city: form.city.trim() || null,
         country: form.country.trim() || null,
         currency: form.currency.trim() || null,
@@ -1233,6 +1311,20 @@ function ContactDetailBody({
             </SheetDescription>
           </div>
           <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
+            {/* Ronde 42 — klik-ke-WhatsApp langsung (wa.me) — cepat utk marketing */}
+            {waMeLink(contact.whatsapp) ? (
+              <Button
+                size="sm"
+                className="bg-emerald-600 text-white hover:bg-emerald-700"
+                onClick={() => {
+                  window.open(waMeLink(contact.whatsapp) as string, "_blank", "noopener");
+                }}
+                title={`Chat WhatsApp ke ${contact.whatsapp}`}
+                aria-label="Buka WhatsApp untuk kontak ini"
+              >
+                <MessageCircle className="size-3.5" /> WhatsApp
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
@@ -1647,11 +1739,32 @@ function CreateContactDialog({
     return buildWhatsappPayload(values.whatsappDial, values.whatsapp) ?? "";
   }
 
-  async function createNow() {
+  /** Ronde 42 — validasi format email + nomor (dipakai sebelum cek duplikat & sebelum buat). */
+  function validateForm(): boolean {
     if (!values.firstName.trim()) {
       toast.error("Nama depan wajib diisi");
-      return;
+      return false;
     }
+    const vEmail = emailError(values.email);
+    if (vEmail) {
+      toast.error(vEmail);
+      return false;
+    }
+    const vWa = nationalPhoneError(values.whatsapp, !values.whatsappDial);
+    if (vWa) {
+      toast.error(`WhatsApp: ${vWa}`);
+      return false;
+    }
+    const vPhone = nationalPhoneError(values.phone, !values.phoneDial);
+    if (vPhone) {
+      toast.error(`Telepon: ${vPhone}`);
+      return false;
+    }
+    return true;
+  }
+
+  async function createNow() {
+    if (!validateForm()) return;
     setCreating(true);
     try {
       const res = await api.createContact({
@@ -1660,7 +1773,7 @@ function CreateContactDialog({
         position: values.position.trim() || undefined,
         email: values.email.trim() || undefined,
         whatsapp: finalWhatsapp() || undefined,
-        phone: values.phone.trim() || undefined,
+        phone: buildPhonePayload(values.phoneDial, values.phone) || undefined,
         companyName: values.companyName.trim() || undefined,
         city: values.city.trim() || undefined,
         country: values.country.trim() || undefined,
@@ -1684,10 +1797,7 @@ function CreateContactDialog({
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!values.firstName.trim()) {
-      toast.error("Nama depan wajib diisi");
-      return;
-    }
+    if (!validateForm()) return;
     setChecking(true);
     try {
       const res = await api.identify({

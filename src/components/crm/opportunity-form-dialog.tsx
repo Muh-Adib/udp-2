@@ -11,8 +11,8 @@
  * Field Owner dihapus: owner = pembuat, diisi server dari sesi.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { Loader2, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FieldHintInLabel } from "@/components/crm/field-hint";
+import { AddCatalogMenu } from "@/components/crm/catalog-add-buttons";
 import { api } from "@/lib/crm/api-client";
 import {
   BRAND_SERVICES, LEAD_SOURCES, PRIORITIES, SERVICE_CATEGORIES,
@@ -156,7 +158,23 @@ export default function OpportunityFormDialog({
     };
   }, [brandId]);
 
+  // Ronde 42 — refetch katalog setelah kategori/layanan baru ditambahkan dari form ini
+  const reloadCatalog = useCallback(() => {
+    if (!brandId) return;
+    api.brandServices(brandId)
+      .then((res) => setCatalog({ categories: res.categories, services: res.services }))
+      .catch(() => {
+        /* biarkan katalog lama */
+      });
+  }, [brandId]);
+
   const selectedBrand = useMemo(() => brands.find((b) => b.id === brandId), [brandId, brands]);
+
+  // Ronde 42 — perubahan brand/kontak SATU PINTU: hanya Direktur/Admin.
+  // Role lain melihat kartu terkunci + tooltip otorisasi (bukan input mati tanpa penjelasan).
+  const canChangeLink = user?.role === "director" || user?.role === "super_admin";
+  const editLocked = !!editData && !canChangeLink;
+  const editContact = editData?.contact ?? null;
 
   // Kategori: nama kategori live dari katalog brand; fallback konstanta statis.
   // Saat edit, nilai lama tetap ditampilkan meski tidak ada di katalog (jangan hilangkan data).
@@ -213,7 +231,7 @@ export default function OpportunityFormDialog({
       toast.error("Sesi tidak ditemukan — muat ulang halaman");
       return;
     }
-    // Ronde 39 — mode EDIT: brand & kontak tidak diubah (bukan field updatable server).
+    // Ronde 39 — mode EDIT: brand & kontak tidak diubah kecuali oleh Direktur/Admin (Ronde 42).
     if (editData) {
       if (!title.trim()) { toast.error("Judul opportunity wajib diisi"); return; }
       setSaving(true);
@@ -228,6 +246,9 @@ export default function OpportunityFormDialog({
           expectedCloseDate: expectedCloseDate || null,
           targetDeadline: targetDeadline || null,
           brief: brief.trim() || null,
+          // Ronde 42 — kirim relasi hanya bila benar-benar berubah (server men-gate ke Direktur/Admin)
+          ...(canChangeLink && brandId && brandId !== editData.brandId ? { brandId } : {}),
+          ...(canChangeLink && contactId && contactId !== editData.contactId ? { contactId } : {}),
         });
         toast.success("Opportunity diperbarui", { description: res.opportunity.title });
         onOpenChange(false);
@@ -280,7 +301,9 @@ export default function OpportunityFormDialog({
           <DialogTitle>{editData ? "Edit Peluang" : "Peluang Baru"}</DialogTitle>
           <DialogDescription>
             {editData
-              ? "Perbarui detail peluang — brand & kontak tidak dapat diubah setelah dibuat."
+              ? canChangeLink
+                ? "Perbarui detail peluang — sebagai Direktur/Admin Anda juga dapat mengubah brand/kontak."
+                : "Perbarui detail peluang — brand & kontak terkunci (perubahan hanya oleh Direktur/Admin)."
               : "Form sama seperti konversi lead di Inbox — opportunity langsung masuk pipeline stage New."}
           </DialogDescription>
         </DialogHeader>
@@ -288,17 +311,38 @@ export default function OpportunityFormDialog({
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Brand <span className="text-rose-600">*</span></Label>
-              <Select value={brandId} onValueChange={(v) => { setBrandId(v); setServiceName(""); }} disabled={!!editData}>
-                <SelectTrigger className="w-full" aria-label="Brand opportunity">
-                  <SelectValue placeholder="Pilih brand" />
-                </SelectTrigger>
-                <SelectContent>
-                  {brands.map((b) => (
-                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className="flex items-center gap-1">
+                Brand <span className="text-rose-600">*</span>
+                <FieldHintInLabel
+                  tip={
+                    editData
+                      ? canChangeLink
+                        ? "Brand menentukan katalog layanan, tim, dan mata uang. Bisa diubah hanya oleh Direktur/Admin — katalog layanan ikut menyesuaikan."
+                        : "Brand terkunci setelah peluang dibuat. Perubahan brand hanya oleh Direktur/Admin — hubungi mereka bila perlu."
+                      : "Pemilik jasa yang menangani peluang ini — menentukan katalog layanan, tim, dan mata uang dokumen."
+                  }
+                />
+              </Label>
+              {editLocked ? (
+                <div className="flex items-center gap-2 rounded-lg border bg-zinc-50 px-3 py-2 text-sm text-zinc-700" aria-label={`Brand terkunci: ${selectedBrand?.name ?? editData?.brand?.name ?? "-"}`}>
+                  <Lock className="size-3.5 shrink-0 text-zinc-400" aria-hidden />
+                  <span className="min-w-0 truncate font-medium">
+                    {selectedBrand?.name ?? editData?.brand?.name ?? "-"}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] text-zinc-400">Direktur/Admin</span>
+                </div>
+              ) : (
+                <Select value={brandId} onValueChange={(v) => { setBrandId(v); setServiceName(""); }} disabled={editLocked}>
+                  <SelectTrigger className="w-full" aria-label="Brand opportunity">
+                    <SelectValue placeholder="Pilih brand" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {brands.map((b) => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Prioritas</Label>
@@ -315,39 +359,65 @@ export default function OpportunityFormDialog({
             </div>
           </div>
 
-          {/* Kontak — cari dulu, lalu pilih (daftar dibatasi 100 agar ringan) */}
+          {/* Kontak — Ronde 42: SATU PINTU. Mode edit non-pimpinan → kartu terkunci
+              (input pencarian redundan dihapus). Direktur/Admin tetap bisa mengganti. */}
           <div className="space-y-1.5">
-            <Label>Kontak <span className="text-rose-600">*</span></Label>
-            <Input
-              value={contactQuery}
-              onChange={(e) => setContactQuery(e.target.value)}
-              placeholder="Cari nama / email kontak…"
-              aria-label="Cari kontak"
-            />
-            <Select
-              value={contactId}
-              onValueChange={setContactId}
-              disabled={contacts === null || !!editData}
-            >
-              <SelectTrigger className="w-full" aria-label="Pilih kontak">
-                <SelectValue placeholder={contacts === null ? "Memuat kontak…" : "Pilih kontak"} />
-              </SelectTrigger>
-              <SelectContent className="max-h-60">
-                {contactOptions.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-zinc-400">Tidak ada kontak cocok.</div>
-                ) : (
-                  contactOptions.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.fullName}{c.email ? ` · ${c.email}` : ""}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+            <Label className="flex items-center gap-1">
+              Kontak <span className="text-rose-600">*</span>
+              <FieldHintInLabel
+                tip={
+                  editData
+                    ? canChangeLink
+                      ? "Kontak utama peluang (bisa diganti Direktur/Admin). Pesan, quotation, dan invoice mengikuti kontak ini."
+                      : "Kontak terkunci setelah peluang dibuat. Perubahan kontak hanya oleh Direktur/Admin — satu pintu agar data konsisten."
+                    : "Cari nama/email lalu pilih kontak terkait — pesan, quotation, dan invoice mengikuti kontak ini."
+                }
+              />
+            </Label>
+            {editLocked ? (
+              <div className="flex items-center gap-2 rounded-lg border bg-zinc-50 px-3 py-2 text-sm text-zinc-700" aria-label={`Kontak terkunci: ${editContact?.fullName ?? "-"}`}>
+                <Lock className="size-3.5 shrink-0 text-zinc-400" aria-hidden />
+                <span className="min-w-0 truncate font-medium">{editContact?.fullName ?? "-"}</span>
+                {editContact?.email ? <span className="min-w-0 truncate text-xs text-zinc-400">{editContact.email}</span> : null}
+                <span className="ml-auto shrink-0 text-[10px] text-zinc-400">Direktur/Admin</span>
+              </div>
+            ) : (
+              <>
+                <Input
+                  value={contactQuery}
+                  onChange={(e) => setContactQuery(e.target.value)}
+                  placeholder="Cari nama / email kontak…"
+                  aria-label="Cari kontak"
+                />
+                <Select
+                  value={contactId}
+                  onValueChange={setContactId}
+                  disabled={contacts === null || (!!editData && !canChangeLink)}
+                >
+                  <SelectTrigger className="w-full" aria-label="Pilih kontak">
+                    <SelectValue placeholder={contacts === null ? "Memuat kontak…" : "Pilih kontak"} />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {contactOptions.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-zinc-400">Tidak ada kontak cocok.</div>
+                    ) : (
+                      contactOptions.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.fullName}{c.email ? ` · ${c.email}` : ""}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="oppf-title">Judul Opportunity <span className="text-rose-600">*</span></Label>
+            <Label htmlFor="oppf-title" className="flex items-center gap-1">
+              Judul Opportunity <span className="text-rose-600">*</span>
+              <FieldHintInLabel tip="Nama pekerjaan/kampanye yang tampil di pipeline, quotation, dan project — buat spesifik (mis. “Website company profile PT Maju”)." />
+            </Label>
             <Input
               id="oppf-title"
               value={title}
@@ -358,7 +428,20 @@ export default function OpportunityFormDialog({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Kategori Layanan</Label>
+              <div className="flex items-center gap-1">
+                <Label className="flex items-center gap-1">
+                  Kategori Layanan
+                  <FieldHintInLabel tip="Grup besar jasa brand (mis. Video, Website). Daftar mengikuti katalog brand — pilih dulu agar pilihan layanan ter-filter." />
+                </Label>
+                {/* Ronde 42 — tambah kategori/layanan baru langsung dari sini (Direktur/Admin) */}
+                <AddCatalogMenu
+                  brandId={brandId}
+                  categories={catalog?.categories ?? []}
+                  onAdded={reloadCatalog}
+                  canEdit={canChangeLink && !!brandId}
+                  categoryNameHint={serviceCategory !== "none" ? serviceCategory : undefined}
+                />
+              </div>
               <Select value={serviceCategory} onValueChange={handleCategoryChange}>
                 <SelectTrigger className="w-full" aria-label="Kategori layanan">
                   <SelectValue placeholder="Pilih kategori" />
@@ -371,7 +454,10 @@ export default function OpportunityFormDialog({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Layanan</Label>
+              <Label className="flex items-center gap-1">
+                Layanan
+                <FieldHintInLabel tip="Jasa spesifik dari katalog brand — dipakai sebagai template estimasi (saran harga) dan workflow produksi project nantinya." />
+              </Label>
               {serviceNameOptions.length > 0 ? (
                 <Select value={serviceName || "none"} onValueChange={(v) => setServiceName(v === "none" ? "" : v)}>
                   <SelectTrigger className="w-full" aria-label="Layanan">
@@ -392,7 +478,10 @@ export default function OpportunityFormDialog({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="oppf-value">Estimasi Nilai (Rp)</Label>
+              <Label htmlFor="oppf-value" className="flex items-center gap-1">
+                Estimasi Nilai ({selectedBrand?.primaryCurrency ?? "IDR"})
+                <FieldHintInLabel tip="Perkiraan nilai kontrak awal — boleh dikosongkan bila belum diketahui; akan dipatenkan lewat estimasi & quotation." />
+              </Label>
               <Input
                 id="oppf-value"
                 type="number"
@@ -407,7 +496,10 @@ export default function OpportunityFormDialog({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label>Sumber Lead</Label>
+              <Label className="flex items-center gap-1">
+                Sumber Lead
+                <FieldHintInLabel tip="Dari mana peluang ini berasal (IG, WA, referral, event…) — dipakai untuk laporan performa kanal marketing." />
+              </Label>
               <Select value={leadSource} onValueChange={setLeadSource}>
                 <SelectTrigger className="w-full" aria-label="Sumber lead">
                   <SelectValue placeholder="Sumber" />
@@ -421,17 +513,26 @@ export default function OpportunityFormDialog({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="oppf-close">Estimasi Close</Label>
+              <Label htmlFor="oppf-close" className="flex items-center gap-1">
+                Estimasi Close
+                <FieldHintInLabel tip="Perkiraan tanggal deal — dipakai forecast pipeline bulanan." />
+              </Label>
               <Input id="oppf-close" type="date" value={expectedCloseDate} onChange={(e) => setExpectedCloseDate(e.target.value)} aria-label="Estimasi tanggal close" />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="oppf-deadline">Target Deadline</Label>
+              <Label htmlFor="oppf-deadline" className="flex items-center gap-1">
+                Target Deadline
+                <FieldHintInLabel tip="Tenggat yang diminta klien untuk hasil akhir — acuan penjadwalan produksi." />
+              </Label>
               <Input id="oppf-deadline" type="date" value={targetDeadline} onChange={(e) => setTargetDeadline(e.target.value)} aria-label="Target deadline klien" />
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="oppf-brief">Brief singkat (opsional)</Label>
+            <Label htmlFor="oppf-brief" className="flex items-center gap-1">
+              Brief singkat (opsional)
+              <FieldHintInLabel tip="Ringkasan kebutuhan klien 1–2 kalimat — bantuan konteks untuk estimasi & produksi. Brief lengkap dibuat di tab Brief." />
+            </Label>
             <Textarea
               id="oppf-brief"
               rows={2}
