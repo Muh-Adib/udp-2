@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Building2, Check, ChevronDown, Loader2 } from "lucide-react";
+import { Building2, Check, ChevronDown, Loader2, Pencil, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -324,32 +324,71 @@ export function DialCodeCombobox({
 
 // ============ Modal Detail Perusahaan ============
 
-/** Perusahaan yang dihasilkan modal (struktur minimum yang dipakai pemanggil). */
-export type SavedCompany = { id: string; name: string };
+/**
+ * Perusahaan yang dihasilkan modal (struktur minimum yang dipakai pemanggil;
+ * detail opsional ikut dikirim agar daftar opsi pemanggil bisa diperbarui tanpa refetch).
+ */
+export type SavedCompany = {
+  id: string;
+  name: string;
+  industry?: string | null;
+  website?: string | null;
+  country?: string | null;
+  city?: string | null;
+  size?: string | null;
+  defaultCurrency?: string;
+};
+
+/**
+ * Ronde 45 — opsi perusahaan utk autocomplete & modal edit. Semua field selain
+ * id/name opsional sehingga pemanggil bisa mengirim daftar ringkas maupun lengkap
+ * (CompanyRecord modul Contacts kompatibel secara struktural).
+ */
+export interface CompanyOption {
+  id: string;
+  name: string;
+  industry?: string | null;
+  website?: string | null;
+  country?: string | null;
+  city?: string | null;
+  size?: string | null;
+  defaultCurrency?: string;
+}
 
 /**
  * Ronde 44 — Modal detail perusahaan: muncul saat menambah perusahaan baru
  * (Kontak Baru, Konversi Lead, Peluang Baru) supaya perusahaan tersimpan lengkap
  * (industri, website, negara, kota, ukuran, mata uang) — bukan cuma namanya.
  * Simpan = pakai existing bila nama sudah ada (anti duplikat), buat baru bila belum.
+ *
+ * Ronde 45 — mode EDIT: kirim `editCompany` utk memperbarui perusahaan existing
+ * (prefill semua field, simpan = PATCH /api/companies/:id). Dipakai tombol Edit
+ * di modul Contacts (tabel & detail sheet) dan tombol "Edit" di form contact.
  */
 export function CompanyDetailModal({
   open,
   onOpenChange,
   initial,
   onSaved,
+  editCompany = null,
+  onCompanyUpserted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Nilai awal (mis. nama yang diketik user + negara/kota dari form contact). */
+  /** Nilai awal (mis. nama yang diketik user + negara/kota dari form contact) — mode create. */
   initial?: Partial<CompanyFormValues>;
   /** Dipanggil setelah perusahaan siap dipakai (existing atau baru dibuat). */
   onSaved: (company: SavedCompany) => void;
+  /** Perusahaan yang diedit — null/undefined = mode create (perusahaan baru). */
+  editCompany?: CompanyOption | null;
+  /** Ronde 45 — notify pemanggil agar daftar perusahaan di modul ikut segar. */
+  onCompanyUpserted?: (company: SavedCompany) => void;
 }) {
   const user = useCrmStore((s) => s.user);
   const [values, setValues] = useState<CompanyFormValues>(EMPTY_COMPANY_FORM);
   const [saving, setSaving] = useState(false);
   const [currencyAutoSynced, setCurrencyAutoSynced] = useState(false);
+  const isEdit = !!editCompany;
 
   // Simpan initial di ref agar reset saat open tidak bergantung identitas objek initial.
   const initialRef = useRef<Partial<CompanyFormValues>>(initial ?? {});
@@ -357,7 +396,20 @@ export function CompanyDetailModal({
 
   useEffect(() => {
     if (open) {
-      setValues({ ...EMPTY_COMPANY_FORM, ...initialRef.current });
+      if (editCompany) {
+        // Ronde 45 — mode edit: prefill dari data perusahaan existing.
+        setValues({
+          name: editCompany.name ?? "",
+          industry: editCompany.industry ?? "",
+          website: editCompany.website ?? "",
+          country: editCompany.country ?? "",
+          city: editCompany.city ?? "",
+          size: editCompany.size || NO_VALUE,
+          defaultCurrency: editCompany.defaultCurrency || "IDR",
+        });
+      } else {
+        setValues({ ...EMPTY_COMPANY_FORM, ...initialRef.current });
+      }
       setCurrencyAutoSynced(false);
     }
   }, [open]);
@@ -387,15 +439,46 @@ export function CompanyDetailModal({
     }
     setSaving(true);
     try {
+      if (isEdit && editCompany) {
+        // Ronde 45 — mode edit: PATCH perusahaan existing (server menolak nama duplikat).
+        const res = await api.updateCompany(editCompany.id, {
+          name: values.name.trim(),
+          industry: values.industry.trim(),
+          website: values.website.trim(),
+          country: values.country.trim(),
+          city: values.city.trim(),
+          size: values.size === NO_VALUE ? "" : values.size,
+          defaultCurrency: values.defaultCurrency,
+          actorName: user?.name ?? "System",
+        });
+        toast.success(`Perubahan perusahaan "${res.company.name}" tersimpan`, {
+          description: "Data baru berlaku untuk semua kontak, peluang & quotation yang tertaut.",
+        });
+        const saved: SavedCompany = {
+          id: res.company.id,
+          name: res.company.name,
+          industry: res.company.industry ?? null,
+          website: res.company.website ?? null,
+          country: res.company.country ?? null,
+          city: res.company.city ?? null,
+          size: res.company.size ?? null,
+          defaultCurrency: res.company.defaultCurrency,
+        };
+        onSaved(saved);
+        onCompanyUpserted?.(saved);
+        onOpenChange(false);
+        return;
+      }
       // Anti-duplikat: nama sama (case-insensitive) → pakai perusahaan existing.
       const nameLc = values.name.trim().toLowerCase();
       const existing = await api.companies();
       const match = existing.companies.find((c) => c.name.trim().toLowerCase() === nameLc);
       if (match) {
         toast.info(`Perusahaan "${match.name}" sudah ada — memakai data existing`, {
-          description: "Detailnya bisa dilengkapi lewat modul Contacts › tab Perusahaan.",
+          description: "Detailnya bisa diperbarui lewat tombol Edit di modul Contacts › tab Perusahaan.",
         });
         onSaved({ id: match.id, name: match.name });
+        onCompanyUpserted?.({ id: match.id, name: match.name });
         onOpenChange(false);
         return;
       }
@@ -410,7 +493,18 @@ export function CompanyDetailModal({
         actorName: user?.name ?? "System",
       });
       toast.success(`Perusahaan "${res.company.name}" tersimpan lengkap`);
-      onSaved({ id: res.company.id, name: res.company.name });
+      const saved: SavedCompany = {
+        id: res.company.id,
+        name: res.company.name,
+        industry: values.industry.trim() || null,
+        website: values.website.trim() || null,
+        country: values.country.trim() || null,
+        city: values.city.trim() || null,
+        size: values.size === NO_VALUE ? null : values.size,
+        defaultCurrency: values.defaultCurrency,
+      };
+      onSaved(saved);
+      onCompanyUpserted?.(saved);
       onOpenChange(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menyimpan perusahaan");
@@ -427,10 +521,12 @@ export function CompanyDetailModal({
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden="true">
               <Building2 className="size-3.5" />
             </span>
-            Detail Perusahaan
+            {isEdit ? "Edit Perusahaan" : "Detail Perusahaan"}
           </DialogTitle>
           <DialogDescription>
-            Lengkapi data perusahaan sekarang — nanti tidak perlu mengisi ulang saat membuat quotation &amp; invoice.
+            {isEdit
+              ? "Perbarui data perusahaan — perubahan berlaku untuk semua kontak, peluang & quotation yang tertaut."
+              : "Lengkapi data perusahaan sekarang — nanti tidak perlu mengisi ulang saat membuat quotation & invoice."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSave} className="space-y-4">
@@ -500,11 +596,11 @@ export function CompanyDetailModal({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-              Lewati — nanti saja
+              {isEdit ? "Batal" : "Lewati — nanti saja"}
             </Button>
             <Button type="submit" className="bg-zinc-900 text-white hover:bg-zinc-800" disabled={saving}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : <Building2 className="size-4" />}
-              {saving ? "Menyimpan…" : "Simpan Perusahaan"}
+              {saving ? <Loader2 className="size-4 animate-spin" /> : isEdit ? <Pencil className="size-4" /> : <Building2 className="size-4" />}
+              {saving ? "Menyimpan…" : isEdit ? "Simpan Perubahan" : "Simpan Perusahaan"}
             </Button>
           </DialogFooter>
         </form>
@@ -528,26 +624,80 @@ export function ContactFields({
   disabled,
   mode,
   companies = [],
+  onCompanyUpserted,
 }: {
   values: ContactFormValues;
   onChange: (patch: Partial<ContactFormValues>) => void;
   disabled?: boolean;
   mode: "create" | "edit";
-  /** Daftar perusahaan utk mode edit (select); mode create tidak memerlukannya. */
-  companies?: { id: string; name: string }[];
+  /**
+   * Daftar perusahaan — mode edit (select + tombol Edit) & mode create
+   * (autocomplete auto-text). Bila kosong di mode create, daftar diambil
+   * otomatis dari /api/companies saat field perusahaan disentuh (lazy fetch).
+   */
+  companies?: CompanyOption[];
+  /** Ronde 45 — notify pemanggil setelah perusahaan dibuat/diedit agar daftar modul ikut segar. */
+  onCompanyUpserted?: (company: SavedCompany) => void;
 }) {
   const setField = (key: keyof ContactFormValues) => (value: string) =>
     onChange({ [key]: value } as Partial<ContactFormValues>);
 
-  // Ronde 44 — modal Detail Perusahaan (create mode)
+  // Ronde 44 — modal Detail Perusahaan (create & edit via editTarget)
   const [companyModalOpen, setCompanyModalOpen] = useState(false);
   const [companyModalInit, setCompanyModalInit] = useState<Partial<CompanyFormValues>>({});
+  const [editTarget, setEditTarget] = useState<CompanyOption | null>(null);
   const companyHandledFor = useRef<string>(""); // nama terakhir yang sudah ditawarkan modal
 
+  // Ronde 45 — opsi perusahaan utk auto-text autocomplete
+  const [companyOptions, setCompanyOptions] = useState<CompanyOption[]>(companies);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const optionsFetched = useRef(false);
+
+  // Sinkron dari prop hanya bila pemanggil mengirim daftar nyata — prop `[]` literal
+  // (identitas baru tiap render) tidak boleh menimpa hasil lazy-fetch.
+  useEffect(() => {
+    if (companies.length > 0) setCompanyOptions(companies);
+  }, [companies]);
+
+  async function ensureCompanies() {
+    if (optionsFetched.current || optionsLoading) return;
+    optionsFetched.current = true;
+    setOptionsLoading(true);
+    try {
+      const res = await api.companies();
+      setCompanyOptions(res.companies as CompanyOption[]);
+    } catch {
+      optionsFetched.current = false; // boleh dicoba lagi nanti
+    } finally {
+      setOptionsLoading(false);
+    }
+  }
+
   const companyLinked = !!values.companyId && values.companyId !== NO_VALUE;
+  const linkedOption = companyLinked ? companyOptions.find((c) => c.id === values.companyId) ?? null : null;
+
+  // Ronde 45 — auto-text: kecocokan nama yang diketik terhadap daftar perusahaan
+  const nameTrim = values.companyName.trim();
+  const nameLc = nameTrim.toLowerCase();
+  const exactOption = nameTrim
+    ? companyOptions.find((c) => c.name.trim().toLowerCase() === nameLc) ?? null
+    : null;
+  const nameMatches = useMemo(() => {
+    if (!nameTrim) return [];
+    return companyOptions
+      .filter((c) => c.name.toLowerCase().includes(nameLc))
+      .sort((a, b) => {
+        const aExact = a.name.trim().toLowerCase() === nameLc ? 0 : 1;
+        const bExact = b.name.trim().toLowerCase() === nameLc ? 0 : 1;
+        return aExact - bExact || a.name.localeCompare(b.name);
+      })
+      .slice(0, 6);
+  }, [companyOptions, nameLc, nameTrim]);
 
   function openCompanyModal() {
     const name = values.companyName.trim();
+    setEditTarget(null);
     setCompanyModalInit({
       name,
       country: values.country,
@@ -557,11 +707,55 @@ export function ContactFields({
     setCompanyModalOpen(true);
   }
 
-  /** Munculkan modal otomatis saat blur — hanya bila nama diisi & belum tertaut. */
+  /**
+   * Ronde 45 — buka modal mode EDIT utk perusahaan tertaut (tombol Edit).
+   * Bila data opsi belum lengkap (tanpa defaultCurrency), detail diambil dulu.
+   */
+  async function openCompanyEdit() {
+    if (!companyLinked) return;
+    let target = linkedOption;
+    if (target && target.defaultCurrency === undefined) {
+      try {
+        const res = await api.companies();
+        const fresh = (res.companies as CompanyOption[]).find((c) => c.id === values.companyId);
+        if (fresh) {
+          target = fresh;
+          setCompanyOptions((opts) =>
+            opts.some((o) => o.id === fresh.id)
+              ? opts.map((o) => (o.id === fresh.id ? fresh : o))
+              : [...opts, fresh],
+          );
+        }
+      } catch {
+        /* biarkan prefill fallback */
+      }
+    }
+    setEditTarget(target);
+    setCompanyModalInit({});
+    setCompanyModalOpen(true);
+  }
+
+  /** Ronde 45 — tautkan perusahaan existing dari saran auto-text. */
+  function pickCompany(c: CompanyOption) {
+    companyHandledFor.current = c.name.trim().toLowerCase();
+    setSuggestOpen(false);
+    onChange({ companyName: c.name, companyId: c.id });
+  }
+
+  /**
+   * Ronde 45 — saat blur: nama cocok perusahaan existing → tautkan otomatis
+   * (tanpa modal); nama belum terdaftar → modal Detail Perusahaan muncul otomatis.
+   */
   function handleCompanyBlur() {
+    setSuggestOpen(false);
     const name = values.companyName.trim();
     if (!name || companyLinked) return;
     if (companyHandledFor.current === name.toLowerCase()) return;
+    if (exactOption) {
+      companyHandledFor.current = name.toLowerCase();
+      onChange({ companyId: exactOption.id });
+      return;
+    }
     openCompanyModal();
   }
 
@@ -620,31 +814,115 @@ export function ContactFields({
 
         {mode === "create" ? (
           <CrmField label="Perusahaan" className="sm:col-span-2">
-            <div className="flex gap-2">
-              <Input
-                value={values.companyName}
-                onChange={(e) => {
-                  // ganti nama → lepas tautan perusahaan lama
-                  onChange({
-                    companyName: e.target.value,
-                    ...(companyLinked ? { companyId: NO_VALUE } : {}),
-                  });
-                }}
-                onBlur={handleCompanyBlur}
-                placeholder="cth. PT Maju Jaya (detail bisa dilengkapi)"
-                disabled={disabled}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                className="h-9 shrink-0 gap-1.5 px-3"
-                onClick={openCompanyModal}
-                disabled={disabled}
-                title="Lengkapi detail perusahaan (industri, website, alamat…)"
-                aria-label="Lengkapi detail perusahaan"
-              >
-                <Building2 className="size-3.5" /> Detail
-              </Button>
+            <div className="relative">
+              <div className="flex gap-2">
+                <Input
+                  value={values.companyName}
+                  onChange={(e) => {
+                    // ganti nama → lepas tautan perusahaan lama
+                    onChange({
+                      companyName: e.target.value,
+                      ...(companyLinked ? { companyId: NO_VALUE } : {}),
+                    });
+                    setSuggestOpen(true);
+                  }}
+                  onFocus={() => {
+                    setSuggestOpen(true);
+                    void ensureCompanies();
+                  }}
+                  onBlur={handleCompanyBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setSuggestOpen(false);
+                  }}
+                  role="combobox"
+                  aria-expanded={suggestOpen && !!nameTrim}
+                  aria-controls="company-suggest-list"
+                  aria-autocomplete="list"
+                  aria-label="Nama perusahaan"
+                  placeholder="cth. PT Maju Jaya (detail bisa dilengkapi)"
+                  disabled={disabled}
+                />
+                {companyLinked ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 shrink-0 gap-1.5 px-3"
+                    onClick={() => void openCompanyEdit()}
+                    disabled={disabled}
+                    title="Edit detail perusahaan tertaut (industri, website, negara…)"
+                    aria-label="Edit detail perusahaan tertaut"
+                  >
+                    <Pencil className="size-3.5" /> Edit
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 shrink-0 gap-1.5 px-3"
+                    onClick={openCompanyModal}
+                    disabled={disabled}
+                    title="Lengkapi detail perusahaan (industri, website, alamat…)"
+                    aria-label="Lengkapi detail perusahaan"
+                  >
+                    <Building2 className="size-3.5" /> Detail
+                  </Button>
+                )}
+              </div>
+              {suggestOpen && nameTrim ? (
+                <div
+                  id="company-suggest-list"
+                  role="listbox"
+                  aria-label="Saran perusahaan"
+                  className="absolute z-40 mt-1 w-full overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
+                >
+                  {optionsLoading ? (
+                    <p className="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500">
+                      <Loader2 className="size-3 animate-spin" aria-hidden="true" /> Memuat daftar perusahaan…
+                    </p>
+                  ) : null}
+                  {nameMatches.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="option"
+                      aria-selected={companyLinked && values.companyId === c.id}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-zinc-100"
+                      // onMouseDown + preventDefault: pilihan diproses sebelum blur menutup daftar
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        pickCompany(c);
+                      }}
+                    >
+                      <Building2 className="size-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
+                      <span className="max-w-[45%] truncate text-[11px] text-zinc-400">
+                        {[c.industry, c.city || c.country].filter(Boolean).join(" · ")}
+                      </span>
+                      {companyLinked && values.companyId === c.id ? (
+                        <Check className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                      ) : null}
+                    </button>
+                  ))}
+                  {!optionsLoading && !exactOption && !companyLinked ? (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      className="flex w-full items-start gap-2 border-t px-3 py-2 text-left text-xs text-emerald-700 transition-colors hover:bg-emerald-50"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setSuggestOpen(false);
+                        openCompanyModal();
+                      }}
+                    >
+                      <Plus className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                      <span>
+                        Buat perusahaan baru <span className="font-semibold">“{nameTrim}”</span> — lengkapi detailnya sekarang
+                      </span>
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             {companyLinked ? (
               <p className="flex items-center gap-1 text-[11px] text-emerald-600">
@@ -653,40 +931,41 @@ export function ContactFields({
               </p>
             ) : (
               <p className="text-[11px] text-zinc-400">
-                Tekan <span className="font-medium text-zinc-500">Detail</span> untuk mengisi data perusahaan sekaligus (industri, website, negara…).
+                Ketik utk mencari perusahaan existing, atau lengkapi perusahaan baru lewat <span className="font-medium text-zinc-500">Detail</span>.
               </p>
             )}
-            <CompanyDetailModal
-              open={companyModalOpen}
-              onOpenChange={(o) => {
-                setCompanyModalOpen(o);
-                // ditutup tanpa menyimpan → tandai agar modal tidak mengganggu lagi utk nama ini
-                if (!o && !companyLinked) {
-                  companyHandledFor.current = values.companyName.trim().toLowerCase();
-                }
-              }}
-              initial={companyModalInit}
-              onSaved={(company) => {
-                companyHandledFor.current = company.name.trim().toLowerCase();
-                onChange({ companyId: company.id, companyName: company.name });
-              }}
-            />
           </CrmField>
         ) : (
           <CrmField label="Perusahaan">
-            <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
-              <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
-                <SelectValue placeholder="Pilih perusahaan" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
-                {companies.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex gap-2">
+              <Select value={values.companyId} onValueChange={setField("companyId")} disabled={disabled}>
+                <SelectTrigger className="w-full" aria-label="Pilih perusahaan">
+                  <SelectValue placeholder="Pilih perusahaan" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_VALUE}>Tanpa perusahaan</SelectItem>
+                  {companyOptions.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 shrink-0 gap-1.5 px-3"
+                onClick={() => void openCompanyEdit()}
+                disabled={disabled || !companyLinked}
+                title="Edit detail perusahaan terpilih"
+                aria-label="Edit detail perusahaan terpilih"
+              >
+                <Pencil className="size-3.5" /> Edit
+              </Button>
+            </div>
+            {companyLinked && linkedOption && !linkedOption.industry && !linkedOption.website && !linkedOption.country ? (
+              <p className="text-[11px] text-amber-600">Detail perusahaan belum lengkap — klik Edit untuk melengkapinya.</p>
+            ) : null}
           </CrmField>
         )}
 
@@ -746,6 +1025,37 @@ export function ContactFields({
           <Input value={values.tagsText} onChange={(e) => setField("tagsText")(e.target.value)} placeholder="cth: retainer, priority, q3-campaign" disabled={disabled} />
         </CrmField>
       </div>
+
+      {/* Ronde 44/45 — modal Detail/Edit Perusahaan (portal, dipakai create & edit mode).
+          Diletakkan di luar grid agar bisa dibuka dari kedua mode. */}
+      <CompanyDetailModal
+        open={companyModalOpen}
+        onOpenChange={(o) => {
+          setCompanyModalOpen(o);
+          // ditutup tanpa menyimpan (mode create) → tandai agar modal tidak mengganggu lagi utk nama ini
+          if (!o && !editTarget && !companyLinked) {
+            companyHandledFor.current = values.companyName.trim().toLowerCase();
+          }
+        }}
+        initial={companyModalInit}
+        editCompany={editTarget}
+        onSaved={(company) => {
+          companyHandledFor.current = company.name.trim().toLowerCase();
+          if (editTarget) {
+            // mode edit: nama perusahaan bisa berubah — sinkron form & daftar opsi
+            setCompanyOptions((opts) => opts.map((o) => (o.id === company.id ? { ...o, ...company } : o)));
+            onChange({ companyName: company.name });
+          } else {
+            setCompanyOptions((opts) =>
+              opts.some((o) => o.id === company.id)
+                ? opts.map((o) => ({ ...o, ...company }))
+                : [...opts, company],
+            );
+            onChange({ companyId: company.id, companyName: company.name });
+          }
+          onCompanyUpserted?.(company);
+        }}
+      />
     </div>
   );
 }

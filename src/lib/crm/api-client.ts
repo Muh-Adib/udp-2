@@ -160,6 +160,9 @@ export const api = {
     request<{ contact: ContactRef }>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   createCompany: (payload: Record<string, unknown>) =>
     request<{ company: CompanyRef }>("/api/companies", { method: "POST", body: JSON.stringify(payload) }),
+  /** Ronde 45 — edit perusahaan existing (PATCH /api/companies/:id). */
+  updateCompany: (id: string, payload: Record<string, unknown>) =>
+    request<{ company: CompanyRef; changed: boolean }>(`/api/companies/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   mergeContacts: (primaryId: string, duplicateId: string, actorName: string) =>
     request<{ merged: boolean }>("/api/contacts/merge", { method: "POST", body: JSON.stringify({ primaryId, duplicateId, actorName }) }),
   /** Scanner duplikat lintas sumber (WA/IG/email/import): pasangan kontak skor ≥ ambang. */

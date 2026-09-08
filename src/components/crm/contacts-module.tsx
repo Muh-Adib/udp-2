@@ -132,7 +132,9 @@ import {
   EMPTY_CONTACT_FORM,
   NO_VALUE,
   splitPhoneParts,
+  type CompanyOption,
   type ContactFormValues,
+  type SavedCompany,
 } from "@/components/crm/contact-company-forms";
 
 // ---------- Tipe lokal ----------
@@ -769,12 +771,15 @@ function ContactDetailBody({
   onSaved,
   onDeleted,
   onOpenCompany,
+  onCompanyUpserted,
 }: {
   contact: ContactRecord;
   companies: CompanyRecord[];
   onSaved: (contact: ContactRef) => void;
   onDeleted: () => void;
   onOpenCompany: (company: CompanyRef) => void;
+  /** Ronde 45 — perusahaan diedit dari dalam form contact → modul ikut refresh. */
+  onCompanyUpserted?: (company: SavedCompany) => void;
 }) {
   const user = useCrmStore((s) => s.user);
   const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
@@ -983,6 +988,7 @@ function ContactDetailBody({
               onChange={patchForm}
               disabled={saving}
               companies={companies}
+              onCompanyUpserted={onCompanyUpserted}
             />
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={saving}>
@@ -1146,6 +1152,7 @@ function ContactDetailSheet({
   onSaved,
   onDeleted,
   onOpenCompany,
+  onCompanyUpserted,
 }: {
   contact: ContactRecord | null;
   open: boolean;
@@ -1154,6 +1161,7 @@ function ContactDetailSheet({
   onSaved: (contact: ContactRef) => void;
   onDeleted: () => void;
   onOpenCompany: (company: CompanyRef) => void;
+  onCompanyUpserted?: (company: SavedCompany) => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -1166,6 +1174,7 @@ function ContactDetailSheet({
             onSaved={onSaved}
             onDeleted={onDeleted}
             onOpenCompany={onOpenCompany}
+            onCompanyUpserted={onCompanyUpserted}
           />
         )}
       </SheetContent>
@@ -1179,10 +1188,13 @@ function CompanyDetailBody({
   company,
   contacts,
   onOpenContact,
+  onEdit,
 }: {
   company: CompanyRecord;
   contacts: ContactRecord[];
   onOpenContact: (contact: ContactRecord) => void;
+  /** Ronde 45 — buka modal Edit Perusahaan dari detail sheet. */
+  onEdit?: (company: CompanyRecord) => void;
 }) {
   const tags = parseJsonArray(company.tags);
   const websiteHref = company.website
@@ -1213,6 +1225,19 @@ function CompanyDetailBody({
               )}
             </SheetDescription>
           </div>
+          {onEdit ? (
+            <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onEdit(company)}
+                aria-label={`Edit perusahaan ${company.name}`}
+                title="Edit detail perusahaan (industri, website, negara…)"
+              >
+                <Pencil className="size-3.5" /> Edit
+              </Button>
+            </div>
+          ) : null}
         </div>
       </SheetHeader>
 
@@ -1317,17 +1342,20 @@ function CompanyDetailSheet({
   onOpenChange,
   contacts,
   onOpenContact,
+  onEdit,
 }: {
   company: CompanyRecord | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contacts: ContactRecord[];
   onOpenContact: (contact: ContactRecord) => void;
+  /** Ronde 45 — buka modal Edit Perusahaan. */
+  onEdit?: (company: CompanyRecord) => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full gap-0 overflow-y-auto crm-scroll sm:max-w-xl">
-        {company && <CompanyDetailBody key={company.id} company={company} contacts={contacts} onOpenContact={onOpenContact} />}
+        {company && <CompanyDetailBody key={company.id} company={company} contacts={contacts} onOpenContact={onOpenContact} onEdit={onEdit} />}
       </SheetContent>
     </Sheet>
   );
@@ -1339,10 +1367,15 @@ function CreateContactDialog({
   open,
   onOpenChange,
   onCreated,
+  companies = [],
+  onCompanyUpserted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (contact: ContactRef, duplicates: MatchCandidateDTO[]) => void;
+  /** Ronde 45 — daftar perusahaan utk autocomplete auto-text di form contact. */
+  companies?: CompanyOption[];
+  onCompanyUpserted?: (company: SavedCompany) => void;
 }) {
   const user = useCrmStore((s) => s.user);
   const [values, setValues] = useState<ContactFormValues>(EMPTY_CONTACT_FORM);
@@ -1467,7 +1500,7 @@ function CreateContactDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <ContactFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={[]} />
+          <ContactFields mode="create" values={values} onChange={patchForm} disabled={busy} companies={companies} onCompanyUpserted={onCompanyUpserted} />
 
           {candidates && candidates.length > 0 && (
             <Alert className="border-amber-200 bg-amber-50">
@@ -2536,6 +2569,8 @@ export default function ContactsModule() {
   });
   const [createContactOpen, setCreateContactOpen] = useState(false);
   const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
+  // Ronde 45 — target Edit Perusahaan (modal shared) dari tabel & detail sheet
+  const [companyEditTarget, setCompanyEditTarget] = useState<CompanyRecord | null>(null);
   const [importCsvOpen, setImportCsvOpen] = useState(false);
   const [dedupeOpen, setDedupeOpen] = useState(false);
   const [mergeState, setMergeState] = useState<{ newContactId: string; candidates: MatchCandidateDTO[] } | null>(null);
@@ -2646,6 +2681,19 @@ export default function ContactsModule() {
     setContactSheet({ open: false, contact: null });
     void refreshAll();
   }, [refreshAll]);
+
+  /** Ronde 45 — perusahaan baru/diedit dari form contact mana pun → segarkan daftar & sheet. */
+  const handleCompanyUpserted = useCallback(
+    (updated: SavedCompany) => {
+      setCompanyEditTarget((t) => (t ? ({ ...t, ...updated } as CompanyRecord) : t));
+      setCompanySheet((s) => ({
+        ...s,
+        company: s.company && s.company.id === updated.id ? ({ ...s.company, ...updated } as CompanyRecord) : s.company,
+      }));
+      void refreshAll();
+    },
+    [refreshAll]
+  );
 
   const handleContactCreated = useCallback(
     (contact: ContactRef, duplicates: MatchCandidateDTO[]) => {
@@ -2882,6 +2930,7 @@ export default function ContactsModule() {
                       <TableHead className="text-center">Kontak</TableHead>
                       <TableHead className="text-center">Opportunities</TableHead>
                       <TableHead className="text-right">Lifetime Value</TableHead>
+                      <TableHead className="text-center">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2915,6 +2964,22 @@ export default function ContactsModule() {
                         <TableCell className="text-right font-medium text-zinc-900">
                           {formatCurrency(c.lifetimeValue, c.defaultCurrency)}
                         </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 gap-1.5 px-2.5"
+                            onClick={(e) => {
+                              // stopPropagation: jangan buka detail sheet, langsung modal Edit
+                              e.stopPropagation();
+                              setCompanyEditTarget(c);
+                            }}
+                            aria-label={`Edit perusahaan ${c.name}`}
+                            title="Edit detail perusahaan"
+                          >
+                            <Pencil className="size-3.5" /> Edit
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -2934,6 +2999,7 @@ export default function ContactsModule() {
         onSaved={handleContactSaved}
         onDeleted={handleContactDeleted}
         onOpenCompany={openCompany}
+        onCompanyUpserted={handleCompanyUpserted}
       />
 
       <CompanyDetailSheet
@@ -2942,12 +3008,29 @@ export default function ContactsModule() {
         onOpenChange={(open) => setCompanySheet((s) => ({ ...s, open }))}
         contacts={companySheetContacts}
         onOpenContact={openContactFromCompany}
+        onEdit={(c) => setCompanyEditTarget(c)}
+      />
+
+      {/* Ronde 45 — modal Edit Perusahaan (dari tabel & detail sheet) */}
+      <CompanyDetailModal
+        open={!!companyEditTarget}
+        onOpenChange={(o) => {
+          if (!o) setCompanyEditTarget(null);
+        }}
+        editCompany={companyEditTarget}
+        initial={{}}
+        onSaved={() => {
+          /* refresh ditangani onCompanyUpserted */
+        }}
+        onCompanyUpserted={handleCompanyUpserted}
       />
 
       <CreateContactDialog
         open={createContactOpen}
         onOpenChange={setCreateContactOpen}
         onCreated={handleContactCreated}
+        companies={allCompanies}
+        onCompanyUpserted={handleCompanyUpserted}
       />
 
       <CreateCompanyDialog
