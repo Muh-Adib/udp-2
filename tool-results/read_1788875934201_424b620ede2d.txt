@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+     4→import type { LucideIcon } from "lucide-react";
+     5→import type { ReactNode } from "react";
+     6→import {
+     7→  AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
+     8→  Fingerprint, File, FileArchive, FileImage, FileText, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
+     9→  MessagesSquare, Paperclip, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
+    10→} from "lucide-react";
+    11→import { toast } from "sonner";
+    12→import { api, channelsApi } from "@/lib/crm/api-client";
+    13→import { canAccess, useCrmStore } from "@/lib/crm/store";
+    14→import { BRAND_SERVICES, CHANNELS, PRIORITIES, SERVICE_CATEGORIES, stageLabel } from "@/lib/crm/constants";
+    15→import { CHANNEL_TYPES } from "@/lib/crm/channels";
+    16→import { extractEmailFromText, formatDateTime, initials, isSocialHandle, timeAgo } from "@/lib/crm/utils";
+    17→import type {
+    18→  Brand, ContactRef, ConversationThreadDTO, FollowUpTemplateDTO, InboxLeadDTO, InteractionAttachment, InteractionDTO, MatchCandidateDTO, ThreadMessageDTO,
+    19→} from "@/lib/crm/types";
+    20→import { cn } from "@/lib/utils";
+    21→import { Badge } from "@/components/ui/badge";
+    22→import { Button } from "@/components/ui/button";
+    23→import { Input } from "@/components/ui/input";
+    24→import { Label } from "@/components/ui/label";
+    25→import { Skeleton } from "@/components/ui/skeleton";
+    26→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    27→import {
+    28→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+    29→} from "@/components/ui/dropdown-menu";
+    30→import {
+    31→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    32→} from "@/components/ui/dialog";
+    33→import { Textarea } from "@/components/ui/textarea";
+    34→
+    35→// ============ Tipe lokal ============
+    36→
+    37→/** Task 24-a — lead inbox kini InboxLeadDTO dari backend: membawa threadKey + thread percakapan. */
+    38→type InboxLead = InboxLeadDTO;
+    39→
+    40→// ============ Ronde 34-b — lampiran dokumen di chat ============
+    41→
+    42→/** Draf lampiran di composer (data URL) sebelum dikirim. */
+    43→interface AttachmentDraft {
+    44→  name: string;
+    45→  url: string;
+    46→  size: number;
+    47→}
+    48→
+    49→const MAX_ATTACH_FILES = 3;
+    50→const MAX_ATTACH_BYTES = 2 * 1024 * 1024; // 2 MB per file — sinkron dgn validasi API
+    51→
+    52→function formatBytes(n: number | null | undefined): string {
+    53→  if (!n || n <= 0) return "";
+    54→  if (n < 1024) return `${n} B`;
+    55→  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+    56→  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    57→}
+    58→
+    59→function attachmentIconOf(name: string): LucideIcon {
+    60→  const ext = (name.split(".").pop() ?? "").toLowerCase();
+    61→  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "heic"].includes(ext)) return FileImage;
+    62→  if (["pdf", "doc", "docx", "txt", "csv", "ppt", "pptx", "xls", "xlsx"].includes(ext)) return FileText;
+    63→  if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) return FileArchive;
+    64→  return File;
+    65→}
+    66→
+    67→/** Baca File browser → data URL (base64) utk dikirim sebagai lampiran. */
+    68→function readFileAsDataUrl(file: File): Promise<string> {
+    69→  return new Promise((resolve, reject) => {
+    70→    const reader = new FileReader();
+    71→    reader.onload = () => resolve(String(reader.result ?? ""));
+    72→    reader.onerror = () => reject(new Error("Gagal membaca file"));
+    73→    reader.readAsDataURL(file);
+    74→  });
+    75→}
+    76→
+    77→/** Cocokkan 9 digit terakhir nomor (awalan +62/0 sering beda antar sumber). */
+    78→function digitsMatch(a: string, b: string): boolean {
+    79→  const da = a.replace(/\D+/g, "");
+    80→  const db = b.replace(/\D+/g, "");
+    81→  return da.length >= 9 && db.length >= 9 && da.slice(-9) === db.slice(-9);
+    82→}
+    83→
+    84→/**
+    85→ * Ronde 34-b — pencocokan identitas best-effort lead↔kontak (thread belum ter-link contactId):
+    86→ * email di sender/recipient, 9 digit nomor, handle IG, atau nama persis.
+    87→ */
+    88→function leadMatchesContactIdentity(lead: InboxLead, c: ContactRef): boolean {
+    89→  for (const raw of [(lead.senderName ?? "").trim(), (lead.recipientName ?? "").trim()]) {
+    90→    if (!raw) continue;
+    91→    const lower = raw.toLowerCase();
+    92→    if (c.email && lower.includes(c.email.toLowerCase())) return true;
+    93→    if (c.whatsapp && digitsMatch(lower, c.whatsapp)) return true;
+    94→    if (c.phone && digitsMatch(lower, c.phone)) return true;
+    95→    if (c.instagram && lower === c.instagram.toLowerCase()) return true;
+    96→    if (c.fullName && lower === c.fullName.toLowerCase()) return true;
+    97→  }
+    98→  return false;
+    99→}
+   100→
+   101→/** Lead sudah direspons (respondedAt terisi dari alur Respons & Catat Fase 3). */
+   102→function isResponded(lead: InboxLead): boolean {
+   103→  return Boolean(lead.respondedAt);
+   104→}
+   105→
+   106→interface ContactFormState {
+   107→  firstName: string; lastName: string; email: string; whatsapp: string; companyName: string; city: string;
+   108→  /** Ronde 23 — jabatan di perusahaan + handle Instagram (lead kerap datang dari IG). */
+   109→  position: string; instagram: string;
+   110→}
+   111→interface OpportunityFormState {
+   112→  brandId: string; title: string; serviceCategory: string; serviceName: string;
+   113→  estimatedValue: string; priority: string;
+   114→}
+   115→
+   116→const EMPTY_CONTACT_FORM: ContactFormState = {
+   117→  firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
+   118→};
+   119→const EMPTY_OPP_FORM: OpportunityFormState = {
+   120→  brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", priority: "medium",
+   121→};
+   122→
+   123→// ============ Mapping kanal (tanpa indigo/blue) ============
+   124→
+   125→const CHANNEL_STYLE: Record<string, { icon: LucideIcon; circle: string; badge: string }> = {
+   126→  whatsapp: { icon: MessageCircle, circle: "bg-emerald-100 text-emerald-600", badge: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+   127→  email: { icon: Mail, circle: "bg-amber-100 text-amber-600", badge: "border-amber-200 bg-amber-50 text-amber-700" },
+   128→  instagram: { icon: Instagram, circle: "bg-rose-100 text-rose-600", badge: "border-rose-200 bg-rose-50 text-rose-700" },
+   129→  website: { icon: Globe, circle: "bg-violet-100 text-violet-600", badge: "border-violet-200 bg-violet-50 text-violet-700" },
+   130→  phone: { icon: Phone, circle: "bg-cyan-100 text-cyan-600", badge: "border-cyan-200 bg-cyan-50 text-cyan-700" },
+   131→  meeting: { icon: Video, circle: "bg-zinc-200 text-zinc-700", badge: "border-zinc-200 bg-zinc-100 text-zinc-700" },
+   132→  portal: { icon: LayoutDashboard, circle: "bg-orange-100 text-orange-600", badge: "border-orange-200 bg-orange-50 text-orange-700" },
+   133→};
+   134→
+   135→function channelMeta(channel: string) {
+   136→  return CHANNEL_STYLE[channel] ?? { icon: Inbox, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" };
+   137→}
+   138→function channelLabel(channel: string): string {
+   139→  return CHANNELS.find((c) => c.key === channel)?.label ?? channel;
+   140→}
+   141→
+   142→// ============ Ronde 25 — kanal balasan (hanya kanal yang punya alamat tujuan) ============
+   143→
+   144→/** Kanal balasan yang dikenal backend (REPLY_CHANNELS di src/lib/crm/thread.ts). */
+   145→const REPLY_CHANNEL_KEYS = ["whatsapp", "email", "instagram", "phone"] as const;
+   146→type ReplyChannelKey = (typeof REPLY_CHANNEL_KEYS)[number];
+   147→
+   148→const PHONE_LIKE_RE = /^\+?[\d][\d\s\-()+]{5,}$/;
+   149→
+   150→function looksLikePhoneText(v?: string | null): boolean {
+   151→  return PHONE_LIKE_RE.test((v ?? "").trim());
+   152→}
+   153→
+   154→/**
+   155→ * Ronde 25 — alamat tujuan satu kanal balasan dari data kontak/pengirim lead
+   156→ * (sumber sama dgn backend reachableAddress: kontak dulu, lalu fallback dari senderName).
+   157→ * socialProfile dibaca defensif — ada di model DB tapi belum ada di ContactRef DTO.
+   158→ */
+   159→function replyAddressFor(channel: string, lead: InboxLead): string | null {
+   160→  const sender = (lead.senderName ?? "").trim();
+   161→  const c = (lead.contact ?? null) as {
+   162→    email?: string | null;
+   163→    whatsapp?: string | null;
+   164→    phone?: string | null;
+   165→    instagram?: string | null;
+   166→    socialProfile?: string | null;
+   167→  } | null;
+   168→  switch (channel) {
+   169→    case "email":
+   170→      return c?.email ?? extractEmailFromText(sender);
+   171→    case "whatsapp":
+   172→      return c?.whatsapp ?? (looksLikePhoneText(sender) ? sender : null);
+   173→    case "instagram":
+   174→      return c?.instagram
+   175→        ?? (c?.socialProfile && isSocialHandle(c.socialProfile) ? c.socialProfile : null)
+   176→        ?? (isSocialHandle(sender) || sender.startsWith("@") ? sender : null);
+   177→    case "phone":
+   178→      return c?.phone ?? c?.whatsapp ?? (looksLikePhoneText(sender) ? sender : null);
+   179→    default:
+   180→      return null;
+   181→  }
+   182→}
+   183→
+   184→/** Daftar kanal balasan valid milik lead (whatsapp/email/instagram/phone) — urutan dari backend dipertahankan. */
+   185→function replyChannelsOf(lead: InboxLead): ReplyChannelKey[] {
+   186→  const raw = Array.isArray(lead.replyChannels) ? lead.replyChannels : [];
+   187→  return raw.filter((c): c is ReplyChannelKey =>
+   188→    (REPLY_CHANNEL_KEYS as readonly string[]).includes(c)
+   189→  );
+   190→}
+   191→
+   192→/** Ronde 40-B — kanal yang bisa dipakai menghubungi kontak langsung (punya alamat tujuan). */
+   193→function contactReplyChannels(c: ContactRef): ReplyChannelKey[] {
+   194→  const out: ReplyChannelKey[] = [];
+   195→  if (c.whatsapp?.trim()) out.push("whatsapp");
+   196→  if (c.email?.trim()) out.push("email");
+   197→  if (c.instagram?.trim()) out.push("instagram");
+   198→  if (c.phone?.trim()) out.push("phone");
+   199→  return out;
+   200→}
+   201→
+   202→/**
+   203→ * Task 17-c — indikator status pengiriman pesan outbound (tick gaya WhatsApp).
+   204→ * read → CheckCheck emerald, delivered → CheckCheck zinc, sent → Check zinc,
+   205→ * failed → AlertTriangle merah; outbound WhatsApp tanpa status → Clock "Menunggu status".
+   206→ * Baris inbound TIDAK menampilkan tick.
+   207→ */
+   208→function DeliveryTick({ status, channel }: { status?: string | null; channel?: string | null }) {
+   209→  const label =
+   210→    status === "read" ? "Dibaca"
+   211→    : status === "delivered" ? "Terkirim"
+   212→    : status === "sent" ? "Terkirim"
+   213→    : status === "failed" ? "Gagal terkirim"
+   214→    : channel === "whatsapp" ? "Menunggu status"
+   215→    : null;
+   216→  if (!label) return null;
+   217→  const Icon =
+   218→    status === "read" || status === "delivered" ? CheckCheck
+   219→    : status === "sent" ? Check
+   220→    : status === "failed" ? AlertTriangle
+   221→    : Clock;
+   222→  const tone =
+   223→    status === "read" ? "text-emerald-600"
+   224→    : status === "failed" ? "text-red-600"
+   225→    : status === "sent" || status === "delivered" ? "text-zinc-400"
+   226→    : "text-zinc-300";
+   227→  return (
+   228→    <span role="img" aria-label={label} title={label} className="inline-flex shrink-0 items-center">
+   229→      <Icon className={cn("size-3.5", tone)} aria-hidden="true" />
+   230→    </span>
+   231→  );
+   232→}
+   233→type SlaTone = "ok" | "warning" | "breach";
+   234→
+   235→/** Fase 3 — SLA countdown per brand: sisa = SLA brand − jam tunggu (slaHours dari API). */
+   236→function slaBadgeInfo(brandSlaHours: number, waitHours: number): {
+   237→  label: string; className: string; tone: SlaTone;
+   238→} {
+   239→  const split = (hours: number) => {
+   240→    let h = Math.floor(hours);
+   241→    let m = Math.round((hours - h) * 60);
+   242→    if (m >= 60) { h += 1; m = 0; }
+   243→    return { h, m };
+   244→  };
+   245→  const fmt = (hours: number, prefix: string) => {
+   246→    const { h, m } = split(hours);
+   247→    if (h < 1) return `${prefix}${m}m`;
+   248→    if (m === 0) return `${prefix}${h}j`;
+   249→    return `${prefix}${h}j ${m}m`;
+   250→  };
+   251→
+   252→  const remaining = brandSlaHours - waitHours;
+   253→  if (remaining <= 0) {
+   254→    return {
+   255→      label: fmt(Math.abs(remaining), "Terlambat "),
+   256→      className: "border-rose-200 bg-rose-50 text-rose-700",
+   257→      tone: "breach" as const,
+   258→    };
+   259→  }
+   260→  if (remaining <= brandSlaHours * 0.5) {
+   261→    return {
+   262→      label: fmt(remaining, "Segera: "),
+   263→      className: "border-amber-200 bg-amber-50 text-amber-700",
+   264→      tone: "warning" as const,
+   265→    };
+   266→  }
+   267→  return {
+   268→    label: fmt(remaining, "Sisa "),
+   269→    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+   270→    tone: "ok" as const,
+   271→  };
+   272→}
+   273→
+   274→const SLA_TONE_ICON: Record<SlaTone, LucideIcon> = {
+   275→  ok: Timer,
+   276→  warning: AlarmClock,
+   277→  breach: TimerOff,
+   278→};
+   279→
+   280→/** Badge SLA dengan ikon + countdown, dipakai di kartu lead & panel detail. */
+   281→function SlaBadge({ brandSlaHours, waitHours, respondedAt }: { brandSlaHours: number; waitHours: number; respondedAt?: string | null }) {
+   282→  // Sudah direspons → SLA terpenuhi, tampilkan status emerald alih-alih countdown
+   283→  if (respondedAt) {
+   284→    return (
+   285→      <Badge variant="outline" className="border border-emerald-200 bg-emerald-50 text-emerald-700" aria-label="Lead sudah direspons">
+   286→        <Reply aria-hidden="true" />
+   287→        {`Direspons ${timeAgo(respondedAt)}`}
+   288→      </Badge>
+   289→    );
+   290→  }
+   291→  const sla = slaBadgeInfo(brandSlaHours, waitHours);
+   292→  const Icon = SLA_TONE_ICON[sla.tone];
+   293→  return (
+   294→    <Badge variant="outline" className={cn("border", sla.className)} aria-label={`Status SLA: ${sla.label}`}>
+   295→      <Icon aria-hidden="true" />
+   296→      {sla.label}
+   297→    </Badge>
+   298→  );
+   299→}
+   300→function scoreTone(score: number): { bar: string; text: string } {
+   301→  if (score >= 75) return { bar: "bg-emerald-500", text: "text-emerald-600" };
+   302→  if (score >= 50) return { bar: "bg-amber-500", text: "text-amber-600" };
+   303→  return { bar: "bg-zinc-400", text: "text-zinc-500" };
+   304→}
+   305→
+   306→const PRIORITY_LABELS: Record<string, string> = { low: "Rendah", medium: "Sedang", high: "Tinggi", urgent: "Urgent" };
+   307→const SERVICE_CATEGORY_LABELS: Record<string, string> = {
+   308→  animation: "Animasi", website: "Website", video: "Video",
+   309→  immersive: "Immersive / AR-VR", digital_marketing: "Digital Marketing",
+   310→};
+   311→
+   312→// ============ Sub-komponen internal ============
+   313→
+   314→function ChannelAvatar({ channel, size = "md" }: { channel: string; size?: "sm" | "md" }) {
+   315→  const meta = channelMeta(channel);
+   316→  const Icon = meta.icon;
+   317→  return (
+   318→    <span
+   319→      className={cn(
+   320→        "flex shrink-0 items-center justify-center rounded-full",
+   321→        size === "md" ? "size-10" : "size-9",
+   322→        meta.circle
+   323→      )}
+   324→      aria-hidden="true"
+   325→    >
+   326→      <Icon className="size-4.5" />
+   327→    </span>
+   328→  );
+   329→}
+   330→
+   331→function BrandChip({ name, color }: { name: string; color: string }) {
+   332→  return (
+   333→    <span className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600">
+   334→      <span className="size-2 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+   335→      {name}
+   336→    </span>
+   337→  );
+   338→}
+   339→
+   340→function StatCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: number; tone: "zinc" | "amber" | "rose" }) {
+   341→  const tones: Record<string, string> = {
+   342→    zinc: "bg-zinc-100 text-zinc-600",
+   343→    amber: "bg-amber-100 text-amber-600",
+   344→    rose: "bg-rose-100 text-rose-600",
+   345→  };
+   346→  return (
+   347→    <div className="flex items-center gap-3 rounded-xl border bg-white p-4 shadow-sm">
+   348→      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", tones[tone])} aria-hidden="true">
+   349→        <Icon className="size-4" />
+   350→      </span>
+   351→      <div className="min-w-0">
+   352→        <p className="truncate text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+   353→        <p className="text-lg font-bold leading-tight text-zinc-900">{value}</p>
+   354→      </div>
+   355→    </div>
+   356→  );
+   357→}
+   358→
+   359→function LeadCard({
+   360→  lead, escalated, selected, onSelect, onEscalate,
+   361→}: {
+   362→  lead: InboxLead;
+   363→  escalated: boolean;
+   364→  selected: boolean;
+   365→  onSelect: (lead: InboxLead) => void;
+   366→  onEscalate: (lead: InboxLead) => void;
+   367→}) {
+   368→  const sender = (lead.senderName ?? "").trim() || "Tanpa nama";
+   369→  const responded = isResponded(lead);
+   370→  const sla = slaBadgeInfo(lead.brand?.slaHours ?? 24, lead.slaHours);
+   371→  const breached = sla.tone === "breach" && !responded;
+   372→  const meta = channelMeta(lead.channel);
+   373→  return (
+   374→    <div
+   375→      role="button"
+   376→      tabIndex={0}
+   377→      onClick={() => onSelect(lead)}
+   378→      onKeyDown={(e) => {
+   379→        if (e.key === "Enter" || e.key === " ") {
+   380→          e.preventDefault();
+   381→          onSelect(lead);
+   382→        }
+   383→      }}
+   384→      aria-label={`Buka detail lead dari ${sender}`}
+   385→      className={cn(
+   386→        "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+   387→        breached ? "border-l-4 border-l-rose-500" : responded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
+   388→        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
+   389→        selected && breached && "ring-1 ring-rose-500"
+   390→      )}
+   391→    >
+   392→      <div className="flex items-start gap-3">
+   393→        <ChannelAvatar channel={lead.channel} />
+   394→        <div className="min-w-0 flex-1">
+   395→          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+   396→            <span className="truncate text-sm font-semibold text-zinc-900">{sender}</span>
+   397→            <span className="text-xs text-zinc-300" aria-hidden="true">·</span>
+   398→            <span className="text-xs text-zinc-500">{formatDateTime(lead.createdAt)}</span>
+   399→            <span className="text-xs text-zinc-300" aria-hidden="true">·</span>
+   400→            <span className="text-xs text-zinc-400">{timeAgo(lead.createdAt)}</span>
+   401→          </div>
+   402→          <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-zinc-600">{lead.content}</p>
+   403→          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   404→            <Badge variant="outline" className={cn("border", meta.badge)}>{channelLabel(lead.channel)}</Badge>
+   405→            {lead.brand ? <BrandChip name={lead.brand.name} color={lead.brand.color} /> : null}
+   406→            <SlaBadge brandSlaHours={lead.brand?.slaHours ?? 24} waitHours={lead.slaHours} respondedAt={lead.respondedAt} />
+   407→            {lead.candidates.length > 0 ? (
+   408→              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+   409→                <AlertTriangle aria-hidden="true" />
+   410→                {`Duplikat? ${lead.candidates.length} kandidat`}
+   411→              </Badge>
+   412→            ) : null}
+   413→            {escalated ? (
+   414→              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
+   415→                <CheckCircle2 aria-hidden="true" />
+   416→                Sudah dieskalasi
+   417→              </Badge>
+   418→            ) : null}
+   419→          </div>
+   420→          <div className="mt-3 flex items-center justify-end">
+   421→            <Button
+   422→              type="button"
+   423→              size="sm"
+   424→              variant="outline"
+   425→              disabled={escalated || responded}
+   426→              className={cn(
+   427→                "h-7 px-2.5 text-xs",
+   428→                breached && !escalated
+   429→                  ? "border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   430→                  : "text-zinc-600"
+   431→              )}
+   432→              onClick={(e) => {
+   433→                e.stopPropagation();
+   434→                onEscalate(lead);
+   435→              }}
+   436→              aria-label={`Eskalasi lead dari ${sender}`}
+   437→            >
+   438→              <ShieldAlert className="size-3.5" aria-hidden="true" />
+   439→              Eskalasi
+   440→            </Button>
+   441→          </div>
+   442→        </div>
+   443→      </div>
+   444→    </div>
+   445→  );
+   446→}
+   447→
+   448→// ============ Task 24-a — grouping percakapan per kontak (thread) ============
+   449→
+   450→/** Thread dari backend; fallback sintetis bila lead lama belum membawa thread (aman runtime). */
+   451→function threadOf(lead: InboxLead): ConversationThreadDTO {
+   452→  if (lead.thread) return lead.thread;
+   453→  return {
+   454→    key: lead.threadKey || lead.id,
+   455→    messageCount: 1,
+   456→    channels: [lead.channel],
+   457→    lastMessageAt: lead.createdAt,
+   458→    messages: [{
+   459→      id: lead.id, channel: lead.channel, direction: lead.direction, subject: lead.subject ?? null,
+   460→      content: lead.content, senderName: lead.senderName ?? null, recipientName: lead.recipientName ?? null,
+   461→      respondedBy: lead.respondedBy ?? null, deliveryStatus: lead.deliveryStatus ?? null,
+   462→      externalId: lead.externalId ?? null, createdAt: lead.createdAt,
+   463→    }],
+   464→  };
+   465→}
+   466→
+   467→/** Pesan terakhir thread (maks createdAt) — dipakai utk preview kartu. */
+   468→function lastThreadMessage(thread: ConversationThreadDTO): ThreadMessageDTO | null {
+   469→  const msgs = thread.messages;
+   470→  if (msgs.length === 0) return null;
+   471→  return msgs.reduce(
+   472→    (acc, m) => (new Date(m.createdAt).getTime() > new Date(acc.createdAt).getTime() ? m : acc),
+   473→    msgs[0]
+   474→  );
+   475→}
+   476→
+   477→/** Kanal paling sering muncul dalam thread — warna avatar kartu thread. */
+   478→function dominantChannelOf(thread: ConversationThreadDTO, fallback: string): string {
+   479→  const counts = new Map<string, number>();
+   480→  for (const m of thread.messages) counts.set(m.channel, (counts.get(m.channel) ?? 0) + 1);
+   481→  let best = fallback;
+   482→  let bestN = -1;
+   483→  for (const [ch, n] of counts) {
+   484→    if (n > bestN) { best = ch; bestN = n; }
+   485→  }
+   486→  return best;
+   487→}
+   488→
+   489→/** Nama tampilan thread: nama contact (bila tertaut) → senderName apa adanya (handle IG utuh). */
+   490→function threadDisplayName(lead: InboxLead): string {
+   491→  const fromContact = lead.contact?.fullName?.trim();
+   492→  if (fromContact) return fromContact;
+   493→  return (lead.senderName ?? "").trim() || "Tanpa nama";
+   494→}
+   495→
+   496→/** Hasil grouping leads by threadKey (useMemo di modul utama). */
+   497→interface ThreadGroup {
+   498→  key: string;
+   499→  /** Anggota thread, terbaru dulu. */
+   500→  members: InboxLead[];
+   501→  /** Lead terbaru — sumber nama tampilan & target seleksi. */
+   502→  newest: InboxLead;
+   503→  thread: ConversationThreadDTO;
+   504→  /** Lead belum-direspons dgn sisa SLA paling kritis (null bila semua sudah direspons). */
+   505→  worstPending: InboxLead | null;
+   506→  /** Sisa SLA terburuk grup (brandSla − wait); null bila semua responded. */
+   507→  worstRemaining: number | null;
+   508→  maxCandidates: number;
+   509→  allResponded: boolean;
+   510→  /** Ronde 32 — SEMUA anggota thread sudah dikonversi ke opportunity. */
+   511→  converted: boolean;
+   512→  /** Ronde 32 — ringkasan opportunity thread terkonversi (dari anggota mana pun). */
+   513→  opportunity: { id: string; title: string; stage: string } | null;
+   514→}
+   515→
+   516→function ThreadCard({ group, selected, onSelect }: {
+   517→  group: ThreadGroup;
+   518→  selected: boolean;
+   519→  onSelect: (lead: InboxLead) => void;
+   520→}) {
+   521→  const { newest, thread } = group;
+   522→  const name = threadDisplayName(newest);
+   523→  const breached = group.worstRemaining !== null && group.worstRemaining <= 0;
+   524→  const lastMsg = lastThreadMessage(thread);
+   525→  const preview = (lastMsg?.content ?? newest.content).trim();
+   526→  const avatarMeta = channelMeta(dominantChannelOf(thread, newest.channel));
+   527→  // Ronde 32 — thread terkonversi: badge opportunity menggantikan SLA (bukan lagi "lead menunggu")
+   528→  const opp = group.opportunity;
+   529→  return (
+   530→    <div
+   531→      role="button"
+   532→      tabIndex={0}
+   533→      onClick={() => onSelect(newest)}
+   534→      onKeyDown={(e) => {
+   535→        if (e.key === "Enter" || e.key === " ") {
+   536→          e.preventDefault();
+   537→          onSelect(newest);
+   538→        }
+   539→      }}
+   540→      aria-label={`Buka percakapan dengan ${name}`}
+   541→      className={cn(
+   542→        "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+   543→        breached ? "border-l-4 border-l-rose-500" : group.converted ? "border-l-4 border-l-emerald-500" : group.allResponded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
+   544→        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
+   545→        selected && breached && "ring-1 ring-rose-500"
+   546→      )}
+   547→    >
+   548→      <div className="flex items-start gap-3">
+   549→        <span
+   550→          className={cn(
+   551→            "flex size-10 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+   552→            avatarMeta.circle
+   553→          )}
+   554→          aria-hidden="true"
+   555→        >
+   556→          {initials(name.replace(/^@+/, ""))}
+   557→        </span>
+   558→        <div className="min-w-0 flex-1">
+   559→          <div className="flex items-baseline gap-2">
+   560→            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{name}</span>
+   561→            <span className="shrink-0 text-xs text-zinc-400">{timeAgo(thread.lastMessageAt)}</span>
+   562→          </div>
+   563→          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+   564→            {thread.channels.map((ch) => {
+   565→              const ChMeta = channelMeta(ch);
+   566→              const ChIcon = ChMeta.icon;
+   567→              return (
+   568→                <span
+   569→                  key={ch}
+   570→                  role="img"
+   571→                  aria-label={`Kanal ${channelLabel(ch)}`}
+   572→                  title={channelLabel(ch)}
+   573→                  className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-full", ChMeta.circle)}
+   574→                >
+   575→                  <ChIcon className="size-3" aria-hidden="true" />
+   576→                </span>
+   577→              );
+   578→            })}
+   579→            {thread.messageCount > 1 ? (
+   580→              <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">{`${thread.messageCount} pesan`}</Badge>
+   581→            ) : null}
+   582→            {thread.channels.length > 1 ? (
+   583→              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">{`${thread.channels.length} kanal`}</Badge>
+   584→            ) : null}
+   585→            {newest.brand ? <BrandChip name={newest.brand.name} color={newest.brand.color} /> : null}
+   586→          </div>
+   587→          <p className="mt-1.5 line-clamp-1 text-sm leading-relaxed text-zinc-600">{preview}</p>
+   588→          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   589→            {/* Ronde 32 — badge opportunity utk thread terkonversi (bisa coexist dgn SLA
+   590→                pada grup campuran: pesan lama terkonversi + pesan baru belum). */}
+   591→            {opp ? (
+   592→              <Badge
+   593→                variant="outline"
+   594→                className="border-emerald-300 bg-emerald-50 text-emerald-700"
+   595→                aria-label="Thread sudah dikonversi menjadi opportunity"
+   596→                title={opp.title}
+   597→              >
+   598→                <FolderKanban aria-hidden="true" />
+   599→                {`Opportunity · ${stageLabel(opp.stage)}`}
+   600→              </Badge>
+   601→            ) : null}
+   602→            {group.converted ? null : group.allResponded ? (
+   603→              <Badge
+   604→                variant="outline"
+   605→                className="border-emerald-200 bg-emerald-50 text-emerald-700"
+   606→                aria-label="Semua pesan di grup sudah direspons"
+   607→              >
+   608→                <Reply aria-hidden="true" />
+   609→                Sudah Direspons
+   610→              </Badge>
+   611→            ) : group.worstPending ? (
+   612→              <SlaBadge brandSlaHours={group.worstPending.brand?.slaHours ?? 24} waitHours={group.worstPending.slaHours} />
+   613→            ) : null}
+   614→            {group.maxCandidates > 0 ? (
+   615→              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+   616→                <AlertTriangle aria-hidden="true" />
+   617→                {`Duplikat? ${group.maxCandidates} kandidat`}
+   618→              </Badge>
+   619→            ) : null}
+   620→          </div>
+   621→        </div>
+   622→      </div>
+   623→    </div>
+   624→  );
+   625→}
+   626→
+   627→function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCandidateDTO; selected: boolean; onToggle: () => void }) {
+   628→  const tone = scoreTone(candidate.score);
+   629→  const contact = candidate.contact;
+   630→  const label = contact?.fullName?.trim() || `Contact #${candidate.contactId.slice(0, 8)}`;
+   631→  return (
+   632→    <div className={cn("rounded-lg border p-3 transition-colors", selected ? "border-emerald-300 bg-emerald-50/60" : "border-zinc-200 bg-white")}>
+   633→      <div className="flex items-center gap-2.5">
+   634→        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-bold text-zinc-600" aria-hidden="true">
+   635→          {initials(contact?.fullName ?? label)}
+   636→        </span>
+   637→        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{label}</span>
+   638→        <span className={cn("text-xs font-bold", tone.text)}>{candidate.score}%</span>
+   639→      </div>
+   640→      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100" role="progressbar" aria-valuenow={candidate.score} aria-valuemin={0} aria-valuemax={100} aria-label={`Skor kemiripan ${candidate.score} persen`}>
+   641→        <div className={cn("h-full rounded-full transition-all", tone.bar)} style={{ width: `${Math.min(100, Math.max(0, candidate.score))}%` }} />
+   642→      </div>
+   643→      {candidate.reasons.length > 0 ? (
+   644→        <ul className="mt-2 space-y-0.5">
+   645→          {candidate.reasons.map((reason) => (
+   646→            <li key={reason} className="text-xs text-zinc-500">• {reason}</li>
+   647→          ))}
+   648→        </ul>
+   649→      ) : null}
+   650→      <div className="mt-2 space-y-1 text-xs text-zinc-600">
+   651→        {contact?.position ? (
+   652→          <p className="flex items-center gap-1.5"><User className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.position}</p>
+   653→        ) : null}
+   654→        {contact?.company?.name ? (
+   655→          <p className="flex items-center gap-1.5"><Building2 className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.company.name}</p>
+   656→        ) : null}
+   657→        {contact?.email ? (
+   658→          <p className="flex items-center gap-1.5"><Mail className="size-3 shrink-0 text-zinc-400" aria-hidden="true" /><span className="truncate">{contact.email}</span></p>
+   659→        ) : null}
+   660→        {contact?.whatsapp ? (
+   661→          <p className="flex items-center gap-1.5"><MessageCircle className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.whatsapp}</p>
+   662→        ) : null}
+   663→      </div>
+   664→      <Button
+   665→        type="button"
+   666→        size="sm"
+   667→        variant={selected ? "default" : "outline"}
+   668→        className="mt-3 w-full"
+   669→        onClick={onToggle}
+   670→      >
+   671→        {selected ? (
+   672→          <><Check className="size-3.5" aria-hidden="true" /> Dipilih — akan digabung ke contact ini</>
+   673→        ) : (
+   674→          "Gabungkan ke Contact Ini"
+   675→        )}
+   676→      </Button>
+   677→    </div>
+   678→  );
+   679→}
+   680→
+   681→/** Ronde 23 — chip status satu data identitas: Check emerald bila terisi, CircleDashed amber + "kurang" bila kosong. */
+   682→function IdentityChip({ label, filled }: { label: string; filled: boolean }) {
+   683→  if (filled) {
+   684→    return (
+   685→      <Badge
+   686→        variant="outline"
+   687→        className="gap-1 border-emerald-300 bg-emerald-50 text-emerald-700"
+   688→        aria-label={`${label}: sudah ada`}
+   689→      >
+   690→        <Check className="size-3" aria-hidden="true" />
+   691→        {label}
+   692→      </Badge>
+   693→    );
+   694→  }
+   695→  return (
+   696→    <Badge
+   697→      variant="outline"
+   698→      className="gap-1 border-amber-300 bg-amber-50 text-amber-700"
+   699→      aria-label={`${label}: kurang`}
+   700→    >
+   701→      <CircleDashed className="size-3" aria-hidden="true" />
+   702→      {`${label} · kurang`}
+   703→    </Badge>
+   704→  );
+   705→}
+   706→
+   707→// ============ Ronde 29 — identitas lead: sumber data, kelengkapan 0/5, pesan identifikasi ============
+   708→
+   709→/** Data identitas lead — dari contact terhubung/kandidat terpilih ATAU form lokal (pra-konversi). */
+   710→interface IdentityData {
+   711→  firstName: string; lastName: string; companyName: string; position: string;
+   712→  email: string; whatsapp: string; instagram: string; city: string;
+   713→}
+   714→
+   715→/** 5 data identitas yang dilacak: Nama, Perusahaan, Jabatan, Email, WhatsApp. */
+   716→const IDENTITY_FIELDS: { key: keyof IdentityData; label: string; messageLabel: string }[] = [
+   717→  { key: "firstName", label: "Nama", messageLabel: "Nama lengkap" },
+   718→  { key: "companyName", label: "Perusahaan", messageLabel: "Nama perusahaan" },
+   719→  { key: "position", label: "Jabatan", messageLabel: "Jabatan di perusahaan" },
+   720→  { key: "email", label: "Email", messageLabel: "Email aktif" },
+   721→  { key: "whatsapp", label: "WhatsApp", messageLabel: "Nomor WhatsApp aktif" },
+   722→];
+   723→
+   724→/** ContactRef (terhubung/kandidat) → bentuk form — dipakai modal identitas & konversi. */
+   725→function contactToForm(c: ContactRef): ContactFormState {
+   726→  const parts = (c.fullName ?? "").trim().split(/\s+/);
+   727→  return {
+   728→    firstName: parts[0] ?? "",
+   729→    lastName: parts.slice(1).join(" "),
+   730→    email: c.email?.trim() ?? "",
+   731→    whatsapp: c.whatsapp?.trim() ?? "",
+   732→    companyName: c.company?.name?.trim() ?? "",
+   733→    city: c.city?.trim() ?? "",
+   734→    position: c.position?.trim() ?? "",
+   735→    instagram: c.instagram?.trim() ?? "",
+   736→  };
+   737→}
+   738→
+   739→function identityFromForm(f: ContactFormState): IdentityData {
+   740→  return {
+   741→    firstName: f.firstName, lastName: f.lastName, companyName: f.companyName, position: f.position,
+   742→    email: f.email, whatsapp: f.whatsapp, instagram: f.instagram, city: f.city,
+   743→  };
+   744→}
+   745→
+   746→/** Kelengkapan identitas 0/5 — chips reaktif terhadap sumber data aktif. */
+   747→function identityCompleteness(d: IdentityData) {
+   748→  const fields = IDENTITY_FIELDS.map((f) => ({ ...f, filled: (d[f.key] ?? "").trim() !== "" }));
+   749→  const missing = fields.filter((f) => !f.filled);
+   750→  return {
+   751→    fields,
+   752→    missing,
+   753→    count: fields.length - missing.length,
+   754→    total: fields.length,
+   755→    complete: missing.length === 0,
+   756→  };
+   757→}
+   758→
+   759→/** Pesan identifikasi — hanya menanyakan field yang masih kurang (siap tempel ke chat klien). */
+   760→function buildIdentityMessage(d: IdentityData, brandName: string, igHandleFallback?: string | null): string {
+   761→  const { missing } = identityCompleteness(d);
+   762→  const greetingName = d.firstName.trim() || (igHandleFallback ?? "").trim();
+   763→  return [
+   764→    `Halo${greetingName ? ` ${greetingName}` : ""}! Terima kasih sudah menghubungi ${brandName}. Sebelum kami lanjut, boleh dibantu lengkapi info berikut:`,
+   765→    ...missing.map((f) => `- ${f.messageLabel}`),
+   766→  ].join("\n");
+   767→}
+   768→
+   769→/** Salin teks + fallback legacy; false = clipboard ditolak browser (butuh salin manual). */
+   770→async function copyTextSmart(text: string, successMsg: string): Promise<boolean> {
+   771→  const legacyCopy = () => {
+   772→    try {
+   773→      const ta = document.createElement("textarea");
+   774→      ta.value = text;
+   775→      ta.setAttribute("readonly", "");
+   776→      ta.style.position = "fixed";
+   777→      ta.style.opacity = "0";
+   778→      document.body.appendChild(ta);
+   779→      ta.select();
+   780→      const ok = document.execCommand("copy");
+   781→      document.body.removeChild(ta);
+   782→      return ok;
+   783→    } catch {
+   784→      return false;
+   785→    }
+   786→  };
+   787→  try {
+   788→    await navigator.clipboard.writeText(text);
+   789→    toast.success(successMsg);
+   790→    return true;
+   791→  } catch {
+   792→    if (legacyCopy()) {
+   793→      toast.success(successMsg);
+   794→      return true;
+   795→    }
+   796→    return false;
+   797→  }
+   798→}
+   799→
+   800→/** Label hari utk pemisah pesan chat: Hari ini / Kemarin / nama hari / tanggal. */
+   801→function dayLabelOf(iso: string): string {
+   802→  const d = new Date(iso);
+   803→  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+   804→  const diff = startOfDay(new Date()) - startOfDay(d);
+   805→  const DAY = 86_400_000;
+   806→  if (diff === 0) return "Hari ini";
+   807→  if (diff === DAY) return "Kemarin";
+   808→  if (diff > 0 && diff < 7 * DAY) return d.toLocaleDateString("id-ID", { weekday: "long" });
+   809→  return d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+   810→}
+   811→
+   812→function DaySeparator({ label }: { label: string }) {
+   813→  return (
+   814→    <li className="flex justify-center py-1.5" role="presentation">
+   815→      <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-medium text-zinc-500 shadow-sm">
+   816→        {label}
+   817→      </span>
+   818→    </li>
+   819→  );
+   820→}
+   821→
+   822→/** Teks identitas kanal lead utk subtitle header chat (nomor/handle → fallback contact). */
+   823→function leadAddressText(lead: InboxLead): string {
+   824→  const raw = (lead.senderName ?? "").trim();
+   825→  if (looksLikePhoneText(raw) || isSocialHandle(raw) || raw.startsWith("@")) return raw;
+   826→  if (lead.contact?.whatsapp) return lead.contact.whatsapp;
+   827→  if (lead.contact?.email) return lead.contact.email;
+   828→  return raw || "-";
+   829→}
+   830→
+   831→
+   832→// ============ Task 24-a — Riwayat Percakapan (bubble chat thread per kontak) ============
+   833→
+   834→function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { message: ThreadMessageDTO; highlight: boolean; fallbackOutboundAuthor?: string | null }) {
+   835→  const isInbound = message.direction !== "outbound";
+   836→  const MIcon = channelMeta(message.channel).icon;
+   837→  const author = isInbound
+   838→    ? (message.senderName ?? "").trim() || "Pengirim"
+   839→    : (message.respondedBy ?? "").trim() || (fallbackOutboundAuthor ?? "").trim() || "Tim CRM";
+   840→  const isOwnReply = typeof message.externalId === "string" && message.externalId.startsWith("inbox-reply:");
+   841→  return (
+   842→    <li className={cn("flex w-full", isInbound ? "justify-start" : "justify-end")}>
+   843→      <div
+   844→        className={cn(
+   845→          "max-w-[85%] rounded-2xl px-3.5 py-2.5",
+   846→          isInbound ? "bg-zinc-100 text-zinc-800" : "bg-zinc-900 text-white",
+   847→          highlight && "ring-2 ring-amber-400"
+   848→        )}
+   849→      >
+   850→        <div
+   851→          className={cn(
+   852→            "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]",
+   853→            isInbound ? "text-zinc-500" : "text-white/70"
+   854→          )}
+   855→        >
+   856→          <MIcon className="size-3 shrink-0" aria-hidden="true" />
+   857→          <span className="max-w-[10rem] truncate font-semibold">{author}</span>
+   858→          <span aria-hidden="true">·</span>
+   859→          <span className="shrink-0">{formatDateTime(message.createdAt)}</span>
+   860→          {!isInbound ? <DeliveryTick status={message.deliveryStatus} channel={message.channel} /> : null}
+   861→        </div>
+   862→        {message.subject ? (
+   863→          <p className={cn("mt-1 truncate text-xs font-medium", isInbound ? "text-zinc-600" : "text-white/80")}>
+   864→            {message.subject}
+   865→          </p>
+   866→        ) : null}
+   867→        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
+   868→        {message.attachments && message.attachments.length > 0 ? (
+   869→          <ul className="mt-1.5 space-y-1" aria-label="Lampiran pesan">
+   870→            {message.attachments.map((a, i) => {
+   871→              const AIcon = attachmentIconOf(a.name);
+   872→              return (
+   873→                <li key={`${a.name}-${i}`}>
+   874→                  <a
+   875→                    href={a.url}
+   876→                    download={a.name}
+   877→                    className={cn(
+   878→                      "flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
+   879→                      isInbound
+   880→                        ? "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+   881→                        : "bg-white/10 text-white hover:bg-white/20"
+   882→                    )}
+   883→                    aria-label={`Unduh lampiran ${a.name}`}
+   884→                  >
+   885→                    <AIcon className="size-3.5 shrink-0" aria-hidden="true" />
+   886→                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
+   887→                    <span className="shrink-0 opacity-70">{formatBytes(a.size)}</span>
+   888→                  </a>
+   889→                </li>
+   890→              );
+   891→            })}
+   892→          </ul>
+   893→        ) : null}
+   894→        {isOwnReply ? (
+   895→          <span
+   896→            className={cn(
+   897→              "mt-1.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+   898→              isInbound ? "bg-zinc-200 text-zinc-600" : "bg-white/10 text-white/80"
+   899→            )}
+   900→          >
+   901→            Balasan kamu
+   902→          </span>
+   903→        ) : null}
+   904→      </div>
+   905→    </li>
+   906→  );
+   907→}
+   908→
+   909→// ============ Ronde 29 — composer chat inline (menggantikan dialog Respons — satu pintu, anti-redundan) ============
+   910→
+   911→/** Ganti placeholder template untuk konteks lead inbox. */
+   912→function renderLeadTemplate(body: string, vars: Record<string, string>): string {
+   913→  return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => vars[key] ?? full);
+   914→}
+   915→
+   916→// ============ Ronde 40-B — kartu mulai percakapan (kontak belum punya thread) ============
+   917→
+   918→/**
+   919→ * Tampil di area chat bila kontak difokuskan lintas modul tapi belum punya thread.
+   920→ * Mengirim pesan outbound pertama via POST /api/inbox/respond mode kontak.
+   921→ */
+   922→function StartConversationCard({
+   923→  contact, channels, channel, onChannelChange, body, onBodyChange, onSend, sending, sentCount, onClose,
+   924→}: {
+   925→  contact: ContactRef;
+   926→  channels: ReplyChannelKey[];
+   927→  channel: string;
+   928→  onChannelChange: (c: string) => void;
+   929→  body: string;
+   930→  onBodyChange: (v: string) => void;
+   931→  onSend: () => void;
+   932→  sending: boolean;
+   933→  sentCount: number;
+   934→  onClose: () => void;
+   935→}) {
+   936→  const chMeta = channelMeta(channel);
+   937→  const ChIcon = chMeta.icon;
+   938→  return (
+   939→    <div className="flex h-full flex-col overflow-hidden">
+   940→      <div className="flex items-center gap-2.5 border-b border-zinc-200 px-3 py-2.5 sm:px-4">
+   941→        <span
+   942→          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white"
+   943→          aria-hidden="true"
+   944→        >
+   945→          {initials(contact.fullName.replace(/^@+/, ""))}
+   946→        </span>
+   947→        <div className="min-w-0 flex-1">
+   948→          <p className="truncate text-sm font-semibold text-zinc-900">Belum ada percakapan dengan {contact.fullName}</p>
+   949→          <p className="truncate text-xs text-zinc-500">Mulai chat outbound pertama — pesan tercatat di riwayat kontak.</p>
+   950→        </div>
+   951→        <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label="Tutup kartu mulai percakapan">
+   952→          <X className="size-4" />
+   953→        </Button>
+   954→      </div>
+   955→
+   956→      <div className="crm-scroll min-h-0 flex-1 overflow-y-auto bg-zinc-50/60 p-4 sm:p-6">
+   957→        <div className="mx-auto max-w-md space-y-3">
+   958→          <div className="rounded-xl border bg-white p-4 text-center shadow-sm">
+   959→            <span className="mx-auto flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
+   960→              <MessagesSquare className="size-6 text-zinc-400" />
+   961→            </span>
+   962→            <p className="mt-2 text-sm font-medium text-zinc-700">Pilih kanal yang bisa dihubungi</p>
+   963→            {channels.length > 0 ? (
+   964→              <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+   965→                {channels.map((c) => {
+   966→                  const m = channelMeta(c);
+   967→                  const MIcon = m.icon;
+   968→                  return (
+   969→                    <Badge key={c} variant="outline" className={cn("gap-1 border", m.badge)}>
+   970→                      <MIcon className="size-3" aria-hidden="true" />
+   971→                      {channelLabel(c)}
+   972→                    </Badge>
+   973→                  );
+   974→                })}
+   975→              </div>
+   976→            ) : (
+   977→              <p className="mt-1.5 text-xs leading-relaxed text-amber-700">
+   978→                Kontak belum punya email/WhatsApp/handle sosial — lengkapi dulu di modul Contacts.
+   979→              </p>
+   980→            )}
+   981→          </div>
+   982→          {sentCount > 0 && (
+   983→            <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5" role="status">
+   984→              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden="true" />
+   985→              <p className="text-xs leading-relaxed text-emerald-800">
+   986→                {sentCount} pesan terkirim & tercatat di riwayat kontak. Balasan dari kontak akan muncul sebagai thread baru di Inbox.
+   987→              </p>
+   988→            </div>
+   989→          )}
+   990→        </div>
+   991→      </div>
+   992→
+   993→      <div className="space-y-2 border-t border-zinc-200 bg-white p-3 sm:px-4">
+   994→        <div className="flex items-center gap-2">
+   995→          <Select value={channel} onValueChange={onChannelChange} disabled={channels.length === 0 || sending}>
+   996→            <SelectTrigger className="h-10 w-[150px] shrink-0 bg-zinc-50 text-xs" aria-label="Kanal pesan">
+   997→              <SelectValue placeholder="Kanal" />
+   998→            </SelectTrigger>
+   999→            <SelectContent>
+  1000→              {channels.map((c) => (
+  1001→                <SelectItem key={c} value={c}>{channelLabel(c)}</SelectItem>
+  1002→              ))}
+  1003→            </SelectContent>
+  1004→          </Select>
+  1005→          {channel ? (
+  1006→            <p className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
+  1007→              <ChIcon className="size-3.5 shrink-0" aria-hidden="true" />
+  1008→              <span className="truncate">via {channelLabel(channel)}</span>
+  1009→            </p>
+  1010→          ) : null}
+  1011→        </div>
+  1012→        <Textarea
+  1013→          value={body}
+  1014→          onChange={(e) => onBodyChange(e.target.value)}
+  1015→          placeholder="Tulis pesan pertama…"
+  1016→          aria-label="Isi pesan"
+  1017→          className="min-h-[80px] bg-zinc-50"
+  1018→          disabled={sending || channels.length === 0}
+  1019→        />
+  1020→        <div className="flex justify-end">
+  1021→          <Button
+  1022→            type="button"
+  1023→            className="bg-zinc-900 text-white hover:bg-zinc-800"
+  1024→            disabled={sending || channels.length === 0 || body.trim() === ""}
+  1025→            onClick={onSend}
+  1026→            aria-label="Kirim Pesan"
+  1027→          >
+  1028→            {sending ? (
+  1029→              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengirim…</>
+  1030→            ) : (
+  1031→              <><Send className="size-4" aria-hidden="true" /> Kirim Pesan</>
+  1032→            )}
+  1033→          </Button>
+  1034→        </div>
+  1035→      </div>
+  1036→    </div>
+  1037→  );
+  1038→}
+  1039→
+  1040→function ChatComposer({
+  1041→  lead, channel, onChannelChange, body, onBodyChange, onSend, sending, respondContactName, onNeedIdentity,
+  1042→  attachments, onAttachmentsChange,
+  1043→}: {
+  1044→  lead: InboxLead;
+  1045→  channel: string;
+  1046→  onChannelChange: (c: string) => void;
+  1047→  body: string;
+  1048→  onBodyChange: (v: string) => void;
+  1049→  onSend: () => void;
+  1050→  sending: boolean;
+  1051→  /** Nama contact terhubung/kandidat terpilih — variabel template respons. */
+  1052→  respondContactName: string | null;
+  1053→  /** Belum ada kanal balasan → buka modal Identitas. */
+  1054→  onNeedIdentity: () => void;
+  1055→  /** Ronde 34-b — lampiran siap kirim (data URL) + pengubahnya (state diangkat ke modul). */
+  1056→  attachments: AttachmentDraft[];
+  1057→  onAttachmentsChange: (next: AttachmentDraft[]) => void;
+  1058→}) {
+  1059→  const user = useCrmStore((s) => s.user);
+  1060→  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  1061→  const replyChannels = useMemo(() => replyChannelsOf(lead), [lead]);
+  1062→  const addresses = useMemo(() => {
+  1063→    const map = new Map<string, string>();
+  1064→    for (const ch of replyChannels) {
+  1065→      const addr = replyAddressFor(ch, lead);
+  1066→      if (addr) map.set(ch, addr);
+  1067→    }
+  1068→    return map;
+  1069→  }, [lead, replyChannels]);
+  1070→
+  1071→  // Template follow-up brand ini — diakses via menu ✦ agar composer tetap ramping
+  1072→  const [templates, setTemplates] = useState<FollowUpTemplateDTO[] | null>(null);
+  1073→  useEffect(() => {
+  1074→    let alive = true;
+  1075→    (async () => {
+  1076→      try {
+  1077→        const res = await api.followUpTemplates("all");
+  1078→        if (!alive) return;
+  1079→        setTemplates(
+  1080→          res.templates
+  1081→            .filter((t) => !t.brandId || t.brandId === lead.brandId)
+  1082→            .sort((a, b) => a.delayDays - b.delayDays)
+  1083→        );
+  1084→      } catch {
+  1085→        if (alive) setTemplates([]);
+  1086→      }
+  1087→    })();
+  1088→    return () => { alive = false; };
+  1089→  }, [lead.brandId]);
+  1090→
+  1091→  const senderDisplay = (lead.senderName ?? "").trim() || "Tanpa nama";
+  1092→  const vars = useMemo<Record<string, string>>(() => ({
+  1093→    contact_name: respondContactName ?? senderDisplay,
+  1094→    company_name: "perusahaan Bapak/Ibu",
+  1095→    brand_name: lead.brand?.name ?? "tim kami",
+  1096→    marketing_name: user?.name ?? "Tim Sales",
+  1097→  }), [lead.brand?.name, respondContactName, senderDisplay, user?.name]);
+  1098→
+  1099→  function applyTemplate(id: string) {
+  1100→    if (id === "__blank") { onBodyChange(""); return; }
+  1101→    const tpl = templates?.find((t) => t.id === id);
+  1102→    if (!tpl) return;
+  1103→    // Kanal template dipakai hanya bila termasuk kanal balasan legal lead ini
+  1104→    if (replyChannels.includes(tpl.channel as ReplyChannelKey)) onChannelChange(tpl.channel);
+  1105→    onBodyChange(renderLeadTemplate(tpl.body, vars));
+  1106→  }
+  1107→
+  1108→  // Ronde 34-b — pilih file → data URL + validasi ukuran/jumlah (sinkron dgn batas API)
+  1109→  async function handleFilesPicked(files: FileList | null) {
+  1110→    if (!files || files.length === 0) return;
+  1111→    const room = MAX_ATTACH_FILES - attachments.length;
+  1112→    if (room <= 0) {
+  1113→      toast.error(`Maksimal ${MAX_ATTACH_FILES} lampiran per pesan`);
+  1114→      return;
+  1115→    }
+  1116→    const picked = Array.from(files).slice(0, room);
+  1117→    const next: AttachmentDraft[] = [];
+  1118→    for (const f of picked) {
+  1119→      if (f.size > MAX_ATTACH_BYTES) {
+  1120→        toast.error(`"${f.name}" melebihi 2 MB`, { description: "Pilih file yang lebih kecil" });
+  1121→        continue;
+  1122→      }
+  1123→      try {
+  1124→        const url = await readFileAsDataUrl(f);
+  1125→        next.push({ name: f.name, url, size: f.size });
+  1126→      } catch {
+  1127→        toast.error(`Gagal membaca "${f.name}"`);
+  1128→      }
+  1129→    }
+  1130→    if (next.length > 0) onAttachmentsChange([...attachments, ...next]);
+  1131→  }
+  1132→
+  1133→  const canSend = replyChannels.length > 0 && !sending && (body.trim() !== "" || attachments.length > 0);
+  1134→
+  1135→  return (
+  1136→    <div className="border-t border-zinc-200 bg-white p-3 sm:px-4">
+  1137→      {replyChannels.length === 0 ? (
+  1138→        <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2" role="alert">
+  1139→          <p className="min-w-0 text-xs leading-snug text-amber-800">
+  1140→            Belum ada kanal yang bisa dihubungi — lengkapi email / WhatsApp / Instagram lead ini dulu.
+  1141→          </p>
+  1142→          <Button
+  1143→            type="button"
+  1144→            size="sm"
+  1145→            variant="outline"
+  1146→            className="h-7 shrink-0 border-amber-300 bg-white px-2 text-xs text-amber-700 hover:bg-amber-100"
+  1147→            onClick={onNeedIdentity}
+  1148→          >
+  1149→            Lengkapi Identitas
+  1150→          </Button>
+  1151→        </div>
+  1152→      ) : null}
+  1153→      {/* Ronde 34-b — chip lampiran siap kirim */}
+  1154→      {attachments.length > 0 ? (
+  1155→        <ul className="mb-2 flex flex-wrap gap-1.5" aria-label="Lampiran yang siap dikirim">
+  1156→          {attachments.map((a, i) => {
+  1157→            const AIcon = attachmentIconOf(a.name);
+  1158→            return (
+  1159→              <li
+  1160→                key={`${a.name}-${i}`}
+  1161→                className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 py-1 pl-2 pr-1 text-xs"
+  1162→              >
+  1163→                <AIcon className="size-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+  1164→                <span className="max-w-[10rem] truncate font-medium text-zinc-700">{a.name}</span>
+  1165→                <span className="shrink-0 text-zinc-400">{formatBytes(a.size)}</span>
+  1166→                <button
+  1167→                  type="button"
+  1168→                  className="flex size-5 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-700"
+  1169→                  onClick={() => onAttachmentsChange(attachments.filter((_, j) => j !== i))}
+  1170→                  aria-label={`Hapus lampiran ${a.name}`}
+  1171→                >
+  1172→                  <X className="size-3" aria-hidden="true" />
+  1173→                </button>
+  1174→              </li>
+  1175→            );
+  1176→          })}
+  1177→        </ul>
+  1178→      ) : null}
+  1179→      <div className="flex items-end gap-2">
+  1180→        {replyChannels.length > 0 ? (
+  1181→          <Select value={channel} onValueChange={onChannelChange}>
+  1182→            <SelectTrigger className="h-10 w-[122px] shrink-0 bg-zinc-50 text-xs sm:w-[160px]" aria-label="Kanal balasan">
+  1183→              <SelectValue placeholder="Kanal" />
+  1184→            </SelectTrigger>
+  1185→            <SelectContent>
+  1186→              {replyChannels.map((c) => {
+  1187→                const CIcon = channelMeta(c).icon;
+  1188→                return (
+  1189→                  <SelectItem key={c} value={c}>
+  1190→                    <span className="flex items-center gap-1.5">
+  1191→                      <CIcon className="size-3.5 shrink-0" aria-hidden="true" />
+  1192→                      {channelLabel(c)}
+  1193→                    </span>
+  1194→                  </SelectItem>
+  1195→                );
+  1196→              })}
+  1197→            </SelectContent>
+  1198→          </Select>
+  1199→        ) : null}
+  1200→        <Textarea
+  1201→          value={body}
+  1202→          onChange={(e) => onBodyChange(e.target.value)}
+  1203→          onKeyDown={(e) => {
+  1204→            // Balas satu-satu ala chat: Enter mengirim, Shift+Enter baris baru
+  1205→            if (e.key === "Enter" && !e.shiftKey) {
+  1206→              e.preventDefault();
+  1207→              if (canSend) onSend();
+  1208→            }
+  1209→          }}
+  1210→          rows={2}
+  1211→          disabled={replyChannels.length === 0}
+  1212→          placeholder={replyChannels.length > 0 ? `Balas via ${channelLabel(channel)}…` : "Tidak bisa membalas — lengkapi identitas dulu"}
+  1213→          aria-label="Tulis pesan balasan"
+  1214→          className="min-h-10 flex-1 resize-none bg-zinc-50 text-sm"
+  1215→        />
+  1216→        <DropdownMenu>
+  1217→          <DropdownMenuTrigger asChild>
+  1218→            <Button
+  1219→              type="button"
+  1220→              variant="outline"
+  1221→              size="icon"
+  1222→              className="size-10 shrink-0"
+  1223→              disabled={replyChannels.length === 0}
+  1224→              aria-label="Pakai template respons"
+  1225→              title="Pakai template respons"
+  1226→            >
+  1227→              <Sparkles className="size-4" aria-hidden="true" />
+  1228→            </Button>
+  1229→          </DropdownMenuTrigger>
+  1230→          <DropdownMenuContent align="end" className="w-72">
+  1231→            <DropdownMenuLabel className="text-xs">Template respons</DropdownMenuLabel>
+  1232→            <DropdownMenuSeparator />
+  1233→            {templates === null ? (
+  1234→              <div className="px-2 py-1.5" aria-hidden="true">
+  1235→                <Skeleton className="h-4 w-full" />
+  1236→              </div>
+  1237→            ) : templates.length === 0 ? (
+  1238→              <DropdownMenuItem disabled className="text-xs">Belum ada template utk brand ini</DropdownMenuItem>
+  1239→            ) : (
+  1240→              <>
+  1241→                <DropdownMenuItem className="text-xs" onClick={() => applyTemplate("__blank")}>
+  1242→                  <Send className="size-3.5" aria-hidden="true" />
+  1243→                  Tulis sendiri
+  1244→                </DropdownMenuItem>
+  1245→                {templates.map((t) => {
+  1246→                  const TIcon = channelMeta(t.channel).icon;
+  1247→                  return (
+  1248→                    <DropdownMenuItem key={t.id} className="text-xs" onClick={() => applyTemplate(t.id)}>
+  1249→                      <TIcon className="size-3.5 shrink-0" aria-hidden="true" />
+  1250→                      <span className="min-w-0 flex-1 truncate">{t.name}</span>
+  1251→                      <span className="shrink-0 text-[10px] text-zinc-400">H+{t.delayDays}</span>
+  1252→                    </DropdownMenuItem>
+  1253→                  );
+  1254→                })}
+  1255→              </>
+  1256→            )}
+  1257→          </DropdownMenuContent>
+  1258→        </DropdownMenu>
+  1259→        {/* Ronde 34-b — lampirkan dokumen/gambar */}
+  1260→        <Button
+  1261→          type="button"
+  1262→          variant="outline"
+  1263→          size="icon"
+  1264→          className="size-10 shrink-0"
+  1265→          onClick={() => fileInputRef.current?.click()}
+  1266→          disabled={replyChannels.length === 0 || sending || attachments.length >= MAX_ATTACH_FILES}
+  1267→          aria-label="Lampirkan dokumen"
+  1268→          title={`Lampirkan dokumen (maks ${MAX_ATTACH_FILES} file @2 MB)`}
+  1269→        >
+  1270→          <Paperclip className="size-4" aria-hidden="true" />
+  1271→        </Button>
+  1272→        <input
+  1273→          ref={fileInputRef}
+  1274→          type="file"
+  1275→          multiple
+  1276→          className="sr-only"
+  1277→          tabIndex={-1}
+  1278→          aria-hidden="true"
+  1279→          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
+  1280→          onChange={(e) => {
+  1281→            void handleFilesPicked(e.target.files);
+  1282→            e.target.value = ""; // izinkan pilih file yg sama lagi
+  1283→          }}
+  1284→        />
+  1285→        <Button
+  1286→          type="button"
+  1287→          size="icon"
+  1288→          className="size-10 shrink-0"
+  1289→          onClick={onSend}
+  1290→          disabled={!canSend}
+  1291→          aria-label={replyChannels.length === 0 ? "Tidak ada kanal untuk membalas" : `Kirim via ${channelLabel(channel)}`}
+  1292→        >
+  1293→          {sending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
+  1294→        </Button>
+  1295→      </div>
+  1296→      <p className="mt-1.5 text-[10px] leading-snug text-zinc-400">
+  1297→        Enter kirim · Shift+Enter baris baru · Lampiran maks {MAX_ATTACH_FILES} file @2 MB
+  1298→        {replyChannels.length > 0 && addresses.get(channel) ? (
+  1299→          <> · Tujuan: <span className="font-medium text-zinc-500">{addresses.get(channel)}</span></>
+  1300→        ) : null}
+  1301→      </p>
+  1302→    </div>
+  1303→  );
+  1304→}
+  1305→
+  1306→/** Tombol ikon kecil utk tools header chat — ringkas dengan badge opsional. */
+  1307→function ToolIconButton({
+  1308→  icon: Icon, label, onClick, disabled, danger, badge,
+  1309→}: {
+  1310→  icon: LucideIcon;
+  1311→  label: string;
+  1312→  onClick: () => void;
+  1313→  disabled?: boolean;
+  1314→  danger?: boolean;
+  1315→  badge?: number;
+  1316→}) {
+  1317→  return (
+  1318→    <Button
+  1319→      type="button"
+  1320→      variant="ghost"
+  1321→      size="icon"
+  1322→      className={cn(
+  1323→        "relative size-8 shrink-0",
+  1324→        danger
+  1325→          ? "text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+  1326→          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+  1327→      )}
+  1328→      onClick={onClick}
+  1329→      disabled={disabled}
+  1330→      title={label}
+  1331→      aria-label={label}
+  1332→    >
+  1333→      <Icon className="size-4" aria-hidden="true" />
+  1334→      {badge !== undefined && badge > 0 ? (
+  1335→        <span
+  1336→          className="absolute -right-0.5 -top-0.5 flex size-3.5 items-center justify-center rounded-full bg-amber-500 text-[8px] font-bold text-white"
+  1337→          aria-hidden="true"
+  1338→        >
+  1339→          {badge > 9 ? "9+" : badge}
+  1340→        </span>
+  1341→      ) : null}
+  1342→    </Button>
+  1343→  );
+  1344→}
+  1345→
+  1346→// ============ Ronde 29 — modal identitas lead: edit identitas + kelengkapan 0/5 + salin pesan ============
+  1347→
+  1348→function IdentityModal({
+  1349→  lead, linkedContactId, linkedContactForm, form, onFormChange, onClose, onContactSaved,
+  1350→}: {
+  1351→  lead: InboxLead | null;
+  1352→  /** Contact target edit (terhubung/kandidat terpilih) — null = mode draft pra-konversi. */
+  1353→  linkedContactId: string | null;
+  1354→  /** Prefill form dari contact target (stabil via useMemo di pemanggil). */
+  1355→  linkedContactForm: ContactFormState | null;
+  1356→  form: ContactFormState;
+  1357→  onFormChange: (f: ContactFormState) => void;
+  1358→  onClose: () => void;
+  1359→  onContactSaved: () => void;
+  1360→}) {
+  1361→  const [draft, setDraft] = useState<ContactFormState>(EMPTY_CONTACT_FORM);
+  1362→  const [saving, setSaving] = useState(false);
+  1363→  const [manualCopy, setManualCopy] = useState(false);
+  1364→
+  1365→  useEffect(() => {
+  1366→    if (!lead) return;
+  1367→    setDraft(linkedContactId && linkedContactForm ? linkedContactForm : form);
+  1368→  }, [lead, linkedContactId, linkedContactForm, form]);
+  1369→
+  1370→  const identity = identityCompleteness(identityFromForm(draft));
+  1371→  const igHandle = lead && lead.channel === "instagram" && isSocialHandle(lead.senderName ?? "") ? lead.senderName : null;
+  1372→  const identityMessage = buildIdentityMessage(identityFromForm(draft), lead?.brand?.name ?? "tim kami", igHandle);
+  1373→  const displayName =
+  1374→    lead?.contact?.fullName?.trim()
+  1375→    || (lead?.senderName ?? "").trim()
+  1376→    || "Tanpa nama";
+  1377→
+  1378→  async function handleSave() {
+  1379→    if (!lead) return;
+  1380→    if (!draft.firstName.trim()) { toast.error("Nama depan wajib diisi"); return; }
+  1381→    if (linkedContactId) {
+  1382→      // Sudah terhubung contact → simpan langsung ke contact (satu identitas utk semua kanal)
+  1383→      setSaving(true);
+  1384→      try {
+  1385→        await api.updateContact(linkedContactId, {
+  1386→          firstName: draft.firstName.trim(),
+  1387→          lastName: draft.lastName.trim(),
+  1388→          position: draft.position.trim(),
+  1389→          email: draft.email.trim(),
+  1390→          whatsapp: draft.whatsapp.trim(),
+  1391→          instagram: draft.instagram.trim(),
+  1392→          city: draft.city.trim(),
+  1393→          companyName: draft.companyName.trim(),
+  1394→        });
+  1395→        toast.success("Identitas contact diperbarui", {
+  1396→          description: "Log percakapan & kanal balasan otomatis mengikuti data terbaru.",
+  1397→        });
+  1398→        onContactSaved();
+  1399→        onClose();
+  1400→      } catch (err) {
+  1401→        toast.error(err instanceof Error ? err.message : "Gagal menyimpan identitas");
+  1402→      } finally {
+  1403→        setSaving(false);
+  1404→      }
+  1405→    } else {
+  1406→      // Belum terhubung → simpan ke draft konversi (jadi contact saat lead dikonversi)
+  1407→      onFormChange(draft);
+  1408→      toast.success("Identitas tersimpan", { description: "Data ini jadi contact sungguhan saat lead dikonversi." });
+  1409→      onClose();
+  1410→    }
+  1411→  }
+  1412→
+  1413→  return (
+  1414→    <Dialog open={lead !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
+  1415→      <DialogContent className="crm-scroll max-h-[92vh] overflow-y-auto sm:max-w-lg" aria-label="Identitas lead">
+  1416→        <DialogHeader>
+  1417→          <DialogTitle className="flex items-center gap-2">
+  1418→            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden="true">
+  1419→              <UserPen className="size-3.5" />
+  1420→            </span>
+  1421→            Identitas Lead
+  1422→          </DialogTitle>
+  1423→          <DialogDescription>
+  1424→            {linkedContactId
+  1425→              ? "Perubahan langsung tersimpan ke contact terhubung — log & kanal balasan mengikuti."
+  1426→              : "Belum terhubung contact — data ini terpakai saat lead dikonversi jadi contact baru."}
+  1427→          </DialogDescription>
+  1428→        </DialogHeader>
+  1429→
+  1430→        <div className="space-y-4">
+  1431→          {/* profil lead — dari kanal masuk (WA/IG); sekali terisi mengikuti contact */}
+  1432→          <div className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+  1433→            <span
+  1434→              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white"
+  1435→              aria-hidden="true"
+  1436→            >
+  1437→              {initials(displayName.replace(/^@+/, ""))}
+  1438→            </span>
+  1439→            <div className="min-w-0">
+  1440→              <p className="truncate text-sm font-semibold text-zinc-900">{displayName}</p>
+  1441→              <p className="truncate text-xs text-zinc-500">
+  1442→                {lead ? `${channelLabel(lead.channel)} · ${leadAddressText(lead)}` : ""}
+  1443→              </p>
+  1444→            </div>
+  1445→          </div>
+  1446→
+  1447→          {/* kelengkapan 0/5 */}
+  1448→          <div className="flex flex-wrap items-center justify-between gap-2">
+  1449→            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Kelengkapan Identitas</span>
+  1450→            <Badge
+  1451→              variant="outline"
+  1452→              className={identity.complete
+  1453→                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+  1454→                : "border-amber-300 bg-amber-50 text-amber-700"}
+  1455→            >
+  1456→              {`${identity.count}/${identity.total} lengkap`}
+  1457→            </Badge>
+  1458→          </div>
+  1459→          <div className="flex flex-wrap items-center gap-1.5" aria-label="Status kelengkapan 5 data identitas">
+  1460→            {identity.fields.map((f) => (
+  1461→              <IdentityChip key={f.key} label={f.label} filled={f.filled} />
+  1462→            ))}
+  1463→          </div>
+  1464→          <p className="text-xs leading-relaxed text-zinc-500">
+  1465→            Follow-up awal = identifikasi: lengkapi data kontak supaya log percakapan dari semua kanal mudah tergabung dengan lead ini.
+  1466→          </p>
+  1467→
+  1468→          {/* form identitas */}
+  1469→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1470→            <div className="space-y-1.5">
+  1471→              <Label htmlFor="identity-first-name" className="text-xs">Nama Depan <span className="text-rose-600">*</span></Label>
+  1472→              <Input
+  1473→                id="identity-first-name"
+  1474→                value={draft.firstName}
+  1475→                onChange={(e) => setDraft((f) => ({ ...f, firstName: e.target.value }))}
+  1476→                placeholder="cth. Dian"
+  1477→              />
+  1478→            </div>
+  1479→            <div className="space-y-1.5">
+  1480→              <Label htmlFor="identity-last-name" className="text-xs">Nama Belakang</Label>
+  1481→              <Input
+  1482→                id="identity-last-name"
+  1483→                value={draft.lastName}
+  1484→                onChange={(e) => setDraft((f) => ({ ...f, lastName: e.target.value }))}
+  1485→                placeholder="cth. Permata"
+  1486→              />
+  1487→            </div>
+  1488→            <div className="space-y-1.5">
+  1489→              <Label htmlFor="identity-company" className="text-xs">Perusahaan</Label>
+  1490→              <Input
+  1491→                id="identity-company"
+  1492→                value={draft.companyName}
+  1493→                onChange={(e) => setDraft((f) => ({ ...f, companyName: e.target.value }))}
+  1494→                placeholder="cth. PT Agro Makmur"
+  1495→              />
+  1496→            </div>
+  1497→            <div className="space-y-1.5">
+  1498→              <Label htmlFor="identity-position" className="text-xs">Jabatan di Perusahaan</Label>
+  1499→              <Input
+  1500→                id="identity-position"
+  1501→                value={draft.position}
+  1502→                onChange={(e) => setDraft((f) => ({ ...f, position: e.target.value }))}
+  1503→                placeholder="cth. Marketing Manager"
+  1504→              />
+  1505→            </div>
+  1506→            <div className="space-y-1.5">
+  1507→              <Label htmlFor="identity-email" className="text-xs">Email</Label>
+  1508→              <Input
+  1509→                id="identity-email"
+  1510→                type="email"
+  1511→                value={draft.email}
+  1512→                onChange={(e) => setDraft((f) => ({ ...f, email: e.target.value }))}
+  1513→                placeholder="nama@perusahaan.co.id"
+  1514→              />
+  1515→            </div>
+  1516→            <div className="space-y-1.5">
+  1517→              <Label htmlFor="identity-whatsapp" className="text-xs">WhatsApp</Label>
+  1518→              <Input
+  1519→                id="identity-whatsapp"
+  1520→                value={draft.whatsapp}
+  1521→                onChange={(e) => setDraft((f) => ({ ...f, whatsapp: e.target.value }))}
+  1522→                placeholder="+62 8xx xxxx xxxx"
+  1523→              />
+  1524→            </div>
+  1525→            <div className="space-y-1.5">
+  1526→              <Label htmlFor="identity-instagram" className="text-xs">Instagram</Label>
+  1527→              <Input
+  1528→                id="identity-instagram"
+  1529→                value={draft.instagram}
+  1530→                onChange={(e) => setDraft((f) => ({ ...f, instagram: e.target.value }))}
+  1531→                placeholder="cth. @rani.creativehouse"
+  1532→              />
+  1533→            </div>
+  1534→            <div className="space-y-1.5">
+  1535→              <Label htmlFor="identity-city" className="text-xs">Kota</Label>
+  1536→              <Input
+  1537→                id="identity-city"
+  1538→                value={draft.city}
+  1539→                onChange={(e) => setDraft((f) => ({ ...f, city: e.target.value }))}
+  1540→                placeholder="cth. Medan"
+  1541→              />
+  1542→            </div>
+  1543→          </div>
+  1544→
+  1545→          <Button
+  1546→            type="button"
+  1547→            variant="outline"
+  1548→            size="sm"
+  1549→            disabled={identity.complete}
+  1550→            onClick={async () => {
+  1551→              const ok = await copyTextSmart(identityMessage, "Pesan identifikasi disalin — tempel di chat klien");
+  1552→              if (!ok) setManualCopy(true);
+  1553→            }}
+  1554→            aria-label={identity.complete ? "Data kontak sudah lengkap" : "Salin pesan identifikasi untuk dikirim ke klien"}
+  1555→          >
+  1556→            {identity.complete ? (
+  1557→              <><CheckCircle2 className="size-4" aria-hidden="true" /> Data lengkap</>
+  1558→            ) : (
+  1559→              <><Copy className="size-4" aria-hidden="true" /> Salin Pesan Identifikasi</>
+  1560→            )}
+  1561→          </Button>
+  1562→        </div>
+  1563→
+  1564→        <DialogFooter>
+  1565→          <Button variant="outline" onClick={onClose} disabled={saving}>Batal</Button>
+  1566→          <Button onClick={() => void handleSave()} disabled={saving || !draft.firstName.trim()}>
+  1567→            {saving ? (
+  1568→              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Menyimpan…</>
+  1569→            ) : linkedContactId ? "Simpan ke Contact" : "Simpan Identitas"}
+  1570→          </Button>
+  1571→        </DialogFooter>
+  1572→
+  1573→        {/* fallback salin manual bila clipboard ditolak browser */}
+  1574→        <Dialog open={manualCopy} onOpenChange={setManualCopy}>
+  1575→          <DialogContent className="sm:max-w-md" aria-label="Salin pesan identifikasi secara manual">
+  1576→            <DialogHeader>
+  1577→              <DialogTitle className="flex items-center gap-2 text-base">
+  1578→                <Copy className="size-4 text-zinc-500" aria-hidden="true" /> Salin Manual Pesan Identifikasi
+  1579→              </DialogTitle>
+  1580→              <DialogDescription>
+  1581→                Browser menolak akses clipboard — salin teks di bawah secara manual (blok semua lalu Ctrl/Cmd+C).
+  1582→              </DialogDescription>
+  1583→            </DialogHeader>
+  1584→            <Textarea
+  1585→              readOnly
+  1586→              rows={7}
+  1587→              value={identityMessage}
+  1588→              onFocus={(e) => e.currentTarget.select()}
+  1589→              aria-label="Teks pesan identifikasi"
+  1590→              className="text-sm"
+  1591→            />
+  1592→            <DialogFooter>
+  1593→              <Button type="button" variant="outline" size="sm" onClick={() => setManualCopy(false)}>Tutup</Button>
+  1594→            </DialogFooter>
+  1595→          </DialogContent>
+  1596→        </Dialog>
+  1597→      </DialogContent>
+  1598→    </Dialog>
+  1599→  );
+  1600→}
+  1601→
+  1602→// ============ Ronde 29 — modal identifikasi identitas (kandidat merge lintas kanal) ============
+  1603→
+  1604→function IdentifyModal({
+  1605→  lead, selectedContactId, onToggle, onClose, onConvert, onLink, linking,
+  1606→}: {
+  1607→  lead: InboxLead | null;
+  1608→  selectedContactId: string | null;
+  1609→  onToggle: (contactId: string) => void;
+  1610→  onClose: () => void;
+  1611→  onConvert: () => void;
+  1612→  /** Ronde 33 — gabungkan identitas ke contact TANPA konversi (aksi yang hilang). */
+  1613→  onLink: () => void;
+  1614→  linking: boolean;
+  1615→}) {
+  1616→  const count = lead?.candidates.length ?? 0;
+  1617→  return (
+  1618→    <Dialog open={lead !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
+  1619→      <DialogContent className="crm-scroll max-h-[92vh] overflow-y-auto sm:max-w-md" aria-label="Identifikasi identitas lead">
+  1620→        <DialogHeader>
+  1621→          <DialogTitle className="flex items-center gap-2">
+  1622→            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden="true">
+  1623→              <Fingerprint className="size-3.5" />
+  1624→            </span>
+  1625→            Identifikasi Identitas
+  1626→          </DialogTitle>
+  1627→          <DialogDescription>
+  1628→            {selectedContactId
+  1629→              ? "Kandidat dipilih — 'Gabungkan ke Contact' menyatukan log percakapan lintas kanal ke contact ini TANPA membuat opportunity. Bila sudah siap masuk pipeline, pakai 'Konversi jadi Opportunity'."
+  1630→              : "Cocokkan lead dgn contact yang sudah ada supaya log percakapan lintas kanal tergabung."}
+  1631→          </DialogDescription>
+  1632→        </DialogHeader>
+  1633→
+  1634→        {lead && count > 0 ? (
+  1635→          <div className="space-y-3">
+  1636→            {lead.candidates.map((candidate) => (
+  1637→              <CandidateCard
+  1638→                key={candidate.contactId}
+  1639→                candidate={candidate}
+  1640→                selected={selectedContactId === candidate.contactId}
+  1641→                onToggle={() => onToggle(candidate.contactId)}
+  1642→              />
+  1643→            ))}
+  1644→          </div>
+  1645→        ) : (
+  1646→          <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-center">
+  1647→            <p className="text-sm font-medium text-zinc-600">Tidak ada kemiripan</p>
+  1648→            <p className="mt-1 text-xs text-zinc-400">
+  1649→              Buat contact baru saat konversi — lengkapi identitasnya lewat modal Identitas.
+  1650→            </p>
+  1651→          </div>
+  1652→        )}
+  1653→
+  1654→        {/* Ronde 33 — footer SELALU vertikal: 3 tombol nowrap (~500px) melebihi max-w-md
+  1655→            (448px) bila sebaris — dulu menyebabkan modal melebar/overflow. Perlu sm:flex-col
+  1656→            eksplisit utk menimpa sm:flex-row bawaan DialogFooter. Urutan = urutan keputusan:
+  1657→            gabung identitas dulu, konversi bila siap, tutup terakhir. */}
+  1658→        <DialogFooter className="flex-col gap-2 sm:flex-col">
+  1659→          <Button
+  1660→            variant="outline"
+  1661→            className="w-full border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+  1662→            disabled={!selectedContactId || linking}
+  1663→            onClick={onLink}
+  1664→            aria-label="Gabungkan log percakapan ke contact terpilih tanpa membuat opportunity"
+  1665→          >
+  1666→            {linking ? (
+  1667→              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Menggabungkan…</>
+  1668→            ) : (
+  1669→              <><GitMerge className="size-4" aria-hidden="true" /> Gabungkan ke Contact</>
+  1670→            )}
+  1671→          </Button>
+  1672→          <Button className="w-full" onClick={onConvert} disabled={linking}>
+  1673→            <UserPlus className="size-4" aria-hidden="true" />
+  1674→            Konversi jadi Opportunity
+  1675→          </Button>
+  1676→          <Button variant="ghost" className="w-full" onClick={onClose}>Tutup</Button>
+  1677→        </DialogFooter>
+  1678→      </DialogContent>
+  1679→    </Dialog>
+  1680→  );
+  1681→}
+  1682→
+  1683→// ============ Ronde 29 — modal konversi lead (contact baru/terpilih + opportunity) ============
+  1684→
+  1685→function ConvertModal({
+  1686→  lead, brands, mode, onModeToggle,
+  1687→  linkTargetId, linkContactName,
+  1688→  contactForm, onContactFormChange,
+  1689→  oppForm, onOppFormChange,
+  1690→  converting, onConvert, onClose,
+  1691→}: {
+  1692→  lead: InboxLead | null;
+  1693→  brands: Brand[];
+  1694→  /** "new" = buat contact baru, "link" = gabung ke contact terpilih/terhubung, null = belum dipilih. */
+  1695→  mode: "new" | "link" | null;
+  1696→  onModeToggle: () => void;
+  1697→  /** Contact tujuan penggabungan (kandidat terpilih ATAU contact terhubung bawaan). */
+  1698→  linkTargetId: string | null;
+  1699→  linkContactName: string | null;
+  1700→  contactForm: ContactFormState;
+  1701→  onContactFormChange: (f: ContactFormState) => void;
+  1702→  oppForm: OpportunityFormState;
+  1703→  onOppFormChange: (f: OpportunityFormState) => void;
+  1704→  converting: boolean;
+  1705→  onConvert: () => void;
+  1706→  onClose: () => void;
+  1707→}) {
+  1708→  const brandOptions = lead ? (brands.length > 0 ? brands : lead.brand ? [lead.brand] : []) : [];
+  1709→  const selectedOppBrand = brandOptions.find((b) => b.id === oppForm.brandId);
+  1710→  const serviceNameOptions = selectedOppBrand ? BRAND_SERVICES[selectedOppBrand.slug] ?? [] : [];
+  1711→  const canConvert =
+  1712→    mode !== null &&
+  1713→    oppForm.brandId !== "" &&
+  1714→    (mode !== "new" || contactForm.firstName.trim().length > 0);
+  1715→
+  1716→  return (
+  1717→    <Dialog open={lead !== null} onOpenChange={(open) => { if (!open && !converting) onClose(); }}>
+  1718→      <DialogContent className="crm-scroll max-h-[92vh] overflow-y-auto sm:max-w-xl" aria-label="Konversi lead jadi opportunity">
+  1719→        <DialogHeader>
+  1720→          <DialogTitle className="flex items-center gap-2">
+  1721→            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white" aria-hidden="true">
+  1722→              <UserPlus className="size-3.5" />
+  1723→            </span>
+  1724→            Konversi Lead
+  1725→          </DialogTitle>
+  1726→          <DialogDescription>
+  1727→            Jadi contact + opportunity — task follow-up otomatis dibuat.
+  1728→          </DialogDescription>
+  1729→        </DialogHeader>
+  1730→
+  1731→        <div className="space-y-4">
+  1732→          {/* target identitas */}
+  1733→          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5">
+  1734→            {mode === "new" ? (
+  1735→              <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-zinc-700">
+  1736→                <UserPlus className="size-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+  1737→                <span className="min-w-0 truncate">Contact baru: {contactForm.firstName.trim() || "belum ada nama"}</span>
+  1738→              </span>
+  1739→            ) : mode === "link" && linkContactName ? (
+  1740→              <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-emerald-700">
+  1741→                <CheckCircle2 className="size-3.5 shrink-0" aria-hidden="true" />
+  1742→                <span className="min-w-0 truncate">Gabung ke contact: {linkContactName}</span>
+  1743→              </span>
+  1744→            ) : (
+  1745→              <span className="text-xs text-zinc-500">Pilih kandidat identitas atau buat contact baru.</span>
+  1746→            )}
+  1747→            <Button type="button" size="sm" variant={mode === "new" ? "default" : "outline"} onClick={onModeToggle}>
+  1748→              {mode === "new" ? "Batal — pakai contact terpilih" : "Buat Contact Baru"}
+  1749→            </Button>
+  1750→          </div>
+  1751→
+  1752→          {/* form contact baru */}
+  1753→          {mode === "new" ? (
+  1754→            <div className="space-y-3 rounded-lg border border-zinc-200 p-3">
+  1755→              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Contact Baru</p>
+  1756→              {lead && lead.channel === "instagram" && isSocialHandle(lead.senderName ?? "") ? (
+  1757→                <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+  1758→                  <Instagram className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+  1759→                  <span>
+  1760→                    Lead ini datang dari <strong>Instagram</strong> (handle {lead.senderName}). Handle sosial <strong>tidak</strong> dimasukkan ke kolom email — isi email manual bila klien memberikannya.
+  1761→                  </span>
+  1762→                </p>
+  1763→              ) : null}
+  1764→              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1765→                <div className="space-y-1.5">
+  1766→                  <Label htmlFor="convert-first-name" className="text-xs">Nama Depan <span className="text-rose-600">*</span></Label>
+  1767→                  <Input
+  1768→                    id="convert-first-name"
+  1769→                    value={contactForm.firstName}
+  1770→                    onChange={(e) => onContactFormChange({ ...contactForm, firstName: e.target.value })}
+  1771→                    placeholder="cth. Dian"
+  1772→                  />
+  1773→                </div>
+  1774→                <div className="space-y-1.5">
+  1775→                  <Label htmlFor="convert-last-name" className="text-xs">Nama Belakang</Label>
+  1776→                  <Input
+  1777→                    id="convert-last-name"
+  1778→                    value={contactForm.lastName}
+  1779→                    onChange={(e) => onContactFormChange({ ...contactForm, lastName: e.target.value })}
+  1780→                    placeholder="cth. Permata"
+  1781→                  />
+  1782→                </div>
+  1783→                <div className="space-y-1.5">
+  1784→                  <Label htmlFor="convert-email" className="text-xs">Email</Label>
+  1785→                  <Input
+  1786→                    id="convert-email"
+  1787→                    type="email"
+  1788→                    value={contactForm.email}
+  1789→                    onChange={(e) => onContactFormChange({ ...contactForm, email: e.target.value })}
+  1790→                    placeholder="nama@perusahaan.co.id"
+  1791→                  />
+  1792→                </div>
+  1793→                <div className="space-y-1.5">
+  1794→                  <Label htmlFor="convert-whatsapp" className="text-xs">WhatsApp</Label>
+  1795→                  <Input
+  1796→                    id="convert-whatsapp"
+  1797→                    value={contactForm.whatsapp}
+  1798→                    onChange={(e) => onContactFormChange({ ...contactForm, whatsapp: e.target.value })}
+  1799→                    placeholder="+62 8xx xxxx xxxx"
+  1800→                  />
+  1801→                </div>
+  1802→                <div className="space-y-1.5">
+  1803→                  <Label htmlFor="convert-company" className="text-xs">Perusahaan</Label>
+  1804→                  <Input
+  1805→                    id="convert-company"
+  1806→                    value={contactForm.companyName}
+  1807→                    onChange={(e) => onContactFormChange({ ...contactForm, companyName: e.target.value })}
+  1808→                    placeholder="cth. PT Agro Makmur"
+  1809→                  />
+  1810→                </div>
+  1811→                <div className="space-y-1.5">
+  1812→                  <Label htmlFor="convert-position" className="text-xs">Jabatan di Perusahaan</Label>
+  1813→                  <Input
+  1814→                    id="convert-position"
+  1815→                    value={contactForm.position}
+  1816→                    onChange={(e) => onContactFormChange({ ...contactForm, position: e.target.value })}
+  1817→                    placeholder="cth. Marketing Manager"
+  1818→                  />
+  1819→                </div>
+  1820→                <div className="space-y-1.5">
+  1821→                  <Label htmlFor="convert-city" className="text-xs">Kota</Label>
+  1822→                  <Input
+  1823→                    id="convert-city"
+  1824→                    value={contactForm.city}
+  1825→                    onChange={(e) => onContactFormChange({ ...contactForm, city: e.target.value })}
+  1826→                    placeholder="cth. Medan"
+  1827→                  />
+  1828→                </div>
+  1829→                <div className="space-y-1.5">
+  1830→                  <Label htmlFor="convert-instagram" className="text-xs">Instagram</Label>
+  1831→                  <Input
+  1832→                    id="convert-instagram"
+  1833→                    value={contactForm.instagram}
+  1834→                    onChange={(e) => onContactFormChange({ ...contactForm, instagram: e.target.value })}
+  1835→                    placeholder="cth. @rani.creativehouse"
+  1836→                  />
+  1837→                </div>
+  1838→              </div>
+  1839→            </div>
+  1840→          ) : null}
+  1841→
+  1842→          {/* form opportunity */}
+  1843→          <div className="space-y-3">
+  1844→            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Opportunity</p>
+  1845→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1846→              <div className="space-y-1.5">
+  1847→                <Label className="text-xs">Brand <span className="text-rose-600">*</span></Label>
+  1848→                <Select value={oppForm.brandId} onValueChange={(v) => onOppFormChange({ ...oppForm, brandId: v, serviceName: "" })}>
+  1849→                  <SelectTrigger className="w-full" aria-label="Brand opportunity">
+  1850→                    <SelectValue placeholder="Pilih brand" />
+  1851→                  </SelectTrigger>
+  1852→                  <SelectContent>
+  1853→                    {brandOptions.map((b) => (
+  1854→                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+  1855→                    ))}
+  1856→                  </SelectContent>
+  1857→                </Select>
+  1858→              </div>
+  1859→              <div className="space-y-1.5">
+  1860→                <Label className="text-xs">Prioritas</Label>
+  1861→                <Select value={oppForm.priority} onValueChange={(v) => onOppFormChange({ ...oppForm, priority: v })}>
+  1862→                  <SelectTrigger className="w-full" aria-label="Prioritas opportunity">
+  1863→                    <SelectValue placeholder="Pilih prioritas" />
+  1864→                  </SelectTrigger>
+  1865→                  <SelectContent>
+  1866→                    {PRIORITIES.map((p) => (
+  1867→                      <SelectItem key={p} value={p}>{PRIORITY_LABELS[p] ?? p}</SelectItem>
+  1868→                    ))}
+  1869→                  </SelectContent>
+  1870→                </Select>
+  1871→              </div>
+  1872→            </div>
+  1873→            <div className="space-y-1.5">
+  1874→              <Label htmlFor="convert-title" className="text-xs">Judul Opportunity</Label>
+  1875→              <Input
+  1876→                id="convert-title"
+  1877→                value={oppForm.title}
+  1878→                onChange={(e) => onOppFormChange({ ...oppForm, title: e.target.value })}
+  1879→                placeholder="Judul opportunity"
+  1880→              />
+  1881→            </div>
+  1882→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1883→              <div className="space-y-1.5">
+  1884→                <Label className="text-xs">Kategori Layanan</Label>
+  1885→                <Select value={oppForm.serviceCategory} onValueChange={(v) => onOppFormChange({ ...oppForm, serviceCategory: v, serviceName: "" })}>
+  1886→                  <SelectTrigger className="w-full" aria-label="Kategori layanan">
+  1887→                    <SelectValue placeholder="Pilih kategori" />
+  1888→                  </SelectTrigger>
+  1889→                  <SelectContent>
+  1890→                    {SERVICE_CATEGORIES.map((cat) => (
+  1891→                      <SelectItem key={cat} value={cat}>{SERVICE_CATEGORY_LABELS[cat] ?? cat}</SelectItem>
+  1892→                    ))}
+  1893→                  </SelectContent>
+  1894→                </Select>
+  1895→              </div>
+  1896→              {serviceNameOptions.length > 0 ? (
+  1897→                <div className="space-y-1.5">
+  1898→                  <Label className="text-xs">Layanan</Label>
+  1899→                  <Select
+  1900→                    value={oppForm.serviceName || "none"}
+  1901→                    onValueChange={(v) => onOppFormChange({ ...oppForm, serviceName: v === "none" ? "" : v })}
+  1902→                  >
+  1903→                    <SelectTrigger className="w-full" aria-label="Layanan">
+  1904→                      <SelectValue placeholder="Pilih layanan" />
+  1905→                    </SelectTrigger>
+  1906→                    <SelectContent>
+  1907→                      <SelectItem value="none">Tanpa layanan spesifik</SelectItem>
+  1908→                      {serviceNameOptions.map((s) => (
+  1909→                        <SelectItem key={s} value={s}>{s}</SelectItem>
+  1910→                      ))}
+  1911→                    </SelectContent>
+  1912→                  </Select>
+  1913→                </div>
+  1914→              ) : (
+  1915→                <div className="space-y-1.5">
+  1916→                  <Label className="text-xs">Layanan</Label>
+  1917→                  <p className="text-xs text-zinc-400">Pilih brand dengan katalog layanan terlebih dahulu.</p>
+  1918→                </div>
+  1919→              )}
+  1920→            </div>
+  1921→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1922→              <div className="space-y-1.5">
+  1923→                <Label htmlFor="convert-value" className="text-xs">Estimasi Nilai (Rp)</Label>
+  1924→                <Input
+  1925→                  id="convert-value"
+  1926→                  type="number"
+  1927→                  min={0}
+  1928→                  value={oppForm.estimatedValue}
+  1929→                  onChange={(e) => onOppFormChange({ ...oppForm, estimatedValue: e.target.value })}
+  1930→                  placeholder="cth. 25000000"
+  1931→                />
+  1932→              </div>
+  1933→            </div>
+  1934→          </div>
+  1935→
+  1936→          {!canConvert ? (
+  1937→            <p className="text-center text-xs text-zinc-400">
+  1938→              Pilih kandidat identitas (modal Identifikasi) atau buat contact baru untuk melanjutkan.
+  1939→            </p>
+  1940→          ) : null}
+  1941→        </div>
+  1942→
+  1943→        <DialogFooter>
+  1944→          <Button variant="outline" onClick={onClose} disabled={converting}>Batal</Button>
+  1945→          <Button
+  1946→            onClick={onConvert}
+  1947→            disabled={!canConvert || converting}
+  1948→            aria-label="Konversi lead jadi opportunity"
+  1949→          >
+  1950→            {converting ? (
+  1951→              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengonversi…</>
+  1952→            ) : "Konversi jadi Opportunity"}
+  1953→          </Button>
+  1954→        </DialogFooter>
+  1955→      </DialogContent>
+  1956→    </Dialog>
+  1957→  );
+  1958→}
+  1959→
+  1960→
+  1961→function ListSkeleton() {
+  1962→  return (
+  1963→    <div className="space-y-3" aria-hidden="true">
+  1964→      {[0, 1, 2, 3].map((i) => (
+  1965→        <div key={i} className="rounded-xl border bg-white p-4 shadow-sm">
+  1966→          <div className="flex gap-3">
+  1967→            <Skeleton className="size-10 rounded-full" />
+  1968→            <div className="flex-1 space-y-2">
+  1969→              <Skeleton className="h-4 w-1/3" />
+  1970→              <Skeleton className="h-3 w-2/3" />
+  1971→              <Skeleton className="h-3 w-1/2" />
+  1972→            </div>
+  1973→          </div>
+  1974→        </div>
+  1975→      ))}
+  1976→    </div>
+  1977→  );
+  1978→}
+  1979→
+  1980→// ============ Modul utama ============
+  1981→
+  1982→/** Ronde 29 — tinggi panel list & chat (full chat): memenuhi viewport, scroll internal. */
+  1983→const PANEL_H = "h-[600px] sm:h-[660px] lg:h-[calc(100vh-18rem)] lg:min-h-[560px] lg:max-h-[860px]";
+  1984→
+  1985→export default function InboxModule() {
+  1986→  const user = useCrmStore((s) => s.user);
+  1987→  const brands = useCrmStore((s) => s.brands);
+  1988→  const activeBrandFilter = useCrmStore((s) => s.activeBrandFilter);
+  1989→  const setActiveBrandFilter = useCrmStore((s) => s.setActiveBrandFilter);
+  1990→  // Ronde 32 — navigasi lintas modul (pendingFocus dari global search & tombol "Buka Percakapan")
+  1991→  const pendingFocus = useCrmStore((s) => s.pendingFocus);
+  1992→  const clearPendingFocus = useCrmStore((s) => s.clearPendingFocus);
+  1993→  const setPendingFocus = useCrmStore((s) => s.setPendingFocus);
+  1994→  const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  1995→  // Ronde 34-b — cache detail kontak utk fallback pencocokan identitas (kind "contact")
+  1996→  const contactDetailRef = useRef<{ id: string; contact: ContactRef | null } | null>(null);
+  1997→
+  1998→  const [leads, setLeads] = useState<InboxLead[] | null>(null);
+  1999→  const [loading, setLoading] = useState(true);
+  2000→  const [error, setError] = useState<string | null>(null);
+
+[showing lines 1-2000 of 3274; use offset=2001 with limit to continue reading]
