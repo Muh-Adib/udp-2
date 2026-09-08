@@ -23,6 +23,7 @@ import {
   Handshake,
   Hourglass,
   Instagram,
+  Link2,
   Loader2,
   LayoutDashboard,
   Mail,
@@ -31,6 +32,7 @@ import {
   MessageSquare,
   Mic,
   Monitor,
+  Paperclip,
   Pencil,
   Phone,
   Plus,
@@ -60,6 +62,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -94,11 +97,12 @@ import { BRIEF_STATUS_META } from "@/lib/crm/brief";
 import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
+import TaskFormDialog from "@/components/crm/task-form-dialog";
 import { useCrmStore } from "@/lib/crm/store";
-import type { Brand, BriefStatus, EstimationDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
+import type { Brand, BriefStatus, EstimationCostItem, EstimationDTO, QuotationDTO, QuotationItemDTO, TaskAttachment } from "@/lib/crm/types";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
 import BriefPanel from "@/components/crm/brief-panel";
-import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
+import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 
 // ---------- Types ----------
@@ -402,6 +406,60 @@ function toNum(v: string): number {
   return v.trim() === "" || !Number.isFinite(n) ? 0 : n;
 }
 
+// ---------- Ronde 40-E: helper task multi-assignee & lampiran ----------
+
+/** TaskDTO.assignees bisa string JSON (dari DB) atau array — parse defensif. */
+function taskAssigneeList(task: { assignees?: string | string[]; assigneeName?: string | null }): string[] {
+  const raw = task.assignees;
+  let parsed: string[] = [];
+  if (Array.isArray(raw)) {
+    parsed = raw;
+  } else if (typeof raw === "string") {
+    parsed = parseJsonArray(raw);
+  }
+  const list = parsed.filter((n): n is string => typeof n === "string" && n.trim() !== "");
+  if (list.length === 0 && task.assigneeName) return [task.assigneeName];
+  return list;
+}
+
+/** TaskDTO.attachments bisa string JSON (dari DB) atau array — parse defensif. */
+function taskAttachmentList(raw: TaskRow["attachments"]): TaskAttachment[] {
+  let list: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (a): a is TaskAttachment =>
+      !!a &&
+      typeof a === "object" &&
+      typeof (a as TaskAttachment).url === "string" &&
+      ((a as TaskAttachment).type === "link" || (a as TaskAttachment).type === "file")
+  );
+}
+
+/** EstimationDTO.costItems (JSON string | array) → daftar item — parse defensif. */
+function parseEstimationCostItems(est?: EstimationDTO | null): EstimationCostItem[] {
+  if (!est?.costItems) return [];
+  let list: unknown = est.costItems;
+  if (typeof list === "string") {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (it): it is EstimationCostItem =>
+      !!it && typeof it === "object" && typeof (it as EstimationCostItem).name === "string"
+  );
+}
+
 type CostKey =
   | "laborInternal"
   | "vendorFreelance"
@@ -417,6 +475,9 @@ type PctKey = "contingencyPct" | "managementFeePct" | "discountPct" | "taxPct" |
 
 type EstimationForm = Record<CostKey | PctKey | "revenue" | "notes", string>;
 
+/** Ronde 40-E — baris rincian biaya per item pada form estimasi. */
+type CostItemRow = { name: string; qty: string; days: string; unitPrice: string };
+
 const COST_CATEGORIES: { key: CostKey; label: string; Icon: LucideIcon }[] = [
   { key: "laborInternal", label: "Tenaga Internal", Icon: Users },
   { key: "vendorFreelance", label: "Vendor / Freelancer", Icon: Handshake },
@@ -429,12 +490,28 @@ const COST_CATEGORIES: { key: CostKey; label: string; Icon: LucideIcon }[] = [
   { key: "hostingDomain", label: "Hosting / Domain", Icon: Globe },
 ];
 
+// Ronde 40-E — taxPct kini dipilih lewat Select master pajak (bukan input bebas);
+// grid parameter hanya menampilkan persen non-pajak.
 const PCT_PARAMETERS: { key: PctKey; label: string }[] = [
   { key: "contingencyPct", label: "Contingency %" },
   { key: "managementFeePct", label: "Management Fee %" },
   { key: "discountPct", label: "Discount %" },
-  { key: "taxPct", label: "PPN %" },
 ];
+
+/** Opsi pajak bila GET /api/taxes gagal — tetap bisa pilih PPN standar manual. */
+const FALLBACK_TAX_OPTIONS = [{ name: "PPN (manual)", rate: 11 }];
+
+type TaxOption = { name: string; rate: number };
+
+/** Baris item biaya dari EstimationDTO (parse JSON string dengan aman). */
+function costItemRowsFromEstimation(est?: EstimationDTO | null): CostItemRow[] {
+  return parseEstimationCostItems(est).map((it) => ({
+    name: it.name,
+    qty: String(it.qty ?? 0),
+    days: it.days === null || it.days === undefined ? "" : String(it.days),
+    unitPrice: String(it.unitPrice ?? 0),
+  }));
+}
 
 /** Nilai default sama dengan default schema (contingency 5, mgmt fee 5, tax 11, target 30). */
 const EMPTY_ESTIMATION_FORM: EstimationForm = {
@@ -490,16 +567,19 @@ type EstimationCalc = {
   marginPct: number;
 };
 
-/** Rumus identik dengan server (src/app/api/opportunities/[id]/estimation). */
-function computeEstimation(form: EstimationForm): EstimationCalc {
-  const totalCost = COST_CATEGORIES.reduce((s, c) => s + toNum(form[c.key]), 0);
+/** Rumus identik dengan server (src/app/api/opportunities/[id]/estimation):
+ *  totalCost = Σ subtotal item bila > 0, selain itu Σ 9 kategori;
+ *  taxPct dipaksa 0 bila tanpa pajak (taxName null). */
+function computeEstimation(form: EstimationForm, costItemsTotal: number, taxPct: number): EstimationCalc {
+  const categorySum = COST_CATEGORIES.reduce((s, c) => s + toNum(form[c.key]), 0);
+  const totalCost = costItemsTotal > 0 ? costItemsTotal : categorySum;
   const contingency = Math.round((totalCost * toNum(form.contingencyPct)) / 100);
   const managementFee = Math.round((totalCost * toNum(form.managementFeePct)) / 100);
   const costWithFees = totalCost + contingency + managementFee;
   const revenue = toNum(form.revenue);
   const discountAmount = Math.round((revenue * toNum(form.discountPct)) / 100);
   const netRevenue = revenue - discountAmount;
-  const taxAmount = Math.round((netRevenue * toNum(form.taxPct)) / 100);
+  const taxAmount = Math.round((netRevenue * taxPct) / 100);
   const grandTotal = netRevenue + taxAmount;
   const margin = netRevenue - costWithFees;
   const marginPct = netRevenue > 0 ? Math.round((margin / netRevenue) * 1000) / 10 : 0;
@@ -532,7 +612,7 @@ function CalcRow({ label, value, currency, muted }: { label: string; value: numb
   );
 }
 
-function CalcPanel({ calc, form, currency }: { calc: EstimationCalc; form: EstimationForm; currency: string }) {
+function CalcPanel({ calc, form, currency, taxName }: { calc: EstimationCalc; form: EstimationForm; currency: string; taxName: string | null }) {
   const target = toNum(form.targetMarginPct);
   const hasRevenue = calc.netRevenue > 0;
   const tone = hasRevenue ? marginTone(calc.marginPct, target) : null;
@@ -549,7 +629,10 @@ function CalcPanel({ calc, form, currency }: { calc: EstimationCalc; form: Estim
         <div className="my-1 border-t border-dashed border-zinc-200" />
         <CalcRow label={`Diskon (${toNum(form.discountPct)}%)`} value={-calc.discountAmount} currency={currency} muted />
         <CalcRow label="Net Revenue" value={calc.netRevenue} currency={currency} />
-        <CalcRow label={`PPN (${toNum(form.taxPct)}%)`} value={calc.taxAmount} currency={currency} muted />
+        {/* Ronde 40-E — label pajak memakai nama master pajak; baris disembunyikan bila tanpa pajak */}
+        {calc.taxAmount > 0 ? (
+          <CalcRow label={`${taxName ?? "PPN"} (${toNum(form.taxPct)}%)`} value={calc.taxAmount} currency={currency} muted />
+        ) : null}
         <CalcRow label="Grand Total" value={calc.grandTotal} currency={currency} />
       </div>
 
@@ -590,24 +673,40 @@ function EstimationTab({
   currency,
   actorName,
   actorRole,
+  pendingApprovals,
   onSaved,
+  onChanged,
 }: {
   opportunityId: string;
   initialEstimation: EstimationDTO | null;
   currency: string;
   actorName: string;
   actorRole: string;
+  /** Ronde 40 — approval pending dari detail opportunity (take 5, opsional). */
+  pendingApprovals?: DetailData["pendingApprovals"];
   onSaved: (estimation: EstimationDTO) => void;
+  /** Ronde 40-E — reload detail penuh (dipakai setelah keputusan approval). */
+  onChanged: () => void;
 }) {
   const [est, setEst] = useState<EstimationDTO | null>(initialEstimation);
   const [form, setForm] = useState<EstimationForm>(() =>
     initialEstimation ? formFromEstimation(initialEstimation) : EMPTY_ESTIMATION_FORM
   );
+  // Ronde 40-E — rincian biaya per item + pajak dari master
+  const [costItems, setCostItems] = useState<CostItemRow[]>(() => costItemRowsFromEstimation(initialEstimation));
+  const [taxName, setTaxName] = useState<string | null>(initialEstimation?.taxName ?? null);
+  const [taxOptions, setTaxOptions] = useState<TaxOption[] | null>(null);
   const [loading, setLoading] = useState(!initialEstimation);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Ronde 40-E — keputusan approval direktur
+  const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
 
   // Lazy load: fetch saat tab dibuka dan detail belum membawa estimasi (auto-create draft di server).
   useEffect(() => {
@@ -621,6 +720,8 @@ function EstimationTab({
         if (cancelled) return;
         setEst(res.estimation);
         setForm(formFromEstimation(res.estimation));
+        setCostItems(costItemRowsFromEstimation(res.estimation));
+        setTaxName(res.estimation.taxName ?? null);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Gagal memuat estimasi");
@@ -633,13 +734,108 @@ function EstimationTab({
     };
   }, [opportunityId, initialEstimation, reloadKey]);
 
+  // Ronde 40-E — master pajak dimuat sekali saat tab dibuka (fallback manual bila gagal).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .taxes()
+      .then((res) => {
+        if (!cancelled) setTaxOptions(res.taxes.map((t) => ({ name: t.name, rate: t.rate })));
+      })
+      .catch(() => {
+        if (!cancelled) setTaxOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Ronde 40-E — cari approval pending utk estimasi ini: coba pendingApprovals dari
+  // detail dulu; bila tidak ketemu (mis. daftar terpotong take 5), minta /api/approvals?status=pending.
+  useEffect(() => {
+    if (est?.status !== "pending_approval") {
+      setPendingApprovalId(null);
+      return;
+    }
+    let cancelled = false;
+    const fromDetail = (pendingApprovals ?? []).find(
+      (a) => a.entityType === "estimation" && a.status === "pending" && a.entityId === est.id
+    );
+    if (fromDetail) {
+      setPendingApprovalId(fromDetail.id);
+      return;
+    }
+    api
+      .approvals("pending")
+      .then((res) => {
+        if (cancelled) return;
+        const found = res.approvals.find(
+          (a) => a.entityType === "estimation" && a.status === "pending" && a.entityId === est.id
+        );
+        setPendingApprovalId(found?.id ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPendingApprovalId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [est?.status, est?.id, pendingApprovals]);
+
   const locked = est?.status === "pending_approval" || est?.status === "approved";
-  const calc = useMemo(() => computeEstimation(form), [form]);
+  // Ronde 40-E — Σ subtotal item (hanya baris bernama, subtotal dibulatkan spt server)
+  const itemsTotal = useMemo(
+    () =>
+      costItems
+        .filter((r) => r.name.trim() !== "")
+        .reduce((s, r) => s + Math.round((toNum(r.qty) || 0) * (toNum(r.unitPrice) || 0)), 0),
+    [costItems]
+  );
+  const effectiveTaxPct = taxName ? toNum(form.taxPct) : 0;
+  const calc = useMemo(() => computeEstimation(form, itemsTotal, effectiveTaxPct), [form, itemsTotal, effectiveTaxPct]);
   const revenueNum = toNum(form.revenue);
   const disabled = loading || locked || saving;
 
+  // Opsi Select pajak: master (atau fallback manual) + nilai tersimpan bila tak ada di master
+  const taxSelectOptions = useMemo(() => {
+    const base = taxOptions === null ? [] : taxOptions.length > 0 ? taxOptions : FALLBACK_TAX_OPTIONS;
+    if (taxName && !base.some((t) => t.name === taxName)) {
+      return [...base, { name: taxName, rate: toNum(form.taxPct) }];
+    }
+    return base;
+  }, [taxOptions, taxName, form.taxPct]);
+
+  const isDecisionMaker = actorRole === "director" || actorRole === "super_admin";
+
   function setField(key: keyof EstimationForm, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  // ---------- Ronde 40-E: editor rincian item ----------
+
+  function addCostItem() {
+    setCostItems((rows) => [...rows, { name: "", qty: "1", days: "", unitPrice: "" }]);
+  }
+
+  function updateCostItem(idx: number, patch: Partial<CostItemRow>) {
+    setCostItems((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+
+  function removeCostItem(idx: number) {
+    setCostItems((rows) => rows.filter((_, i) => i !== idx));
+  }
+
+  function selectTax(value: string) {
+    if (value === "none") {
+      setTaxName(null);
+      setField("taxPct", "0");
+      return;
+    }
+    const opt = taxSelectOptions.find((t) => t.name === value);
+    if (opt) {
+      setTaxName(opt.name);
+      setField("taxPct", String(opt.rate));
+    }
   }
 
   async function persist(submit: boolean) {
@@ -651,13 +847,32 @@ function EstimationTab({
         actorRole,
         notes: form.notes.trim() || null,
         revenue: revenueNum,
+        // Ronde 40-E — nama pajak dari master (null = tanpa pajak, taxPct dipaksa 0 server)
+        taxName,
+        taxPct: effectiveTaxPct,
       };
       for (const c of COST_CATEGORIES) payload[c.key] = toNum(form[c.key]);
       for (const p of PCT_PARAMETERS) payload[p.key] = toNum(form[p.key]);
       payload.targetMarginPct = toNum(form.targetMarginPct);
+      // Ronde 40-E — kirim rincian item hanya bila ada minimal satu baris bernama;
+      // tanpa itu, server mempertahankan item tersimpan (subtotal dihitung ulang di server).
+      const namedItems = costItems.filter((r) => r.name.trim() !== "");
+      if (namedItems.length > 0) {
+        payload.costItems = namedItems.map((r) => {
+          const daysNum = Number(r.days);
+          return {
+            name: r.name.trim(),
+            qty: Number(r.qty) || 0,
+            days: r.days.trim() === "" || !Number.isFinite(daysNum) ? null : daysNum,
+            unitPrice: Number(r.unitPrice) || 0,
+          };
+        });
+      }
 
       const res = await api.saveEstimation(opportunityId, payload);
       setEst(res.estimation);
+      setCostItems(costItemRowsFromEstimation(res.estimation));
+      setTaxName(res.estimation.taxName ?? null);
       if (submit) {
         toast.success("Estimasi diajukan untuk approval");
         if (res.approval) toast.info("Approval dikirim ke Direktur");
@@ -669,6 +884,43 @@ function EstimationTab({
       toast.error(e instanceof Error ? e.message : "Gagal menyimpan estimasi");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Ronde 40-E — keputusan approval direktur (approve → server auto-move ke Negotiation)
+  async function decide(decision: "approve" | "reject", decisionNote?: string) {
+    if (!pendingApprovalId) return;
+    setDeciding(true);
+    try {
+      await api.decideApproval({
+        id: pendingApprovalId,
+        decision,
+        decisionNote: decisionNote?.trim() || undefined,
+        actorName,
+        actorRole,
+      });
+      if (decision === "approve") {
+        toast.success("Estimasi disetujui — peluang otomatis pindah ke Negotiation");
+      } else {
+        toast.success("Estimasi ditolak — tim dapat merevisi lalu mengajukan ulang");
+      }
+      setRejectOpen(false);
+      setRejectNote("");
+      setEst((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: decision === "approve" ? "approved" : "rejected",
+              approvedBy: decision === "approve" ? actorName : prev.approvedBy,
+              approvedAt: decision === "approve" ? new Date().toISOString() : prev.approvedAt,
+            }
+          : prev
+      );
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal memutuskan approval");
+    } finally {
+      setDeciding(false);
     }
   }
 
@@ -708,14 +960,73 @@ function EstimationTab({
           ? { cls: "border-rose-200 bg-rose-50 text-rose-800", Icon: CircleAlert, text: "Ditolak — silakan revisi & ajukan ulang", sub: undefined }
           : null;
 
+  // Ronde 40-E — grid 9 kategori (diekstrak agar bisa dipakai di dalam Collapsible)
+  const categoryInputs = (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {COST_CATEGORIES.map((c) => (
+        <div key={c.key} className="space-y-1">
+          <label htmlFor={`est-cost-${c.key}`} className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
+            <c.Icon className="size-3.5 text-zinc-400" aria-hidden="true" />
+            {c.label}
+          </label>
+          <div className="relative">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
+              Rp
+            </span>
+            <Input
+              id={`est-cost-${c.key}`}
+              type="number"
+              min={0}
+              inputMode="numeric"
+              className="pl-8"
+              value={form[c.key]}
+              onChange={(e) => setField(c.key, e.target.value)}
+              disabled={disabled}
+              placeholder="0"
+              aria-label={`${c.label} (Rupiah)`}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {banner ? (
         <div className={cn("flex items-start gap-2 rounded-xl border p-3 text-sm", banner.cls)} role="status">
           <banner.Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="font-medium">{banner.text}</p>
             {banner.sub ? <p className="text-xs opacity-80">{banner.sub}</p> : null}
+            {/* Ronde 40-E (BUG FIX) — tombol keputusan untuk Direktur/Super Admin langsung
+                di banner; dulu tidak ada tombol sama sekali sehingga estimasi tidak bisa
+                disetujui dari tab Estimasi. Approve juga menggeser stage ke Negotiation (server). */}
+            {est.status === "pending_approval" && isDecisionMaker && pendingApprovalId ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={() => void decide("approve")}
+                  disabled={deciding}
+                  aria-label="Setujui estimasi"
+                >
+                  {deciding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
+                  Setujui
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-rose-300 bg-white text-rose-700 hover:bg-rose-50"
+                  onClick={() => setRejectOpen(true)}
+                  disabled={deciding}
+                  aria-label="Tolak estimasi"
+                >
+                  <XCircle className="size-4" aria-hidden="true" />
+                  Tolak
+                </Button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -723,33 +1034,136 @@ function EstimationTab({
       {/* Cost breakdown */}
       <div className="rounded-xl border bg-white p-4 shadow-sm">
         <p className="mb-3 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Cost Breakdown</p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {COST_CATEGORIES.map((c) => (
-            <div key={c.key} className="space-y-1">
-              <label htmlFor={`est-cost-${c.key}`} className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
-                <c.Icon className="size-3.5 text-zinc-400" aria-hidden="true" />
-                {c.label}
-              </label>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-                  Rp
-                </span>
-                <Input
-                  id={`est-cost-${c.key}`}
-                  type="number"
-                  min={0}
-                  inputMode="numeric"
-                  className="pl-8"
-                  value={form[c.key]}
-                  onChange={(e) => setField(c.key, e.target.value)}
-                  disabled={disabled}
-                  placeholder="0"
-                  aria-label={`${c.label} (Rupiah)`}
-                />
+
+        {/* Ronde 40-E — rincian biaya per item */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-zinc-700">
+              Rincian Biaya per Item{" "}
+              <span className="font-normal text-zinc-400">(opsional tapi disarankan)</span>
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={addCostItem} disabled={disabled}>
+              <Plus className="size-3.5" aria-hidden="true" />
+              Tambah Item
+            </Button>
+          </div>
+
+          {costItems.length > 0 ? (
+            <div className="space-y-2">
+              <div className="hidden gap-2 px-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400 sm:grid sm:grid-cols-[minmax(0,1fr)_64px_64px_130px_110px_36px]">
+                <span>Nama Item</span>
+                <span>Qty</span>
+                <span>Hari</span>
+                <span>Harga Satuan</span>
+                <span className="text-right">Subtotal</span>
+                <span />
               </div>
+              {costItems.map((row, idx) => {
+                const subtotal = Math.round((toNum(row.qty) || 0) * (toNum(row.unitPrice) || 0));
+                return (
+                  <div
+                    key={idx}
+                    className="grid grid-cols-2 gap-2 rounded-lg border bg-white p-2 sm:grid-cols-[minmax(0,1fr)_64px_64px_130px_110px_36px] sm:items-center sm:gap-2 sm:rounded-md sm:border-0 sm:bg-transparent sm:p-0"
+                  >
+                    <div className="col-span-2 sm:col-span-1">
+                      <Input
+                        value={row.name}
+                        onChange={(e) => updateCostItem(idx, { name: e.target.value })}
+                        placeholder={`Nama item ${idx + 1}, mis. Sewa kamera`}
+                        aria-label={`Nama item biaya ${idx + 1}`}
+                        disabled={disabled}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="1"
+                      value={row.qty}
+                      onChange={(e) => updateCostItem(idx, { qty: e.target.value })}
+                      placeholder="1"
+                      aria-label={`Jumlah (qty) item ${idx + 1}`}
+                      disabled={disabled}
+                      className="h-8 text-sm"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      step="1"
+                      value={row.days}
+                      onChange={(e) => updateCostItem(idx, { days: e.target.value })}
+                      placeholder="—"
+                      aria-label={`Jumlah hari item ${idx + 1} (opsional)`}
+                      disabled={disabled}
+                      className="h-8 text-sm"
+                    />
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
+                        Rp
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        value={row.unitPrice}
+                        onChange={(e) => updateCostItem(idx, { unitPrice: e.target.value })}
+                        placeholder="0"
+                        aria-label={`Harga satuan item ${idx + 1}`}
+                        disabled={disabled}
+                        className="h-8 pl-7 text-sm"
+                      />
+                    </div>
+                    <span className="self-center text-right text-xs tabular-nums text-zinc-600 sm:text-sm" aria-label={`Subtotal item ${idx + 1}`}>
+                      {formatCurrency(subtotal, currency)}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 justify-self-end text-zinc-400 hover:text-rose-600"
+                      onClick={() => removeCostItem(idx)}
+                      disabled={disabled}
+                      aria-label={`Hapus item ${idx + 1}`}
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                    </Button>
+                  </div>
+                );
+              })}
+              <div className="flex justify-between border-t border-dashed border-zinc-200 pt-1.5 text-sm">
+                <span className="text-zinc-500">Σ Subtotal Item</span>
+                <span className="font-semibold tabular-nums text-zinc-800">
+                  {formatCurrencyFull(itemsTotal, currency)}
+                </span>
+              </div>
+              {itemsTotal > 0 ? (
+                <p className="text-[11px] text-zinc-400">
+                  Total biaya dihitung dari item rincian — biaya per kategori di bawah otomatis diabaikan.
+                </p>
+              ) : null}
             </div>
-          ))}
+          ) : (
+            <p className="rounded-lg border border-dashed p-3 text-xs text-zinc-400">
+              Belum ada item. Tambahkan rincian biaya (mis. Sewa kamera · 2 hari) agar total biaya dihitung per item.
+            </p>
+          )}
         </div>
+
+        {/* Ronde 40-E — kategori lipat bila total dihitung dari item */}
+        {itemsTotal > 0 ? (
+          <Collapsible className="mt-4 border-t pt-3">
+            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20">
+              <span className="text-xs font-semibold text-zinc-600">
+                Biaya per kategori{" "}
+                <span className="font-normal text-zinc-400">(otomatis diabaikan bila ada item)</span>
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-zinc-400 transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-3">{categoryInputs}</CollapsibleContent>
+          </Collapsible>
+        ) : (
+          <div className="mt-4 border-t pt-3">{categoryInputs}</div>
+        )}
 
         {/* Parameter */}
         <div className="mt-4 border-t pt-3">
@@ -774,6 +1188,29 @@ function EstimationTab({
                 />
               </div>
             ))}
+            {/* Ronde 40-E — pajak dari master (bukan input PPN % bebas) */}
+            <div className="space-y-1">
+              <label htmlFor="est-tax" className="text-xs font-medium text-zinc-600">
+                Pajak
+              </label>
+              <Select
+                value={taxName ?? "none"}
+                onValueChange={selectTax}
+                disabled={disabled}
+              >
+                <SelectTrigger id="est-tax" size="sm" className="w-full text-sm" aria-label="Pilih pajak">
+                  <SelectValue placeholder="Pilih pajak" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Tanpa Pajak</SelectItem>
+                  {taxSelectOptions.map((t) => (
+                    <SelectItem key={t.name} value={t.name}>
+                      {t.name} ({t.rate}%)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="mt-3 space-y-1">
             <label htmlFor="est-revenue" className="text-xs font-semibold text-zinc-700">
@@ -800,7 +1237,7 @@ function EstimationTab({
         </div>
       </div>
 
-      <CalcPanel calc={calc} form={form} currency={currency} />
+      <CalcPanel calc={calc} form={form} currency={currency} taxName={taxName} />
 
       {/* Catatan + aksi */}
       <div className="space-y-3 rounded-xl border bg-white p-4 shadow-sm">
@@ -862,6 +1299,38 @@ function EstimationTab({
             >
               {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
               Ya, Ajukan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Ronde 40-E — dialog tolak estimasi (dengan catatan keputusan opsional) */}
+      <AlertDialog open={rejectOpen} onOpenChange={setRejectOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tolak estimasi?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estimasi akan ditandai ditolak dan tim dapat merevisi lalu mengajukan ulang. Catatan keputusan
+              bersifat opsional.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Textarea
+            rows={3}
+            value={rejectNote}
+            onChange={(e) => setRejectNote(e.target.value)}
+            disabled={deciding}
+            placeholder="Catatan keputusan (opsional), mis. margin terlalu tipis — revisi harga vendor."
+            aria-label="Catatan penolakan estimasi"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deciding}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              onClick={() => void decide("reject", rejectNote)}
+              disabled={deciding}
+            >
+              {deciding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Tolak Estimasi
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1000,17 +1469,40 @@ function QuotationFormDialog({
   const [rows, setRows] = useState<QuotationRow[]>([{ description: "", qty: "1", unitPrice: "" }]);
   const [discountPct, setDiscountPct] = useState("0");
   const [taxPct, setTaxPct] = useState("11");
+  // Ronde 40-E — pajak dari master: "" = belum ditentukan (default PPN pertama), "none" = tanpa pajak
+  const [taxName, setTaxName] = useState("");
+  const [taxOptions, setTaxOptions] = useState<TaxOption[] | null>(null);
   const [notes, setNotes] = useState("");
   const [validUntil, setValidUntil] = useState(defaultValidUntil());
   const [saving, setSaving] = useState(false);
-  /** Ronde 35 — true bila item terisi otomatis dari estimasi detail. */
+  /** Ronde 35 — true bila item terisi otomatis dari estimasi detail (single-line revenue). */
   const prefilledFromEstimation = useRef(false);
+  /** Ronde 40-E — true bila item terisi dari rincian costItems estimasi. */
+  const prefilledFromCostItems = useRef(false);
+
+  // Ronde 40-E — master pajak dimuat setiap kali dialog dibuka (cache per dialog instance).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .taxes()
+      .then((res) => {
+        if (!cancelled) setTaxOptions(res.taxes.map((t) => ({ name: t.name, rate: t.rate })));
+      })
+      .catch(() => {
+        if (!cancelled) setTaxOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Prefill setiap kali dialog dibuka (mode buat / edit draft / revisi).
   useEffect(() => {
     if (!open) return;
     if (editing) {
       prefilledFromEstimation.current = false;
+      prefilledFromCostItems.current = false;
       const items = parseQuotationItems(editing.items);
       setRows(
         items.length > 0
@@ -1018,12 +1510,14 @@ function QuotationFormDialog({
           : [{ description: "", qty: "1", unitPrice: "" }]
       );
       setDiscountPct(String(editing.discountPct ?? 0));
-      setTaxPct(String(editing.taxPct ?? 11));
+      setTaxPct(String(editing.taxName ? editing.taxPct ?? 0 : 0));
+      setTaxName(editing.taxName ?? "none");
       setNotes(editing.notes ?? "");
       setValidUntil(editing.validUntil ? editing.validUntil.slice(0, 10) : defaultValidUntil());
     } else if (reviseOf) {
       // Ronde 39 — revisi: salin isi quotation sumber + catatan revisi otomatis.
       prefilledFromEstimation.current = false;
+      prefilledFromCostItems.current = false;
       const items = parseQuotationItems(reviseOf.items);
       setRows(
         items.length > 0
@@ -1031,32 +1525,82 @@ function QuotationFormDialog({
           : [{ description: "", qty: "1", unitPrice: "" }]
       );
       setDiscountPct(String(reviseOf.discountPct ?? 0));
-      setTaxPct(String(reviseOf.taxPct ?? 11));
+      setTaxPct(String(reviseOf.taxName ? reviseOf.taxPct ?? 0 : 0));
+      setTaxName(reviseOf.taxName ?? "none");
       const revNote = `Revisi ke-${reviseOf.revisionNo ? reviseOf.revisionNo + 1 : 1} dari ${reviseOf.number}${reviseOf.notes ? ` — ${reviseOf.notes}` : ""}`;
       setNotes(revNote);
       setValidUntil(defaultValidUntil());
     } else {
-      // Ronde 35 — estimasi detail (approved/pending) dengan revenue > 0 →
-      // item quotation terisi otomatis: sales tidak mengetik ulang angka estimasi.
+      // Ronde 35/40-E — estimasi detail (approved/pending) sebagai sumber prefill item:
+      // bila estimasi punya rincian costItems → satu baris quotation per item biaya;
+      // selain itu fallback single-line senilai revenue estimasi.
+      const estItems = parseEstimationCostItems(estimation);
       const estRevenue = Number(estimation?.revenue ?? 0);
-      if (estRevenue > 0) {
+      setDiscountPct(String(estimation?.discountPct ?? 0));
+      if (estItems.length > 0) {
+        prefilledFromEstimation.current = false;
+        prefilledFromCostItems.current = true;
+        setRows(
+          estItems.map((it) => ({
+            description: it.name + (it.days ? ` (${it.days} hari)` : ""),
+            qty: String(it.qty ?? 0),
+            unitPrice: String(it.unitPrice ?? 0),
+          }))
+        );
+        setTaxPct(String(estimation?.taxName ? estimation?.taxPct ?? 0 : 0));
+        setTaxName(estimation?.taxName ?? "");
+      } else if (estRevenue > 0) {
+        prefilledFromCostItems.current = false;
         const label = serviceName?.trim()
           ? `Layanan ${serviceName.trim()} — sesuai estimasi detail`
           : "Layanan utama — sesuai estimasi detail";
         setRows([{ description: label, qty: "1", unitPrice: String(estRevenue) }]);
-        setDiscountPct(String(estimation?.discountPct ?? 0));
-        setTaxPct(String(estimation?.taxPct ?? 11));
+        setTaxPct(String(estimation?.taxName ? estimation?.taxPct ?? 0 : 0));
+        setTaxName(estimation?.taxName ?? "");
         prefilledFromEstimation.current = true;
       } else {
         prefilledFromEstimation.current = false;
+        prefilledFromCostItems.current = false;
         setRows([{ description: "", qty: "1", unitPrice: "" }]);
         setDiscountPct("0");
-        setTaxPct("11");
+        setTaxPct("0");
+        setTaxName("");
       }
       setNotes("");
       setValidUntil(defaultValidUntil());
     }
   }, [open, editing, reviseOf, estimation, serviceName]);
+
+  // Ronde 40-E — default pajak saat membuat baru tanpa taxName tersimpan:
+  // pajak pertama yang namanya diawali "PPN", bila tidak ada pakai pajak pertama.
+  useEffect(() => {
+    if (!open || taxName !== "" || taxOptions === null) return;
+    const ppn = taxOptions.find((t) => t.name.toUpperCase().startsWith("PPN"));
+    const pick = ppn ?? taxOptions[0];
+    if (pick) {
+      setTaxName(pick.name);
+      setTaxPct(String(pick.rate));
+    } else {
+      setTaxName("none");
+      setTaxPct("0");
+    }
+  }, [open, taxName, taxOptions]);
+
+  // Ronde 40-E — pajak efektif: ""/"none" = tanpa pajak (taxPct 0), selain itu pakai rate opsi
+  const effectiveTaxName = taxName && taxName !== "none" ? taxName : null;
+  // Ronde 36 (audit FIX): persen dipatok 0–100 di klien juga — dulu -10 DISKON
+  // bisa menaikkan total dokumen resmi, 150% pajak juga lolos (server kini clamp juga).
+  const discountPctNum = Math.min(100, Math.max(0, toNum(discountPct)));
+  const taxPctNum = effectiveTaxName ? Math.min(100, Math.max(0, toNum(taxPct))) : 0;
+
+  // Opsi Select pajak: master + nilai tersimpan bila tak ada di master (mis. diinput lama)
+  const taxSelectOptions = useMemo(() => {
+    const base = taxOptions === null ? [] : taxOptions.length > 0 ? taxOptions : FALLBACK_TAX_OPTIONS;
+    if (effectiveTaxName && !base.some((t) => t.name === effectiveTaxName)) {
+      return [...base, { name: effectiveTaxName, rate: toNum(taxPct) }];
+    }
+    return base;
+  }, [taxOptions, effectiveTaxName, taxPct]);
 
   const totals = useMemo(() => {
     const items = rows.map((r) => {
@@ -1065,18 +1609,13 @@ function QuotationFormDialog({
       return { description: r.description.trim(), qty, unitPrice, subtotal: qty * unitPrice };
     });
     const subtotal = items.reduce((s, it) => s + it.subtotal, 0);
-    const discountAmount = Math.round((subtotal * toNum(discountPct)) / 100);
+    const discountAmount = Math.round((subtotal * discountPctNum) / 100);
     const afterDiscount = subtotal - discountAmount;
-    const taxAmount = Math.round((afterDiscount * toNum(taxPct)) / 100);
+    const taxAmount = Math.round((afterDiscount * taxPctNum) / 100);
     return { items, subtotal, discountAmount, taxAmount, total: afterDiscount + taxAmount };
-  }, [rows, discountPct, taxPct]);
+  }, [rows, discountPctNum, taxPctNum]);
 
   const filledItems = totals.items.filter((it) => it.description.length > 0);
-
-  // Ronde 36 (audit FIX): persen dipatok 0–100 di klien juga — dulu -10 DISKON
-  // bisa menaikkan total dokumen resmi, 150% pajak juga lolos (server kini clamp juga).
-  const discountPctNum = Math.min(100, Math.max(0, toNum(discountPct)));
-  const taxPctNum = Math.min(100, Math.max(0, toNum(taxPct)));
 
   async function submit() {
     if (filledItems.length === 0) {
@@ -1094,6 +1633,8 @@ function QuotationFormDialog({
           action: "update",
           items: filledItems,
           discountPct: discountPctNum,
+          // Ronde 40-E — nama pajak ikut tersimpan; null → taxPct dipaksa 0 di server
+          taxName: effectiveTaxName,
           taxPct: taxPctNum,
           notes: notes.trim() || null,
           validUntil: validUntil || null,
@@ -1106,6 +1647,7 @@ function QuotationFormDialog({
           opportunityId,
           items: filledItems,
           discountPct: discountPctNum,
+          taxName: effectiveTaxName,
           taxPct: taxPctNum,
           notes: notes.trim() || undefined,
           validUntil: validUntil || undefined,
@@ -1140,7 +1682,15 @@ function QuotationFormDialog({
         </DialogHeader>
 
         <div className="crm-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
-          {prefilledFromEstimation ? (
+          {prefilledFromCostItems.current ? (
+            <p className="flex items-start gap-1.5 rounded-lg border bg-zinc-50 px-2.5 py-2 text-xs text-zinc-500" role="status">
+              <Sparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              <span>
+                Item mengikuti rincian estimasi — sesuaikan hingga total mendekati grand total estimasi ({" "}
+                {formatCurrencyFull(Number(estimation?.grandTotal ?? 0), currency)}).
+              </span>
+            </p>
+          ) : prefilledFromEstimation.current ? (
             <p className="flex items-start gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-800" role="status">
               <Sparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
@@ -1202,21 +1752,35 @@ function QuotationFormDialog({
               />
             </div>
             <div className="space-y-1">
+              {/* Ronde 40-E — pajak dari master (bukan input PPN % bebas) */}
               <label htmlFor="q-tax" className="text-xs font-medium text-zinc-600">
-                PPN %
+                Pajak
               </label>
-              <Input
-                id="q-tax"
-                type="number"
-                min={0}
-                max={100}
-                step="0.5"
-                className="h-8"
-                value={taxPct}
-                onChange={(e) => setTaxPct(e.target.value)}
+              <Select
+                value={taxName === "" ? undefined : taxName}
+                onValueChange={(v) => {
+                  setTaxName(v);
+                  if (v === "none") {
+                    setTaxPct("0");
+                    return;
+                  }
+                  const opt = taxSelectOptions.find((t) => t.name === v);
+                  if (opt) setTaxPct(String(opt.rate));
+                }}
                 disabled={saving}
-                aria-label="Persentase PPN quotation"
-              />
+              >
+                <SelectTrigger id="q-tax" size="sm" className="w-full text-sm" aria-label="Pilih pajak quotation">
+                  <SelectValue placeholder="Pilih pajak" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Tanpa Pajak</SelectItem>
+                  {taxSelectOptions.map((t) => (
+                    <SelectItem key={t.name} value={t.name}>
+                      {t.name} ({t.rate}%)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="col-span-2 space-y-1 sm:col-span-1">
               <label htmlFor="q-valid" className="text-xs font-medium text-zinc-600">
@@ -1259,7 +1823,8 @@ function QuotationFormDialog({
               <span className="tabular-nums">-{formatCurrencyFull(totals.discountAmount, currency)}</span>
             </div>
             <div className="flex justify-between text-zinc-500">
-              <span>PPN {toNum(taxPct)}%</span>
+              {/* Ronde 40-E — label pajak memakai nama master pajak */}
+              <span>{effectiveTaxName ? `${effectiveTaxName} ${toNum(taxPct)}%` : "Tanpa Pajak"}</span>
               <span className="tabular-nums">{formatCurrencyFull(totals.taxAmount, currency)}</span>
             </div>
             <div className="flex justify-between border-t border-dashed border-zinc-200 pt-1 font-semibold text-zinc-900">
@@ -1468,6 +2033,7 @@ function QuotationTab({
   actorRole,
   estimation,
   serviceName,
+  defaultSendChannel,
   onPrint,
   onChanged,
 }: {
@@ -1480,6 +2046,8 @@ function QuotationTab({
   /** Ronde 35 — estimasi detail utk prefill item quotation. */
   estimation: EstimationDTO | null;
   serviceName?: string | null;
+  /** Ronde 40-E — kanal default dialog kirim (dari preferredChannel kontak). */
+  defaultSendChannel?: string | null;
   onPrint: (q: QuotationDTO) => void;
   onChanged: () => void;
 }) {
@@ -1489,12 +2057,16 @@ function QuotationTab({
   const [reviseOf, setReviseOf] = useState<QuotationDTO | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Ronde 40-E — dialog pilih kanal sebelum kirim ke klien
+  const [sendTarget, setSendTarget] = useState<QuotationDTO | null>(null);
+  const [sendChannel, setSendChannel] = useState("email");
 
-  async function runAction(q: QuotationDTO, action: QuotationAction) {
+  async function runAction(q: QuotationDTO, action: QuotationAction, extra?: Record<string, unknown>) {
     setBusyId(q.id);
     try {
-      const res = await api.quotationAction(q.id, { action, actorName, actorRole });
-      if (action === "send") toast.success(`Quotation ${q.number} dikirim ke klien`);
+      const res = await api.quotationAction(q.id, { action, actorName, actorRole, ...extra });
+      // Ronde 40-E — toast kirim menyebut kanal terpilih (tanda kirim, bukan pengiriman nyata)
+      if (action === "send") toast.success(`Quotation ${q.number} dikirim via ${channelLabel(String(extra?.channel ?? "email"))} (tanda kirim)`);
       else if (action === "accept") toast.success(`Quotation ${q.number} diterima — stage jadi Verbal Agreement`);
       else if (action === "reject") toast.success(`Quotation ${q.number} ditandai ditolak klien`);
       else if (action === "convert_invoice" && res.invoice) toast.success(`Invoice ${res.invoice.number} dibuat`);
@@ -1504,6 +2076,13 @@ function QuotationTab({
     } finally {
       setBusyId(null);
     }
+  }
+
+  // Ronde 40-E — kartu draft "Kirim ke Klien" tidak langsung mengirim: buka dialog kanal dulu
+  function openSendDialog(q: QuotationDTO) {
+    const preferred = defaultSendChannel ?? "email";
+    setSendChannel(CHANNELS.some((c) => c.key === preferred) ? preferred : "email");
+    setSendTarget(q);
   }
 
   function openCreate() {
@@ -1556,7 +2135,13 @@ function QuotationTab({
               onEdit={() => openEdit(q)}
               onRevise={() => openRevise(q)}
               onPrint={() => onPrint(q)}
-              onAction={(a) => void runAction(q, a)}
+              onAction={(a) => {
+                if (a === "send") {
+                  openSendDialog(q);
+                  return;
+                }
+                void runAction(q, a);
+              }}
             />
           ))}
         </div>
@@ -1575,6 +2160,59 @@ function QuotationTab({
         serviceName={serviceName}
         onSaved={onChanged}
       />
+
+      {/* Ronde 40-E — dialog pilih kanal kirim ke klien */}
+      <Dialog open={!!sendTarget} onOpenChange={(v) => { if (!v) setSendTarget(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kirim ke Klien</DialogTitle>
+            <DialogDescription>
+              Pilih kanal pengiriman (mode dev: dicatat sebagai tanda kirim di timeline &amp; memicu notifikasi —
+              bukan pengiriman nyata):
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <label htmlFor="q-send-channel" className="text-xs font-medium text-zinc-600">
+              Kanal
+            </label>
+            <Select value={sendChannel} onValueChange={setSendChannel}>
+              <SelectTrigger id="q-send-channel" className="w-full" aria-label="Kanal pengiriman quotation">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHANNELS.map((c) => (
+                  <SelectItem key={c.key} value={c.key}>
+                    {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {sendTarget ? (
+              <p className="pt-1 text-xs text-zinc-400">
+                Quotation {sendTarget.number} · {formatCurrencyFull(sendTarget.total, sendTarget.currency)}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendTarget(null)} disabled={busyId === sendTarget?.id}>
+              Batal
+            </Button>
+            <Button
+              className="bg-zinc-900 hover:bg-zinc-800"
+              onClick={() => {
+                const q = sendTarget;
+                setSendTarget(null);
+                if (q) void runAction(q, "send", { channel: sendChannel });
+              }}
+              disabled={!sendTarget}
+              aria-label="Kirim quotation ke klien"
+            >
+              <Send className="size-4" aria-hidden="true" />
+              Kirim
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1608,10 +2246,8 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   const [msgContent, setMsgContent] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Task cepat
-  const [taskTitle, setTaskTitle] = useState("");
-  const [taskDue, setTaskDue] = useState("");
-  const [taskSaving, setTaskSaving] = useState(false);
+  // Task — Ronde 40-E: quick-add inline diganti dialog tugas bersama
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
 
   // Catatan
   const [noteType, setNoteType] = useState<"internal" | "director_feedback">("internal");
@@ -1690,8 +2326,7 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     setAiText(null);
     setAiError(null);
     setMsgContent("");
-    setTaskTitle("");
-    setTaskDue("");
+    setTaskFormOpen(false);
     setNoteText("");
   }, [data?.id, data?.stage]);
 
@@ -1822,34 +2457,6 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     }
   }
 
-  async function addTask() {
-    if (!activeId) return;
-    if (!taskTitle.trim()) {
-      toast.error("Judul tugas wajib diisi");
-      return;
-    }
-    setTaskSaving(true);
-    try {
-      await api.createTask({
-        title: taskTitle.trim(),
-        dueDate: taskDue || undefined,
-        opportunityId: activeId,
-        assigneeName: user?.name ?? null,
-        priority: "medium",
-        type: "follow_up",
-        ...actorMeta,
-      });
-      toast.success("Tugas ditambahkan");
-      setTaskTitle("");
-      setTaskDue("");
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Gagal menambah tugas");
-    } finally {
-      setTaskSaving(false);
-    }
-  }
-
   async function addNote() {
     if (!data || !activeId) return;
     if (!noteText.trim()) {
@@ -1970,6 +2577,12 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
 
   function handleEstimationSaved(estimation: EstimationDTO) {
     setData((prev) => (prev ? { ...prev, estimation } : prev));
+    void load();
+    onChanged?.();
+  }
+
+  // Ronde 40-E — reload detail penuh (dipakai setelah keputusan approval estimasi)
+  function handleDetailChanged() {
     void load();
     onChanged?.();
   }
@@ -2285,6 +2898,9 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                         data.tasks.map((task) => {
                           const done = task.status === "done";
                           const overdue = !!task.dueDate && !done && isPastDate(task.dueDate);
+                          // Ronde 40-E — multi-assignee & lampiran (parse defensif)
+                          const assigneeList = taskAssigneeList(task);
+                          const attachments = taskAttachmentList(task.attachments);
                           return (
                             <li
                               key={task.id}
@@ -2311,12 +2927,52 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                                   >
                                     {task.priority}
                                   </Badge>
-                                  {task.assigneeName ? <span>{task.assigneeName}</span> : null}
+                                  {assigneeList.length > 0 ? (
+                                    <span
+                                      className="inline-flex items-center gap-1"
+                                      title={`Ditugaskan ke: ${assigneeList.join(", ")}`}
+                                      aria-label={`Ditugaskan ke ${assigneeList.join(", ")}`}
+                                    >
+                                      <span className="inline-flex -space-x-1" aria-hidden="true">
+                                        {assigneeList.slice(0, 3).map((name) => (
+                                          <span
+                                            key={name}
+                                            className="flex size-4 items-center justify-center rounded-full bg-zinc-200 text-[7px] font-bold text-zinc-600 ring-1 ring-white"
+                                          >
+                                            {initials(name)}
+                                          </span>
+                                        ))}
+                                      </span>
+                                      <span className="max-w-[160px] truncate">{assigneeList.join(", ")}</span>
+                                    </span>
+                                  ) : null}
                                   {task.dueDate ? (
                                     <span className={cn(overdue && "font-medium text-red-600")}>
                                       Jatuh tempo {formatDate(task.dueDate)}
                                       {overdue ? " · terlambat" : ""}
                                     </span>
+                                  ) : null}
+                                  {/* Ronde 40-E — lampiran tugas (kompak: maks 2 + sisanya dihitung) */}
+                                  {attachments.slice(0, 2).map((a, i) => (
+                                    <a
+                                      key={`${a.type}-${i}`}
+                                      href={a.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={a.name}
+                                      aria-label={`Buka lampiran ${a.name}`}
+                                      className="inline-flex max-w-full items-center gap-0.5 rounded px-0.5 font-medium text-zinc-500 transition-colors hover:text-zinc-900"
+                                    >
+                                      {a.type === "link" ? (
+                                        <Link2 className="size-3 shrink-0" aria-hidden="true" />
+                                      ) : (
+                                        <Paperclip className="size-3 shrink-0" aria-hidden="true" />
+                                      )}
+                                      <span className="max-w-[90px] truncate">{a.name}</span>
+                                    </a>
+                                  ))}
+                                  {attachments.length > 2 ? (
+                                    <span className="text-zinc-400">+{attachments.length - 2} lampiran</span>
                                   ) : null}
                                 </div>
                               </div>
@@ -2325,33 +2981,15 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                         })
                       )}
                     </ul>
-                    <div className="mt-3 flex flex-col gap-2 rounded-xl border bg-white p-3 shadow-sm sm:flex-row">
-                      <Input
-                        value={taskTitle}
-                        onChange={(e) => setTaskTitle(e.target.value)}
-                        placeholder="Tugas cepat, mis. Kirim proposal revisi"
-                        aria-label="Judul tugas baru"
-                        className="flex-1"
-                      />
-                      <Input
-                        type="date"
-                        value={taskDue}
-                        onChange={(e) => setTaskDue(e.target.value)}
-                        aria-label="Tanggal jatuh tempo tugas"
-                        className="sm:w-40"
-                      />
+                    <div className="mt-3 flex justify-end">
                       <Button
                         size="sm"
                         className="bg-zinc-900 hover:bg-zinc-800"
-                        onClick={() => void addTask()}
-                        disabled={taskSaving || !taskTitle.trim()}
+                        onClick={() => setTaskFormOpen(true)}
+                        aria-label="Tambah tugas baru untuk opportunity ini"
                       >
-                        {taskSaving ? (
-                          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Plus className="size-4" aria-hidden="true" />
-                        )}
-                        Tambah
+                        <Plus className="size-4" aria-hidden="true" />
+                        Tambah Tugas
                       </Button>
                     </div>
                   </TabsContent>
@@ -2364,7 +3002,9 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       currency={data.currency}
                       actorName={actorMeta.actorName}
                       actorRole={actorMeta.actorRole}
+                      pendingApprovals={data.pendingApprovals}
                       onSaved={handleEstimationSaved}
+                      onChanged={handleDetailChanged}
                     />
                   </TabsContent>
 
@@ -2379,6 +3019,7 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       actorRole={actorMeta.actorRole}
                       estimation={data.estimation ?? null}
                       serviceName={data.serviceName}
+                      defaultSendChannel={data.contact?.preferredChannel ?? "email"}
                       onPrint={setPrintTarget}
                       onChanged={handleQuotationChanged}
                     />
@@ -2626,6 +3267,17 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
           onOpenChange={setEditOpen}
           editData={data}
           onSaved={() => { void load(); onChanged?.(); }}
+        />
+      ) : null}
+
+      {/* Ronde 40-E — dialog tugas bersama: opportunity terkunci ke peluang ini */}
+      {data ? (
+        <TaskFormDialog
+          open={taskFormOpen}
+          onOpenChange={setTaskFormOpen}
+          lockedOpportunity={{ id: data.id, title: data.title }}
+          presetAssignees={user?.name ? [user.name] : undefined}
+          onSaved={() => { void load(); }}
         />
       ) : null}
     </>

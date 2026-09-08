@@ -48,6 +48,13 @@ export const api = {
   // Brands
   brands: () => request<{ brands: Brand[] }>("/api/brands"),
 
+  // Ronde 40 — master pajak bebas (GET auto-seed PPN/PPh bila kosong; tulis role finance/director/super_admin)
+  taxes: () => request<{ taxes: import("@/lib/crm/types").TaxDTO[] }>("/api/taxes"),
+  createTax: (payload: { name: string; rate: number }) =>
+    request<{ tax: import("@/lib/crm/types").TaxDTO }>("/api/taxes", { method: "POST", body: JSON.stringify(payload) }),
+  updateTax: (payload: { id: string; name?: string; rate?: number; active?: boolean }) =>
+    request<{ tax: import("@/lib/crm/types").TaxDTO }>("/api/taxes", { method: "PATCH", body: JSON.stringify(payload) }),
+
   // Dashboard
   dashboard: () => request<DashboardData>("/api/dashboard"),
 

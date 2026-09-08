@@ -114,7 +114,12 @@ interface IdentityDraft {
   threadsHandle: string;
   email: string;
   website: string;
+  /** Ronde 40-C — mata uang bawaan brand utk peluang/quotation/brief baru. */
+  primaryCurrency: string;
 }
+
+/** Ronde 40-C — opsi mata uang (sama dgn form brand di brands-module). */
+const CURRENCIES = ["IDR", "USD", "SGD", "EUR", "AUD"] as const;
 
 interface LetterTemplateDraft {
   fontFamily: string;
@@ -198,6 +203,7 @@ export default function BrandSettingsDialog({
         threadsHandle: brand.threadsHandle ?? "",
         email: brand.email ?? "",
         website: brand.website ?? "",
+        primaryCurrency: brand.primaryCurrency ?? "IDR",
       });
       setLogoData(null);
       let parsedLetter: LetterTemplateDraft = { ...DEFAULT_LETTER };
@@ -582,6 +588,21 @@ export default function BrandSettingsDialog({
                     <Input id="bs-web" className="h-9" value={identity.website}
                       onChange={(e) => setIdentity({ ...identity, website: e.target.value })}
                       placeholder="https://…" />
+                  </div>
+                  {/* Ronde 40-C — mata uang bawaan brand */}
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="bs-currency" className="text-xs">Mata Uang</Label>
+                    <Select value={identity.primaryCurrency} onValueChange={(v) => setIdentity({ ...identity, primaryCurrency: v })}>
+                      <SelectTrigger id="bs-currency" className="h-9 w-full sm:w-48" aria-label="Mata uang brand">
+                        <SelectValue placeholder="Pilih mata uang" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      Dipakai sebagai mata uang bawaan untuk peluang, quotation, dan brief baru di brand ini.
+                    </p>
                   </div>
                 </div>
                 <div className="flex justify-end border-t pt-4">

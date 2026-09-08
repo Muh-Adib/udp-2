@@ -81,7 +81,10 @@ export async function POST(req: NextRequest) {
   // Ronde 36 (audit): persen dipatok 0–100 di server juga (POST belum pernah clamp —
   // diskon -10 dulu MENAMBAH total; 150% pajak juga lolos).
   const discountPct = clampNum(body.discountPct ?? 0, 0, 100, 0);
-  const taxPct = clampNum(body.taxPct ?? 11, 0, 100, 11);
+  // Ronde 40 — pajak bebas: taxName dari master Tax; null/kosong → tanpa pajak (taxPct 0)
+  const taxNameRaw = body.taxName === null || body.taxName === undefined ? null : String(body.taxName).trim().slice(0, 80);
+  const taxName = taxNameRaw ? taxNameRaw : null;
+  const taxPct = taxName === null ? 0 : clampNum(body.taxPct ?? 11, 0, 100, 11);
   const totals = computeTotals(items, discountPct, taxPct);
 
   // Ronde 36 (audit): nomor unik dicek loop 5x + P2002 → 409 ramah.
@@ -117,6 +120,7 @@ export async function POST(req: NextRequest) {
       ...totals,
       discountPct,
       taxPct,
+      taxName,
       currency: opp.currency,
       status: "draft",
       revisionOfId,

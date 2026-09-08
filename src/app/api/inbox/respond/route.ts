@@ -37,6 +37,100 @@ function parseAttachments(input: unknown): { list: InteractionAttachment[]; erro
 }
 
 /**
+ * Ronde 40-B — mode kontak: mulai percakapan outbound pertama dengan kontak yang
+ * BELUM punya thread lead di Inbox (kartu "mulai percakapan" / fokus lintas modul).
+ * Aturan kanal sama dengan jalur lead: hanya REPLY_CHANNELS yang benar-benar punya
+ * alamat tujuan pada kontak. Brand: body.brandId (bila ada & valid) → fallback brand
+ * aktif pertama (interaksi selalu butuh konteks brand, pola sama dengan convert).
+ */
+async function startContactConversation(
+  req: NextRequest,
+  body: Record<string, unknown>,
+  actor: { name: string; role: string | null },
+  contactId: string,
+  content: string,
+  attachments: InteractionAttachment[],
+) {
+  const contact = await db.contact.findUnique({
+    where: { id: contactId },
+    include: { company: true },
+  });
+  if (!contact) return fail("Kontak tidak ditemukan", 404);
+
+  const channel = String(body.channel ?? contact.preferredChannel ?? "");
+  if (!(REPLY_CHANNELS as readonly string[]).includes(channel)) {
+    return fail(
+      `Kanal "${channel}" tidak didukung — gunakan: ${REPLY_CHANNELS.join(", ")}.`,
+      400,
+    );
+  }
+  const address =
+    channel === "email" ? contact.email
+    : channel === "whatsapp" ? contact.whatsapp
+    : channel === "instagram" ? contact.instagram
+    : contact.phone;
+  if (!address || !String(address).trim()) {
+    return fail(
+      `Kontak ini tidak punya alamat ${channel} — lengkapi datanya di modul Contacts.`,
+      400,
+    );
+  }
+
+  // Brand: body.brandId (mis. dari filter brand aktif) bila valid → fallback brand aktif pertama
+  let brandId: string | null = null;
+  const requestedBrandId = body.brandId ? String(body.brandId) : "";
+  if (requestedBrandId) {
+    const brand = await db.brand.findUnique({ where: { id: requestedBrandId }, select: { id: true } });
+    brandId = brand?.id ?? null;
+  }
+  if (!brandId) {
+    const brand = await db.brand.findFirst({
+      where: { active: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    brandId = brand?.id ?? null;
+  }
+
+  const reply = await db.interaction.create({
+    data: {
+      channel,
+      direction: "outbound",
+      brandId,
+      senderName: actor.name,
+      recipientName: String(address).trim(),
+      subject: body.subject ? String(body.subject) : null,
+      content,
+      attachments: attachments.length > 0 ? JSON.stringify(attachments) : null,
+      deliveryStatus: "sent",
+      contactId: contact.id,
+      companyId: contact.companyId ?? null,
+      externalId: `contact-chat:${contact.id}`,
+    },
+    include: { contact: { include: { company: true } }, brand: true },
+  });
+
+  await logAudit({
+    actorName: actor.name,
+    actorRole: actor.role,
+    action: "create",
+    entity: "interaction",
+    entityId: reply.id,
+    entityLabel: `Percakapan ${channel} ke ${contact.fullName}`,
+    field: "inbox_contact_chat",
+    oldValue: null,
+    newValue: contact.id,
+    metadata: content.slice(0, 120),
+    req,
+  });
+
+  return ok(
+    { interaction: { ...reply, attachments: serializeInteractionAttachments(reply.attachments) } },
+    201,
+  );
+}
+
+/**
  * Fase 3 — Respons & catat lead inbox:
  * buat interaction outbound sebagai jawaban lead inbound, lalu tandai lead
  * `respondedBy/respondedAt` (memenuhi SLA & menghentikan countdown).
@@ -53,12 +147,19 @@ export async function POST(req: NextRequest) {
   if (actor.denied) return fail(actor.reason, 401);
   const interactionId = body.interactionId ? String(body.interactionId) : "";
   const content = String(body.content ?? "").trim();
-  if (!interactionId) return fail("Lead tidak ditemukan", 404);
+  // Ronde 40-B — mode kontak: contactId TANPA interactionId → mulai percakapan baru
+  const contactModeId = !interactionId && body.contactId ? String(body.contactId) : "";
+  if (!interactionId && !contactModeId) return fail("Lead tidak ditemukan", 404);
   // Ronde 34-b — lampiran dokumen/gambar (maks 3 @2MB, data URL)
   const att = parseAttachments(body.attachments);
   if (att.error) return fail(att.error);
   // Ronde 34-b — pesan boleh HANYA lampiran (tanpa teks)
   if (!content && att.list.length === 0) return fail("Isi respons wajib diisi");
+
+  // ===== Ronde 40-B — cabang kontak (jalur lead di bawah TIDAK berubah) =====
+  if (contactModeId) {
+    return startContactConversation(req, body, actor, contactModeId, content, att.list);
+  }
 
   const lead = await db.interaction.findUnique({
     where: { id: interactionId },

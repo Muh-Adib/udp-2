@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody } from "@/lib/crm/server";
+import { parseTaskAssignees } from "@/lib/crm/task-parse";
 import type { Prisma } from "@prisma/client";
 import type { NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
 
@@ -188,17 +189,29 @@ export async function GET(req: NextRequest) {
   }
 
   // 4. Task overdue — milik pengguna; direktur/super admin melihat semua
+  //    Ronde 40 — "milik pengguna" juga mencakup multi-assignee (JSON assignees)
   const taskWhere: Prisma.TaskWhereInput = {
     status: "open",
     dueDate: { lt: new Date() },
-    ...(DECIDER_ROLES.has(role) ? {} : { assigneeName: user.name }),
+    ...(DECIDER_ROLES.has(role)
+      ? {}
+      : {
+          // Pre-filter longgar (contains), dipresisi di bawah via parseTaskAssignees
+          OR: [{ assigneeName: user.name }, { assignees: { contains: user.name } }],
+        }),
   };
-  const tasks = await db.task.findMany({
+  const tasks = (await db.task.findMany({
     where: taskWhere,
     include: { opportunity: { include: { brand: true } } },
     orderBy: { dueDate: "asc" },
-    take: 15,
-  });
+    take: 30,
+  }))
+    .filter((t) =>
+      DECIDER_ROLES.has(role) ||
+      t.assigneeName === user.name ||
+      parseTaskAssignees(t.assignees).includes(user.name)
+    )
+    .slice(0, 15);
   for (const t of tasks) {
     if (brandWhere && t.opportunity?.brandId !== brandFilter) continue;
     const overdueDays = Math.max(1, Math.floor((Date.now() - (t.dueDate?.getTime() ?? Date.now())) / (24 * 60 * 60 * 1000)));

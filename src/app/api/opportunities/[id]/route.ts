@@ -50,6 +50,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       invoices: { include: { payments: true } },
       estimation: true,
       quotations: { orderBy: { createdAt: "desc" } },
+      // Ronde 40 — approval estimasi yang menunggu keputusan (tombol keputusan di detail)
+      approvals: { where: { status: "pending" }, orderBy: { createdAt: "desc" }, take: 5 },
       _count: { select: { interactions: true, tasks: true } },
     },
   });
@@ -69,7 +71,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const enrichedOpportunity = enrichScore(opportunity);
 
-  return ok({ opportunity: enrichedOpportunity, related });
+  // Ronde 40 — approvals di-rename ke pendingApprovals sesuai OpportunityDTO
+  const { approvals, ...oppRest } = enrichedOpportunity;
+  const pendingApprovals = approvals.map((a) => ({
+    id: a.id,
+    entityType: a.entityType,
+    entityId: a.entityId,
+    entityLabel: a.entityLabel,
+    amount: a.amount,
+    requestedBy: a.requestedBy,
+    status: a.status,
+  }));
+
+  return ok({ opportunity: { ...oppRest, pendingApprovals }, related });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

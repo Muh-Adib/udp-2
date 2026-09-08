@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, dateOrNull } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { parseTaskAssignees, parseTaskAttachments } from "@/lib/crm/task-parse";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -20,7 +21,32 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data.status = String(body.status);
     data.completedAt = body.status === "done" ? new Date() : null;
   }
-  if ("assigneeName" in body) data.assigneeName = body.assigneeName ? String(body.assigneeName) : null;
+  // Ronde 40 — multi-assignee: assignee utama ikut assignees[0]; fallback legacy assigneeName
+  if ("assignees" in body) {
+    const assignees = parseTaskAssignees(body.assignees ?? []);
+    data.assignees = JSON.stringify(assignees);
+    data.assigneeName = assignees[0] ?? ("assigneeName" in body && body.assigneeName ? String(body.assigneeName) : null);
+  }
+  if (!("assignees" in body) && "assigneeName" in body) {
+    data.assigneeName = body.assigneeName ? String(body.assigneeName) : null;
+  }
+  // Ronde 40 — lampiran: tautan http(s) / file data URL ≤5MB, maks 5 (validasi ketat)
+  if ("attachments" in body) {
+    try {
+      data.attachments = JSON.stringify(parseTaskAttachments(body.attachments ?? []));
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : "Lampiran tidak valid", 400);
+    }
+  }
+  // Ronde 40 — opportunityId boleh diubah; harus ada bila dikirim (null = lepas)
+  if ("opportunityId" in body) {
+    const oppId = body.opportunityId ? String(body.opportunityId) : null;
+    if (oppId) {
+      const opp = await db.opportunity.findUnique({ where: { id: oppId }, select: { id: true } });
+      if (!opp) return fail("Opportunity tidak ditemukan", 400);
+    }
+    data.opportunityId = oppId;
+  }
   // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
   if ("dueDate" in body) data.dueDate = dateOrNull(body.dueDate);
 

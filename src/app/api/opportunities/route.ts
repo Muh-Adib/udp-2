@@ -71,6 +71,13 @@ export async function POST(req: NextRequest) {
   const contact = await db.contact.findUnique({ where: { id: contactId } });
   if (!contact) return fail("Contact tidak ditemukan", 404);
 
+  // Ronde 40 — brand divalidasi + dipakai utk fallback mata uang brand
+  const brand = await db.brand.findUnique({ where: { id: brandId } });
+  if (!brand) return fail("Brand tidak ditemukan", 404);
+
+  // Ronde 40 — owner default dari sesi; body tidak dipercaya lagi utk owner
+  const ownerName = body.ownerName ? String(body.ownerName).trim() : actor.name;
+
   const estimatedValue = body.estimatedValue ? Number(body.estimatedValue) : null;
 
   // Ronde 36 (audit): opportunity + task follow-up dalam SATU transaksi —
@@ -87,11 +94,12 @@ export async function POST(req: NextRequest) {
         leadSource: body.leadSource ? String(body.leadSource) : "manual",
         brief: body.brief ? String(body.brief) : null,
         estimatedValue,
-        currency: body.currency ? String(body.currency) : "IDR",
+        // Ronde 40 — mata uang: body ?? mata uang utama brand ?? IDR
+        currency: body.currency ? String(body.currency) : (brand.primaryCurrency ?? "IDR"),
         probability: body.probability ? Number(body.probability) : 20,
         // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
         expectedCloseDate: dateOrNull(body.expectedCloseDate),
-        ownerName: body.ownerName ? String(body.ownerName) : null,
+        ownerName,
         priority: body.priority ? String(body.priority) : "medium",
         stage: body.stage ? String(body.stage) : "new",
         temperature: body.temperature ? String(body.temperature) : "warm",

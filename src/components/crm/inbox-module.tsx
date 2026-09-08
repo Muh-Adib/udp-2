@@ -110,14 +110,14 @@ interface ContactFormState {
 }
 interface OpportunityFormState {
   brandId: string; title: string; serviceCategory: string; serviceName: string;
-  estimatedValue: string; ownerName: string; priority: string;
+  estimatedValue: string; priority: string;
 }
 
 const EMPTY_CONTACT_FORM: ContactFormState = {
   firstName: "", lastName: "", email: "", whatsapp: "", companyName: "", city: "", position: "", instagram: "",
 };
 const EMPTY_OPP_FORM: OpportunityFormState = {
-  brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", ownerName: "", priority: "medium",
+  brandId: "", title: "", serviceCategory: "", serviceName: "", estimatedValue: "", priority: "medium",
 };
 
 // ============ Mapping kanal (tanpa indigo/blue) ============
@@ -187,6 +187,16 @@ function replyChannelsOf(lead: InboxLead): ReplyChannelKey[] {
   return raw.filter((c): c is ReplyChannelKey =>
     (REPLY_CHANNEL_KEYS as readonly string[]).includes(c)
   );
+}
+
+/** Ronde 40-B — kanal yang bisa dipakai menghubungi kontak langsung (punya alamat tujuan). */
+function contactReplyChannels(c: ContactRef): ReplyChannelKey[] {
+  const out: ReplyChannelKey[] = [];
+  if (c.whatsapp?.trim()) out.push("whatsapp");
+  if (c.email?.trim()) out.push("email");
+  if (c.instagram?.trim()) out.push("instagram");
+  if (c.phone?.trim()) out.push("phone");
+  return out;
 }
 
 /**
@@ -901,6 +911,130 @@ function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { m
 /** Ganti placeholder template untuk konteks lead inbox. */
 function renderLeadTemplate(body: string, vars: Record<string, string>): string {
   return body.replace(/{{\s*(\w+)\s*}}/g, (full, key: string) => vars[key] ?? full);
+}
+
+// ============ Ronde 40-B — kartu mulai percakapan (kontak belum punya thread) ============
+
+/**
+ * Tampil di area chat bila kontak difokuskan lintas modul tapi belum punya thread.
+ * Mengirim pesan outbound pertama via POST /api/inbox/respond mode kontak.
+ */
+function StartConversationCard({
+  contact, channels, channel, onChannelChange, body, onBodyChange, onSend, sending, sentCount, onClose,
+}: {
+  contact: ContactRef;
+  channels: ReplyChannelKey[];
+  channel: string;
+  onChannelChange: (c: string) => void;
+  body: string;
+  onBodyChange: (v: string) => void;
+  onSend: () => void;
+  sending: boolean;
+  sentCount: number;
+  onClose: () => void;
+}) {
+  const chMeta = channelMeta(channel);
+  const ChIcon = chMeta.icon;
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex items-center gap-2.5 border-b border-zinc-200 px-3 py-2.5 sm:px-4">
+        <span
+          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white"
+          aria-hidden="true"
+        >
+          {initials(contact.fullName.replace(/^@+/, ""))}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-zinc-900">Belum ada percakapan dengan {contact.fullName}</p>
+          <p className="truncate text-xs text-zinc-500">Mulai chat outbound pertama — pesan tercatat di riwayat kontak.</p>
+        </div>
+        <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label="Tutup kartu mulai percakapan">
+          <X className="size-4" />
+        </Button>
+      </div>
+
+      <div className="crm-scroll min-h-0 flex-1 overflow-y-auto bg-zinc-50/60 p-4 sm:p-6">
+        <div className="mx-auto max-w-md space-y-3">
+          <div className="rounded-xl border bg-white p-4 text-center shadow-sm">
+            <span className="mx-auto flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
+              <MessagesSquare className="size-6 text-zinc-400" />
+            </span>
+            <p className="mt-2 text-sm font-medium text-zinc-700">Pilih kanal yang bisa dihubungi</p>
+            {channels.length > 0 ? (
+              <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                {channels.map((c) => {
+                  const m = channelMeta(c);
+                  const MIcon = m.icon;
+                  return (
+                    <Badge key={c} variant="outline" className={cn("gap-1 border", m.badge)}>
+                      <MIcon className="size-3" aria-hidden="true" />
+                      {channelLabel(c)}
+                    </Badge>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-1.5 text-xs leading-relaxed text-amber-700">
+                Kontak belum punya email/WhatsApp/handle sosial — lengkapi dulu di modul Contacts.
+              </p>
+            )}
+          </div>
+          {sentCount > 0 && (
+            <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5" role="status">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden="true" />
+              <p className="text-xs leading-relaxed text-emerald-800">
+                {sentCount} pesan terkirim & tercatat di riwayat kontak. Balasan dari kontak akan muncul sebagai thread baru di Inbox.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2 border-t border-zinc-200 bg-white p-3 sm:px-4">
+        <div className="flex items-center gap-2">
+          <Select value={channel} onValueChange={onChannelChange} disabled={channels.length === 0 || sending}>
+            <SelectTrigger className="h-10 w-[150px] shrink-0 bg-zinc-50 text-xs" aria-label="Kanal pesan">
+              <SelectValue placeholder="Kanal" />
+            </SelectTrigger>
+            <SelectContent>
+              {channels.map((c) => (
+                <SelectItem key={c} value={c}>{channelLabel(c)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {channel ? (
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
+              <ChIcon className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">via {channelLabel(channel)}</span>
+            </p>
+          ) : null}
+        </div>
+        <Textarea
+          value={body}
+          onChange={(e) => onBodyChange(e.target.value)}
+          placeholder="Tulis pesan pertama…"
+          aria-label="Isi pesan"
+          className="min-h-[80px] bg-zinc-50"
+          disabled={sending || channels.length === 0}
+        />
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            className="bg-zinc-900 text-white hover:bg-zinc-800"
+            disabled={sending || channels.length === 0 || body.trim() === ""}
+            onClick={onSend}
+            aria-label="Kirim Pesan"
+          >
+            {sending ? (
+              <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Mengirim…</>
+            ) : (
+              <><Send className="size-4" aria-hidden="true" /> Kirim Pesan</>
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ChatComposer({
@@ -1796,15 +1930,6 @@ function ConvertModal({
                   placeholder="cth. 25000000"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="convert-owner" className="text-xs">Owner</Label>
-                <Input
-                  id="convert-owner"
-                  value={oppForm.ownerName}
-                  onChange={(e) => onOppFormChange({ ...oppForm, ownerName: e.target.value })}
-                  placeholder="Nama owner"
-                />
-              </div>
             </div>
           </div>
 
@@ -1906,6 +2031,13 @@ export default function InboxModule() {
   const [escalating, setEscalating] = useState(false);
   const [escalatedIds, setEscalatedIds] = useState<Set<string>>(new Set());
 
+  // Ronde 40-B — mulai percakapan baru utk kontak tanpa thread (fokus lintas modul)
+  const [startConvContact, setStartConvContact] = useState<ContactRef | null>(null);
+  const [startConvChannel, setStartConvChannel] = useState("");
+  const [startConvBody, setStartConvBody] = useState("");
+  const [startConvSending, setStartConvSending] = useState(false);
+  const [startConvSentCount, setStartConvSentCount] = useState(0);
+
   const detailRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLUListElement | null>(null);
 
@@ -1939,6 +2071,7 @@ export default function InboxModule() {
           description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
         });
       }
+      return res.leads; // Ronde 40-B — dipakai utk auto-fokus thread setelah pesan pertama
     } catch (err) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan tak terduga");
       if (!silent) toast.error("Gagal memuat lead inbox");
@@ -2158,8 +2291,22 @@ export default function InboxModule() {
           if (activeBrandFilter !== "all") setActiveBrandFilter("all");
           return;
         }
-        toast.info("Belum ada percakapan aktif dengan kontak ini di Inbox", {
-          description: "Hubungi via kanal yang tersedia, atau mulai dari tombol Kirim Pesan di task follow-up.",
+        // Ronde 40-B — kontak ada tapi TIDAK punya thread: tampilkan kartu "mulai
+        // percakapan" (dulu dead-end toast) agar pesan outbound pertama bisa dikirim.
+        if (detailContact) {
+          const channels = contactReplyChannels(detailContact);
+          const pref = detailContact.preferredChannel;
+          setStartConvContact(detailContact);
+          setStartConvBody("");
+          setStartConvSentCount(0);
+          setStartConvChannel(
+            pref && channels.includes(pref as ReplyChannelKey) ? pref : (channels[0] ?? "")
+          );
+          clearPendingFocus();
+          return;
+        }
+        toast.info("Kontak tidak ditemukan di sistem", {
+          description: "Tidak bisa memulai percakapan — pastikan kontak masih ada di modul Contacts.",
           duration: 6000,
         });
         clearPendingFocus();
@@ -2193,6 +2340,7 @@ export default function InboxModule() {
     setShowIdentify(false);
     setShowConvert(false);
     setChatBody("");
+    setStartConvContact(null); // Ronde 40-B — tutup kartu mulai percakapan saat thread lain dipilih
     setChatAttachments([]); // Ronde 34-b — bersihkan draf lampiran saat ganti thread
     const avail = replyChannelsOf(lead);
     setChatChannel(avail.includes(lead.channel as ReplyChannelKey) ? lead.channel : (avail[0] ?? ""));
@@ -2216,7 +2364,6 @@ export default function InboxModule() {
       ...EMPTY_OPP_FORM,
       brandId: lead.brandId ?? lead.brand?.id ?? "",
       title: `Lead ${channelLabel(lead.channel)} — ${rawSender.slice(0, 48) || "Tanpa nama"}`,
-      ownerName: user?.name ?? "",
     });
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       window.setTimeout(() => {
@@ -2351,6 +2498,63 @@ export default function InboxModule() {
     }
   }
 
+  // Ronde 40-B — kirim pesan PERTAMA ke kontak yang belum punya thread di Inbox.
+  // api.inboxRespond menuntut interactionId (thread lead) — mode kontak tidak punya
+  // thread, jadi POST /api/inbox/respond dipanggil langsung dgn konvensi wrapper
+  // api-client (credentials same-origin + header JSON + error {error}).
+  async function handleStartConvSend() {
+    if (!startConvContact || !user || startConvSending) return;
+    const channels = contactReplyChannels(startConvContact);
+    if (channels.length === 0) {
+      toast.error("Kontak belum punya email/WhatsApp/handle — lengkapi di modul Contacts");
+      return;
+    }
+    if (!channels.includes(startConvChannel as ReplyChannelKey)) {
+      toast.error("Pilih kanal yang tersedia untuk kontak ini");
+      return;
+    }
+    const content = startConvBody.trim();
+    if (!content) {
+      toast.error("Tulis pesan dulu");
+      return;
+    }
+    setStartConvSending(true);
+    try {
+      const res = await fetch("/api/inbox/respond", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactId: startConvContact.id,
+          channel: startConvChannel,
+          content,
+          ...(activeBrandFilter !== "all" ? { brandId: activeBrandFilter } : {}),
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      toast.success("Percakapan dimulai", {
+        description: `Pesan ${channelLabel(startConvChannel)} tercatat untuk ${startConvContact.fullName} — balasan akan tampil sebagai thread di Inbox.`,
+      });
+      setStartConvBody("");
+      setStartConvSentCount((n) => n + 1);
+      // Muat ulang list; bila thread kontak kini muncul → pilih otomatis & tutup kartu
+      const fresh = await loadLeads(true);
+      const match = (fresh ?? [])
+        .filter((l) => l.contact?.id === startConvContact.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+      if (match) {
+        if (match.opportunityId && view === "open") setView("all");
+        handleSelectLead(match);
+        setStartConvContact(null);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengirim pesan");
+    } finally {
+      setStartConvSending(false);
+    }
+  }
+
   async function handleConvert() {
     if (!selectedLead || !user || !convertMode) return;
     if (!oppForm.brandId) {
@@ -2367,7 +2571,7 @@ export default function InboxModule() {
       title:
         oppForm.title.trim() ||
         `Lead ${channelLabel(selectedLead.channel)} — ${(selectedLead.senderName ?? "Tanpa nama").trim().slice(0, 48)}`,
-      ownerName: oppForm.ownerName.trim() || user.name,
+      // Ronde 40: ownerName tidak lagi dari form — server memakai user sesi
       priority: oppForm.priority,
     };
     if (oppForm.serviceCategory) opportunity.serviceCategory = oppForm.serviceCategory;
@@ -2680,7 +2884,7 @@ export default function InboxModule() {
         {/* KIRI: daftar percakapan — di <lg disembunyikan saat chat terbuka (master–detail) */}
         <section
           aria-label="Daftar percakapan"
-          className={cn("min-w-0 rounded-xl border bg-white shadow-sm", PANEL_H, "flex flex-col", selectedLead && "hidden lg:flex")}
+          className={cn("min-w-0 rounded-xl border bg-white shadow-sm", PANEL_H, "flex flex-col", (selectedLead || startConvContact) && "hidden lg:flex")}
         >
           {firstLoad ? (
             <div className="crm-scroll min-h-0 flex-1 overflow-y-auto p-3">
@@ -2727,12 +2931,29 @@ export default function InboxModule() {
         </section>
 
         {/* KANAN: FULL CHAT — profil lead di header, tools identitas compact, composer inline */}
-        <section aria-label="Chat percakapan" className={cn("min-w-0 lg:col-span-2", !selectedLead && "hidden lg:block")}>
+        <section
+          aria-label="Chat percakapan"
+          className={cn("min-w-0 lg:col-span-2", !selectedLead && !startConvContact && "hidden lg:block")}
+        >
           <div
             ref={detailRef}
             className={cn("flex flex-col overflow-hidden rounded-xl border bg-white shadow-sm", PANEL_H)}
           >
             {!selectedLead ? (
+              startConvContact ? (
+                <StartConversationCard
+                  contact={startConvContact}
+                  channels={contactReplyChannels(startConvContact)}
+                  channel={startConvChannel}
+                  onChannelChange={setStartConvChannel}
+                  body={startConvBody}
+                  onBodyChange={setStartConvBody}
+                  sending={startConvSending}
+                  sentCount={startConvSentCount}
+                  onSend={() => void handleStartConvSend()}
+                  onClose={() => setStartConvContact(null)}
+                />
+              ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-10 text-center">
                 <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
                   <MessagesSquare className="size-6 text-zinc-400" />
@@ -2742,6 +2963,7 @@ export default function InboxModule() {
                   Balas satu per satu ala chat omnichannel — identitas, identifikasi, dan konversi tersedia lewat tools di header chat.
                 </p>
               </div>
+              )
             ) : (
               <>
                 {/* ===== CHAT HEADER — profil lead + kelengkapan & tools identitas (minimalis) ===== */}

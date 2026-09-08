@@ -1,15 +1,31 @@
 // ============ Normalisasi identitas (anti-duplikat) ============
 
-/** Normalisasi nomor telepon/WhatsApp ke digit internasional (default Indonesia +62). */
-export function normalizePhone(raw?: string | null): string | null {
+/**
+ * Normalisasi nomor telepon/WhatsApp ke digit internasional.
+ * - TANPA `dial` (backward-compat): perilaku lama — default Indonesia (08xx → 628xx).
+ * - DENGAN `dial` (mis. "+62"): digit dial digabung ke depan nomor nasional.
+ *   Input yang sudah diawali kode dial (tanpa "+") dipertahankan apa adanya.
+ */
+export function normalizePhone(raw?: string | null, dial?: string | null): string | null {
   if (!raw) return null;
-  let digits = raw.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) digits = digits.slice(1);
-  digits = digits.replace(/\D/g, "");
+  if (!dial) {
+    let digits = raw.replace(/[^\d+]/g, "");
+    if (digits.startsWith("+")) digits = digits.slice(1);
+    digits = digits.replace(/\D/g, "");
+    if (!digits) return null;
+    // 08xx -> 628xx
+    if (digits.startsWith("0")) digits = "62" + digits.slice(1);
+    return digits;
+  }
+  const dialDigits = dial.replace(/\D/g, "");
+  let digits = raw.replace(/\D/g, "");
   if (!digits) return null;
-  // 08xx -> 628xx
-  if (digits.startsWith("0")) digits = "62" + digits.slice(1);
-  return digits;
+  // 0xx -> nasional tanpa 0
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  if (!digits) return null;
+  // Sudah diawali kode dial (mis. user menempel nomor internasional) → biarkan
+  if (dialDigits && digits.startsWith(dialDigits)) return digits;
+  return dialDigits + digits;
 }
 
 /** Email valid sejati (x@y.tld) — MENOLAK handle Instagram (@username) dan teks bebas. */

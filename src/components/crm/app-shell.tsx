@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import DashboardModule from "@/components/crm/dashboard-module";
@@ -29,7 +30,7 @@ import AuditModule from "@/components/crm/audit-module";
 import {
   LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
   FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu, PlugZap,
-  ChevronDown, CircleUser,
+  ChevronDown, CircleUser, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 
 const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }>> = {
@@ -68,7 +69,7 @@ function roleLabel(role: string) {
   return ROLES.find((r) => r.key === role)?.label ?? role;
 }
 
-function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarNav({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
   const { user, activeModule, setActiveModule } = useCrmStore();
   if (!user) return null;
   return (
@@ -78,30 +79,49 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         if (items.length === 0) return null;
         return (
           <div key={section.label}>
-            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">{section.label}</p>
+            <p className={cn("mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500", collapsed && "hidden")}>{section.label}</p>
             <ul className="space-y-0.5">
               {items.map((m) => {
                 const Icon = MODULE_ICONS[m];
                 const active = activeModule === m;
+                const hasUnread = m === "inbox" && activeModule !== "inbox";
+                const itemButton = (
+                  <button
+                    type="button"
+                    onClick={() => { setActiveModule(m); onNavigate?.(); }}
+                    aria-current={active ? "page" : undefined}
+                    aria-label={collapsed ? MODULE_META[m].label : undefined}
+                    className={cn(
+                      "group flex items-center rounded-lg text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400",
+                      collapsed ? "relative mx-auto h-9 w-9 justify-center" : "w-full gap-2.5 px-3 py-2",
+                      active ? "bg-zinc-800 text-white font-medium" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                    )}
+                  >
+                    <Icon className={cn("h-4 w-4 shrink-0", active ? "text-amber-400" : "text-zinc-500 group-hover:text-zinc-300")} aria-hidden />
+                    <span className={cn("truncate", collapsed && "hidden")}>{MODULE_META[m].label}</span>
+                    {hasUnread && !collapsed && (
+                      <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white" title="Lead baru menunggu respons" aria-label="Ada lead baru di inbox">
+                        ●
+                      </span>
+                    )}
+                    {hasUnread && collapsed && (
+                      <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-600" title="Lead baru menunggu respons" aria-label="Ada lead baru di inbox" />
+                    )}
+                  </button>
+                );
                 return (
                   <li key={m}>
-                    <button
-                      type="button"
-                      onClick={() => { setActiveModule(m); onNavigate?.(); }}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                        active ? "bg-zinc-800 text-white font-medium" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-                      )}
-                    >
-                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-amber-400" : "text-zinc-500 group-hover:text-zinc-300")} aria-hidden />
-                      <span className="truncate">{MODULE_META[m].label}</span>
-                      {m === "inbox" && activeModule !== "inbox" && (
-                        <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white" title="Lead baru menunggu respons" aria-label="Ada lead baru di inbox">
-                          ●
-                        </span>
-                      )}
-                    </button>
+                    {collapsed ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>{itemButton}</TooltipTrigger>
+                        <TooltipContent side="right" sideOffset={8}>
+                          {MODULE_META[m].label}
+                          {hasUnread ? " — ada pesan baru" : ""}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      itemButton
+                    )}
                   </li>
                 );
               })}
@@ -185,7 +205,20 @@ export default function AppShell() {
   const setActiveBrandFilter = useCrmStore((s) => s.setActiveBrandFilter);
   const brands = useCrmStore((s) => s.brands);
   const setUser = useCrmStore((s) => s.setUser);
+  const refreshBrands = useCrmStore((s) => s.refreshBrands);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Ronde 40-D: minify sidebar desktop — state lokal (bukan store), persist di localStorage.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try { return window.localStorage.getItem("crm-sidebar-collapsed") === "1"; } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try { window.localStorage.setItem("crm-sidebar-collapsed", next ? "1" : "0"); } catch { /* abaikan */ }
+      return next;
+    });
+  };
 
   // Gate modul berdasarkan role: jika role tidak punya akses, paksa ke modul pertama yang diizinkan
   useEffect(() => {
@@ -196,26 +229,62 @@ export default function AppShell() {
     }
   }, [user, activeModule, setActiveModule]);
 
+  // Ronde 40-D: muat ulang daftar brand saat shell terpasang (action dari 40-C —
+  // referensi action zustand stabil, efek berjalan sekali). Gagal = diamkan di dalam action.
+  useEffect(() => {
+    void refreshBrands();
+  }, [refreshBrands]);
+
   if (!user) return null;
   const meta = MODULE_META[activeModule];
+
+  const collapseToggle = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={toggleCollapsed}
+      aria-label={collapsed ? "Perluas sidebar" : "Minify sidebar"}
+      aria-expanded={!collapsed}
+      className="h-8 w-8 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+    >
+      {collapsed ? <PanelLeftOpen className="h-4 w-4" aria-hidden /> : <PanelLeftClose className="h-4 w-4" aria-hidden />}
+    </Button>
+  );
 
   return (
     <div className="flex min-h-screen bg-zinc-100">
       {/* Sidebar desktop */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col bg-zinc-950 lg:flex" aria-label="Sidebar">
-        <div className="flex items-center gap-2.5 px-4 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>G</div>
-          <div className="min-w-0">
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 hidden flex-col bg-zinc-950 transition-all duration-200 lg:flex",
+          collapsed ? "w-16" : "w-64"
+        )}
+        aria-label="Sidebar"
+      >
+        <div className={cn("flex items-center gap-2.5 px-4 py-4", collapsed && "justify-center px-2")}>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>G</div>
+          <div className={cn("min-w-0", collapsed && "hidden")}>
             <p className="truncate text-sm font-bold text-zinc-50">Grup CRM</p>
             <p className="truncate text-[10px] text-zinc-500">Multi-Brand Platform</p>
           </div>
         </div>
-        <SidebarNav />
-        <BrandStrip />
+        <SidebarNav collapsed={collapsed} />
+        <div className={cn("flex border-t border-zinc-800 px-3 py-2.5", collapsed ? "justify-center" : "justify-end")}>
+          {collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{collapseToggle}</TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>Perluas sidebar</TooltipContent>
+            </Tooltip>
+          ) : (
+            collapseToggle
+          )}
+        </div>
+        {!collapsed && <BrandStrip />}
       </aside>
 
       {/* Konten (pb-16 agar footer tidak tertutup bottom-nav mobile) */}
-      <div className="flex min-h-screen w-full flex-col pb-16 lg:pb-0 lg:pl-64">
+      <div className={cn("flex min-h-screen w-full flex-col pb-16 transition-all duration-200 lg:pb-0", collapsed ? "lg:pl-16" : "lg:pl-64")}>
         {/* Header */}
         <header className="sticky top-0 z-30 border-b border-zinc-200 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/75">
           <div className="flex h-14 items-center gap-2 px-4 sm:gap-3 lg:px-6">

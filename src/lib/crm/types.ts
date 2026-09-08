@@ -112,9 +112,27 @@ export interface OpportunityDTO {
   score?: number;
   /** Alasan/faktor penambah & pengurang skor. */
   scoreReasons?: string[];
+  /** Ronde 40 — approval menunggu keputusan (hanya di GET /api/opportunities/[id], take 5). */
+  pendingApprovals?: {
+    id: string;
+    entityType: string;
+    entityId: string;
+    entityLabel?: string | null;
+    amount?: number | null;
+    requestedBy?: string | null;
+    status: string;
+  }[];
   _count?: { interactions: number; tasks: number };
   createdAt: string;
   updatedAt: string;
+}
+
+/** Ronde 40 — master pajak bebas (model Tax): nama + persentase. */
+export interface TaxDTO {
+  id: string;
+  name: string;
+  rate: number;
+  active: boolean;
 }
 
 /** Ronde 34-b — lampiran pesan chat (dokumen/gambar) — data URL kecil (≤2 MB per file). */
@@ -159,12 +177,24 @@ export interface TaskDTO {
   priority: string;
   status: string;
   assigneeName?: string | null;
+  /** Ronde 40 — multi-assignee: JSON string di DB, array setelah diparse (atau mentah dari API). */
+  assignees?: string | string[];
+  /** Ronde 40 — lampiran task: JSON string di DB atau array hasil parse. */
+  attachments?: string | TaskAttachment[];
   dueDate?: string | null;
   opportunityId?: string | null;
   /** Ronde 34-b — contact ikut di-include API tasks agar task follow-up bisa loncat ke chat kontak. */
   opportunity?: { id: string; title: string; stage: string; brand?: Brand; contact?: ContactRef | null } | null;
   completedAt?: string | null;
   createdAt: string;
+}
+
+/** Ronde 40 — lampiran task: tautan atau file kecil (data URL ≤5MB). */
+export interface TaskAttachment {
+  type: "link" | "file";
+  name: string;
+  url: string;
+  size?: number;
 }
 
 export interface NoteDTO {
@@ -323,6 +353,8 @@ export interface InvoiceDTO {
   description?: string | null;
   amount: number;
   taxRate: number;
+  /** Ronde 40 — nama pajak bebas (PPN, PPh 21, dll); null = tanpa pajak. */
+  taxName?: string | null;
   taxAmount: number;
   total: number;
   currency: string;
@@ -359,12 +391,25 @@ export interface AuditLogDTO {
   createdAt: string;
 }
 
+/** Ronde 40 — rincian biaya per item pada estimasi (JSON string di DB). */
+export interface EstimationCostItem {
+  name: string;
+  qty: number;
+  days?: number | null;
+  unitPrice: number;
+  subtotal: number;
+}
+
 export interface EstimationDTO {
   id: string;
   opportunityId: string;
   laborInternal: number; vendorFreelance: number; equipment: number; transport: number;
   accommodation: number; talent: number; locationFee: number; softwareLicense: number; hostingDomain: number;
+  /** Ronde 40 — rincian biaya per item; bila totalnya > 0, totalCost mengikuti item ini. */
+  costItems?: string | EstimationCostItem[];
   contingencyPct: number; managementFeePct: number; discountPct: number; taxPct: number; targetMarginPct: number;
+  /** Ronde 40 — nama pajak bebas (PPN, PPh 21, dll); null = tanpa pajak (taxPct 0). */
+  taxName?: string | null;
   totalCost: number; contingency: number; managementFee: number;
   revenue: number; discountAmount: number; netRevenue: number; taxAmount: number; grandTotal: number;
   margin: number; marginPct: number;
@@ -393,6 +438,8 @@ export interface QuotationDTO {
   discountPct: number;
   discountAmount: number;
   taxPct: number;
+  /** Ronde 40 — nama pajak bebas (PPN, PPh 21, dll); null = tanpa pajak. */
+  taxName?: string | null;
   taxAmount: number;
   total: number;
   currency: string;

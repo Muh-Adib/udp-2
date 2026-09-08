@@ -49,6 +49,19 @@ export async function POST(req: NextRequest) {
     `menunggu respons melewati SLA. Pesan: "${snippet}"\n${marker}`;
   if (note) description += `\nCatatan eskalasi: ${note}`;
 
+  // Ronde 40-B — tautkan task eskalasi ke opportunity aktif milik kontak (bila ada):
+  // interaction.opportunityId selalu null di titik ini (lead terkonversi ditolak di atas),
+  // jadi kaitan yang tersedia adalah opportunity terbaru milik kontak yang belum won/lost.
+  let opportunityId: string | null = null;
+  if (interaction.contactId) {
+    const activeOpp = await db.opportunity.findFirst({
+      where: { contactId: interaction.contactId, stage: { notIn: ["won", "lost"] } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    opportunityId = activeOpp?.id ?? null;
+  }
+
   const task = await db.task.create({
     data: {
       title: `Eskalasi SLA: respons ${senderLabel}`,
@@ -58,7 +71,7 @@ export async function POST(req: NextRequest) {
       status: "open",
       assigneeName: String(body.assigneeName ?? "Direktur"),
       dueDate: new Date(Date.now() + 2 * 60 * 60 * 1000),
-      opportunityId: null,
+      opportunityId,
     },
   });
 

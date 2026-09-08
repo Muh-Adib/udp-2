@@ -14,6 +14,33 @@ function parseItems(items: string | QuotationItemDTO[]): QuotationItemDTO[] {
   }
 }
 
+/** Ronde 40-C — template surat brand (JSON di brand.letterTemplate), dipakai
+ * untuk font, warna aksen & catatan kaki dokumen quotation. */
+interface LetterTemplate {
+  fontFamily?: string;
+  accentColor?: string;
+  headerStyle?: string;
+  showLogo?: boolean;
+  footerNote?: string;
+}
+
+function parseLetterTemplate(raw?: string | null): LetterTemplate {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as LetterTemplate)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Terima hanya nilai hex yang valid agar inline style tidak korup. */
+function safeHex(value?: string, fallback = "#0f172a"): string {
+  return value && /^#[0-9a-fA-F]{3,8}$/.test(value.trim()) ? value.trim() : fallback;
+}
+
 /**
  * Layout dokumen quotation siap cetak (A4-friendly).
  * Dirender di dalam #print-area — hanya tampil saat window.print() (lihat globals.css).
@@ -24,8 +51,13 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
   const docDate = q.sentAt ?? q.createdAt;
   const today = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
+  // Ronde 40-C — terapkan template surat brand (font & aksen) dgn default Helvetica / #0f172a.
+  const letter = parseLetterTemplate(brand?.letterTemplate);
+  const fontFamily = letter.fontFamily?.trim() || "Helvetica";
+  const accentColor = safeHex(letter.accentColor);
+
   return (
-    <div id="print-area" className="mx-auto max-w-[820px] text-zinc-900">
+    <div id="print-area" className="mx-auto max-w-[820px] text-zinc-900" style={{ fontFamily: `"${fontFamily}", Arial, sans-serif` }}>
       {/* Kop surat — Ronde 29-b: pakai gambar kop milik brand bila ada, fallback logo asli */}
       {brand?.letterheadHeader ? (
         <div className="mb-3">
@@ -63,12 +95,12 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
       ) : null}
       <div className="mt-2 flex items-end justify-end gap-4">
         <div className="text-right">
-          <p className="text-2xl font-bold uppercase tracking-wide text-zinc-900">Quotation</p>
+          <p className="text-2xl font-bold uppercase tracking-wide" style={{ color: accentColor }}>Quotation</p>
           <p className="font-mono text-sm font-semibold">{q.number}</p>
         </div>
       </div>
 
-      <div className="my-4 border-t-2 border-zinc-900" />
+      <div className="my-4 border-t-2" style={{ borderColor: accentColor }} />
 
       {/* Info dokumen + tujuan */}
       <div className="flex flex-wrap items-start justify-between gap-6">
@@ -189,7 +221,8 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
         </div>
       ) : (
         <p className="mt-8 border-t border-dashed border-zinc-300 pt-2 text-center text-[10px] text-zinc-500">
-          {brand?.website ? `${brand.name} · ${brand.website.replace(/^https?:\/\//, "")} · ` : ""}Terima kasih atas kepercayaan Anda.
+          {brand?.website ? `${brand.name} · ${brand.website.replace(/^https?:\/\//, "")} · ` : ""}
+          {letter.footerNote?.trim() || "Terima kasih atas kepercayaan Anda."}
         </p>
       )}
     </div>

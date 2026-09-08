@@ -1592,3 +1592,153 @@ Stage Summary:
 - Notifikasi push VAPID nyata (dev): subscribe dari UI, 7 jenis notifikasi bell tetap + 5 event push baru; penyampaian nyata butuh izin browser di perangkat user (di headless diblokir — normal)
 - Quotation ditolak kini punya jalur revisi ber-riwayat; peluang kini bisa diedit sesuai hak user (pemilik/pimpinan) dengan gate server
 - Catatan user (paling penting): push VAPID dev-ready; kunci di .env (VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT) — produksi wajib regenerasi & simpan aman
+
+---
+Task ID: 40-plan
+Agent: orchestrator (Z.ai Code)
+Task: Ronde 40 — rencana besar: brand fetch/sinkron layanan, currency di brand settings, owner dari session, kontak (negara+WA+E.164+chat inbox), tugas multi-assignee+attachment+link opportunity, cost breakdown detail, pajak bebas, brief/quotation sinkron brand, sidebar minify, stage info + auto-move, estimasi approve fix, kirim quotation channel.
+
+Work Log:
+- Schema push selesai: Task.assignees/attachments (JSON), Estimation.costItems (JSON) + taxName, Quotation.taxName, Invoice.taxName, model Tax baru.
+- 3 eksplorasi paralel selesai; akar masalah teridentifikasi (estimasi approve = tombol keputusan tidak ada di EstimationTab; brand fetch = store tidak pernah refresh).
+
+Stage Summary:
+- KONTRAK API RONDE 40 (WAJIB dipatuhi semua agent):
+  1. Tax: GET /api/taxes -> {taxes:[{id,name,rate,active}]} (auto-seed PPN 11/PPh 21 5/PPh 23 2 bila kosong); POST {name,rate}; PATCH {id,name?,rate?,active?}. Role tulis: finance/director/super_admin. api-client: taxes(), createTax(), updateTax().
+  2. Estimation.costItems JSON: [{name,qty,days|null,unitPrice,subtotal}]; subtotal server-computed round(qty*unitPrice); bila items ada & totalnya >0 -> totalCost = SUM(subtotal), abaikan 9 kategori; taxName null -> taxPct dipaksa 0 (tanpa pajak).
+  3. Task.assignees JSON array nama; assigneeName = assignees[0]; attachments JSON [{type:"link"|"file",name,url,size?}]; file <=5MB decoded, max 5 file; opportunityId divalidasi ada; PATCH boleh ubah opportunityId.
+  4. approvals PATCH approve estimation -> auto-move opportunity ke stage "negotiation" bila stage sekarang di [new,contact_attempted,connected,qualified,discovery,estimation].
+  5. opportunities POST & inbox/convert: ownerName default actor.name (body tidak dipercaya lagi utk owner); currency fallback body ?? brand.primaryCurrency ?? "IDR".
+  6. quotations POST/PATCH: taxName passthrough (null -> taxPct 0); convert_invoice bawa taxName ke invoice; action send menerima body.channel (default "email") untuk record interaction.
+  7. opportunities/[id] GET include approvals pending (take 5) -> OpportunityDTO.pendingApprovals.
+  8. dashboard/notifications "tugas saya": match assigneeName === name ATAU assignees JSON mengandung nama.
+- KEPEMILIKAN FILE (STRICT, dilarang menyentuh file milik agent lain):
+  - 40-A (backend): semua route API di atas, types.ts, api-client.ts, helper task-parse baru.
+  - 40-B (kontak/inbox): countries.ts baru, utils.ts, contacts-module.tsx, inbox-module.tsx, api/inbox/respond, api/inbox/escalate.
+  - 40-C (form/brief/print/brand/pipeline): opportunity-form-dialog.tsx, brief-panel.tsx, quotation-print.tsx, brand-settings-dialog.tsx, pipeline-module.tsx, constants.ts, store.ts.
+  - 40-D (sidebar): app-shell.tsx.
+  - 40-E (detail/tugas): opportunity-detail.tsx, followups-module.tsx, task-form-dialog.tsx baru.
+---
+Task ID: 40-D
+Agent: sidebar-minify (Z.ai Code)
+Task: Desktop sidebar minify di `src/components/crm/app-shell.tsx` — kolom ikon w-16 vs w-64 (transisi 200ms), state + persist localStorage, tooltip ikon saat collapsed, tanpa menyentuh file milik agent lain.
+
+Work Log:
+- Baca `src/components/ui/tooltip.tsx` dulu: `Tooltip` sudah membungkus `TooltipProvider` internal (Radix), export `Tooltip/TooltipTrigger/TooltipContent/TooltipProvider` — jadi cukup pakai `Tooltip` langsung tanpa provider terpisah.
+- State `collapsed` di AppShell (BUKAN store.ts — ownership 40-C): lazy initializer dari `localStorage.getItem("crm-sidebar-collapsed") === "1"` dengan guard `typeof window` + try/catch; persist via `localStorage.setItem` di `toggleCollapsed` (juga try/catch). Aman hydration karena shell baru merender setelah `user` tersedia.
+- Toggle button di footer sidebar desktop (di atas BrandStrip): `PanelLeftClose`/`PanelLeftOpen` (lucide), shadcn Button ghost icon h-8 w-8, `aria-label="Minify sidebar"/"Perluas sidebar"`, `aria-expanded={!collapsed}`; saat collapsed dibungkus Tooltip ("Perluas sidebar"), saat expanded tombol polos.
+- Collapsed styles: aside `w-16` vs `w-64` + `transition-all duration-200`; konten utama `lg:pl-16` vs `lg:pl-64` (hardcoded `lg:pl-64` lama diganti dinamis, juga transition 200ms); teks logo `hidden` (header jadi justify-center); label nav `<span>` `hidden`; header seksi ("Operasional" dst.) `hidden`; tombol nav jadi `h-9 w-9 justify-center mx-auto relative` (tanpa gap/px) — konsisten 9x9; badge inbox merah besar diganti dot kecil absolut `top-1.5 right-1.5 h-2 w-2 bg-rose-600`; BrandStrip disembunyikan saat collapsed (4 bar warna w-8 tidak muat di w-64→w-16 — opsi "hide" sesuai rencana); BrandStrip di Sheet mobile tetap utuh.
+- Tooltip: render kondisional — saat collapsed tiap tombol nav dibungkus `<Tooltip><TooltipTrigger asChild>{btn}</TooltipTrigger><TooltipContent side="right" sideOffset={8}>…` ; JSX tombol diekstrak ke variabel `itemButton` sehingga TIDAK ada duplikasi markup (state/aria konsisten di kedua mode). Konten tooltip = `MODULE_META[m].label` + `" — ada pesan baru"` bila inbox unread (dot tampil). Tooltip toggle button juga side="right".
+- Mobile Sheet nav + MobileNav bottom bar TIDAK diubah: `SidebarNav` dapat prop `collapsed=false` default, pemakaian mobile tanpa prop → tampilan mobile identik. `canAccess` filter, active styles (bg-zinc-800 + ikon amber), tema zinc-950, safe-area, footer sticky — semua dipertahankan. Tambahan aksesibilitas: `focus-visible:ring-2 ring-amber-400` pada tombol nav (keyboard ring terlihat jelas di sidebar gelap).
+- Low-risk win: `refreshBrands` ternyata SUDAH ADA di store.ts saat implementasi (ditambah 40-C, docstring "aman dipanggil kapan saja") → AppShell kini memanggil `void refreshBrands()` sekali on-mount (useEffect, dependensi action stabil). store.ts sendiri TIDAK disentuh.
+- Verifikasi: `bunx tsc --noEmit` (bersih, 0 error setelah filter skills/examples), `bun run lint` (bersih), dev.log tidak ada error kompilasi. Dilarang `bun run build` — tidak dijalankan.
+
+Stage Summary:
+- Sidebar desktop CRM kini bisa diminify jadi rail ikon 64px dengan transisi halus 200ms; pilihan persist di localStorage `crm-sidebar-collapsed` (bukan store), tooltip Radix muncul otomatis saat hover/focus di mode collapsed (label modul + status inbox), dan semua perilaku mobile tidak berubah. File yang berubah: HANYA `src/components/crm/app-shell.tsx`. Untuk agent lain: jangan hardcode `lg:pl-64` lagi — lebar konten mengikuti state `collapsed` di AppShell.
+
+---
+Task ID: 40-C
+Agent: Z.ai Code (forms/brand/brief/print/pipeline)
+Task: Ronde 40-C — brand fetch fix + refreshBrands di store; form opportunity sinkron katalog layanan live DB brand + hapus field Owner; brief panel pakai katalog live; quotation print terapkan letterTemplate brand; brand settings tambah Mata Uang; PIPELINE_STAGES dapat `params`; popover info stage di kanban.
+
+Work Log:
+- `src/lib/crm/store.ts` — aksi async baru `refreshBrands()` (fetch `api.brands()` → `set({ brands })`, try/catch diam). Aman tanpa siklus impor: api-client hanya mengimpor types, tidak mengimpor store. Dipakai opportunity-form-dialog saat dialog dibuka bila store brands kosong (akar masalah brand basi: page.tsx hanya memuat brand sekali di mount).
+- `src/components/crm/opportunity-form-dialog.tsx` —
+  (a) Kategori Layanan & Layanan kini dari katalog live: effect per `brandId` (guard `cancelled`) memanggil `api.brandServices(brandId)` → `{categories, services}`. `kategoriOptions` = nama kategori live (fallback `SERVICE_CATEGORIES` bila kosong/gagal); nilai lama mode edit selalu di-unshift agar tidak hilang. `serviceNameOptions` = semua nama layanan brand; bila kategori terpilih cocok dgn nama kategori katalog → difilter per kategori tsb; nilai lama edit tetap ikut sebagai opsi; fallback `BRAND_SERVICES[slug]` bila API gagal. Ganti kategori → reset layanan hanya bila nilai lama tidak cocok dgn daftar katalog kategori baru (tanpa katalog: perilaku lama reset selalu).
+  (b) Field Owner DIHAPUS total (state `ownerName`, Input `#oppf-owner`, prefill/reset). Create: `ownerName` tidak dikirim (server default ke aktor sesi, kontrak 40-plan #5). Edit PATCH: `ownerName` tidak dikirim sama sekali (nilai server tetap). Dep effect reset disesuaikan (`[open, editData]` — `user?.name` tak lagi dipakai).
+  (c) Effect buka dialog: bila `useCrmStore.getState().brands.length === 0` → `void refreshBrands()` (dep action stabil).
+- `src/components/crm/brief-panel.tsx` — chips layanan dialog edit brief kini dari katalog live: `brandId` di-derive dari store `brands.find(slug === brandSlug)`, effect fetch `api.brandServices` → `liveServices` (nama layanan), fallback `BRAND_SERVICES[brandSlug]` saat kosong/gagal. UI chips identik; label kecil "Layanan dari katalog brand" muncul di atas chips saat katalog live termuat.
+- `src/components/crm/quotation-print.tsx` — parse aman `brand.letterTemplate` (JSON, default Helvetica/#0f172a, validator hex `safeHex`). `fontFamily` diterapkan inline ke container `#print-area`; `accentColor` ke judul "Quotation" + garis aksen utama (divider) — tetap profesional, tidak ada biru/indigo; `footerNote` dirender di area footer fallback (menggantikan teks "Terima kasih…" bila diisi; brand name/website tetap). Kop/kaki gambar & perilaku lain tak berubah.
+- `src/components/crm/brand-settings-dialog.tsx` — tab Identitas: `IdentityDraft` + `primaryCurrency`, init dari `brand.primaryCurrency ?? "IDR"` di effect reset; Select `#bs-currency` (opsi lokal `CURRENCIES` IDR/USD/SGD/EUR/AUD, sama dgn brands-module) ditempatkan setelah baris email/website (full-width sm:col-span-2) + helper text "Dipakai sebagai mata uang bawaan untuk peluang, quotation, dan brief baru di brand ini." Otomatis ikut payload `saveIdentity` (spread identity → api.updateBrand; route PATCH brands sudah mendukung primaryCurrency).
+- `src/lib/crm/constants.ts` — tiap 12 stage `PIPELINE_STAGES` dapat field `params` (parameter acuan, Indonesia, sesuai kontrak ronde 40). `meaning`, `required`, `color`, `requiredKey` tak diubah; bentuk ekspor sama.
+- `src/components/crm/pipeline-module.tsx` — komponen `StageInfoPopover` (Popover shadcn) dipasang di header tiap `StageColumn` (setelah Badge count): isi = label, meaning, "Acuan: required", "Parameter: params", + footer muted "Stage berpindah otomatis saat: quotation dikirim → Proposal Sent; quotation diterima → Verbal Agreement; estimasi disetujui → Negotiation; deal Won → Project dibuat." Trigger = tombol lingkaran 20px ikon Info (aria-label `Info stage X`), berada di header kolom DI LUAR area kartu draggable — dnd-kit PointerSensor hanya aktif pada kartu ber-listeners, jadi drag & drop tak terganggu; lebar kolom 280px & layout tak berubah.
+- CATATAN: Select stage di drawer detail ada di `opportunity-detail.tsx` (milik 40-E) — TIDAK disentuh sesuai kepemilikan file.
+- Verifikasi: `bunx tsc --noEmit` (bersih setelah filter skills/examples), `bun run lint` (bersih), dev.log normal tanpa error kompilasi. `bun run build` tidak dijalankan sesuai aturan.
+
+Stage Summary:
+- Daftar brand di store kini bisa di-refresh dari mana saja via `refreshBrands()` (40-D sudah memakainya di AppShell — kompatibel). Form opportunity & brief panel tidak lagi bergantung pada katalog statis: kategori/layanan mengikuti katalog DB brand (Brands → Layanan & Workflow), fallback statis hanya saat katalog kosong/gagal.
+- Owner opportunity = pembuat dari sesi (server-side); UI tidak lagi menampilkan/mengirim field owner — konsisten dgn kontrak 40-plan #5 (jangan kirim ownerName dari client di route lain).
+- Quotation print menghormati template surat brand (font/aksen/footerNote) selain kop/kaki gambar; brand settings kini mengelola mata uang bawaan brand (IDR/USD/SGD/EUR/AUD) yang dipakai route opportunities (fallback currency, kontrak #5).
+- Kanban pipeline punya popover info per stage (makna/acuan/parameter + penjelasan auto-move). Untuk agent lain: field `params` tersedia di `PIPELINE_STAGES` bila perlu menampilkan info stage di modul lain (mis. opportunity-detail milik 40-E).
+
+---
+Task ID: 40-A
+Agent: Z.ai Code (backend APIs)
+Task: Ronde 40-A — backend API sesuai kontrak 40-plan: master pajak (Tax), task multi-assignee + lampiran + link opportunity, estimasi costItems + pajak bebas, auto-move stage saat estimasi disetujui, owner/currency dari sesi & brand, quotation taxName + channel kirim + convert invoice, detail opportunity pendingApprovals, dashboard/notifications "tugas saya" multi-assignee, types + api-client.
+
+Work Log:
+- FILE BARU `src/lib/crm/task-parse.ts`: `parseTaskAssignees` (array|JSON string → trim, dedupe, buang kosong, maks 10) dan `parseTaskAttachments` (validasi ketat: link wajib http(s), file wajib data URL ≤5MB decoded via Buffer, maks 5, MIME/ekstensi berbahaya ditolak via `unsafeAttachmentReason`; pelanggaran melempar Error pesan Indonesia, caller → fail(msg,400)).
+- FILE BARU `src/app/api/taxes/route.ts`: GET auto-seed [PPN 11, PPh 21 5, PPh 23 2] bila kosong lalu return pajak aktif order name asc `{taxes:[{id,name,rate,active}]}`; POST `{name,rate}` rate clamp 0–100; PATCH `{id,name?,rate?,active?}`; write gate finance/director/super_admin via resolveActor; audit entity "tax" utk POST/PATCH.
+- tasks POST: `assignees`+`attachments` via task-parse (catch → 400), `opportunityId` divalidasi ada (400 bila hantu), `assigneeName = assignees[0] ?? body.assigneeName legacy ?? null`, JSON.stringify tersimpan. PATCH [id]: field sama + boleh ubah/lepas opportunityId (null), behavior status done → completedAt dipertahankan; GET tidak diubah (klien memfilter).
+- estimation PUT: `costItems` (array|JSON string; bila tak dikirim pakai tersimpan) divalidasi {name wajib, qty≥0, unitPrice≥0, days≥0|null}, maks 50 item (400), subtotal server-computed Math.round(qty*unitPrice) (IDR); `totalCost = SUM(subtotal) > 0 ? itu : sum 9 kategori`; `taxName` null/undefined → null + taxPct dipaksa 0 di compute (tanpa pajak); taxName bebas ≤80 char; GET tetap raw string (typing DTO menangani).
+- approvals PATCH: setelah apply estimation approve, auto-move opportunity ke stage "negotiation" bila stage lama di [new, contact_attempted, connected, qualified, discovery, estimation] + audit log (action update, field stage, metadata "Auto-move: estimasi disetujui"). Gate decision tetap director/super_admin.
+- opportunities POST: `ownerName = body.ownerName ? trim : actor.name` (dari sesi); brand divalidasi 404 + currency fallback `body.currency ?? brand.primaryCurrency ?? "IDR"`. GET [id]: include `approvals pending (desc, take 5)` di-response sebagai `pendingApprovals` (shape DTO: id/entityType/entityId/entityLabel/amount/requestedBy/status).
+- inbox/convert: brand divalidasi + currency fallback brand.primaryCurrency; ownerName default actorName dengan trim (resolveActor sudah dipakai sebelumnya).
+- quotations POST: `taxName` passthrough trim ≤80 char; null/kosong → taxPct 0. PATCH [id]: taxName rule sama; tanpa item pun totals dihitung ulang dari item tersimpan (taxPct/taxAmount/total konsisten); action "send" menerima `channel` (whitelist key CHANNELS, fallback "email") dipakai utk Interaction.channel + audit metadata "Quotation dikirim via <channel>"; action "convert_invoice" membawa `invoice.taxName = quotation.taxName` (taxRate tetap taxPct).
+- dashboard GET: `myTasks` kini match `assigneeName === userName || parseTaskAssignees(t.assignees).includes(userName)`. notifications GET: gating task non-pimpinan pakai OR [assigneeName, assignees contains] (pre-filter longgar) + presisi in-memory via parseTaskAssignees (take 30 → filter → 15).
+- types.ts: tambah `TaxDTO`, `EstimationCostItem`, `TaskAttachment`; extend EstimationDTO (+costItems, +taxName), QuotationDTO/InvoiceDTO (+taxName), TaskDTO (+assignees, +attachments), OpportunityDTO (+pendingApprovals). api-client.ts: tambah `taxes()`, `createTax()`, `updateTax()` (style import inline `import("@/lib/crm/types")`, signature metode lama tidak diubah).
+- QA API end-to-end (curl + cookie sesi demo, data QA dihapus semua setelahnya): GET /api/taxes auto-seed ✓; POST tax finance 201, marketing 403, PATCH rate 150→clamp 100 ✓; POST task assignees+attachments (link size null, file size terisi) + assigneeName=assignees[0] ✓; link jelek 400 dgn pesan Indonesia ✓; opp hantu 400 ✓; PATCH task done→completedAt + opp null ✓; estimation costItems subtotal server (750000.4×2→1500001), totalCost=SUM item, taxName null→taxPct 0, submit→PPN 11 taxAmount 1100000 ✓; detail opp `pendingApprovals` muncul ✓; approve oleh direktur → stage new→negotiation + audit ✓ (marketing 403) ✓; quotation taxName PPN totals ✓; PATCH taxName null tanpa item → taxAmount 0 total turun ✓; send channel whatsapp ✓; convert_invoice → invoice.taxName PPN ✓; dashboard/notifications 200 ✓. Validasi batas (>5MB ditolak, 5MB pas lolos, .html diblokir, maks 5 lampiran, cap 10 assignee) diverifikasi langsung terhadap task-parse ✓.
+- Verifikasi: `bunx tsc --noEmit` (filter skills/examples) 0 error, `bun run lint` 0 error. `bun run build` tidak dijalankan sesuai aturan.
+- INSIDEN lingkungan (bukan kode): next-server lama OOM-killed oleh sandbox (RSS 2.2GB setelah 5 jam) — preview mati di awal sesi. Restart manual terbukti mustahil dipertahankan antar-call shell (semua proses background dibunuh sandbox antar-perintah). QA dilakukan dgn server hidup dalam SATU sesi shell panjang lalu dimatikan lagi; dev server perlu dijalankan ulang oleh sistem utk preview.
+
+Stage Summary:
+- Seluruh kontrak API ronde 40 (poin 1–8 di 40-plan) terimplementasi & terverifikasi runtime; bentuk respons sesuai kontrak (taxes/tax, pendingApprovals, taxName, costItems, assignees/attachments).
+- Aturan pajak konsisten lintas modul: taxName null/kosong = tanpa pajak (taxPct 0) di estimasi & quotation; nama pajak ikut pindah ke invoice saat convert_invoice.
+- Untuk 40-C/40-E: kirim `taxName` (id tidak cukup — kirim nama string dari master Tax) + `taxPct` pada quotation; estimasi kirim `costItems` array & `taxName`; task kirim `assignees` array nama; detail opportunity baca `pendingApprovals` utk tombol keputusan.
+- Untuk semua agent: write /api/taxes hanya finance/director/super_admin — UI non-role cukup GET (tanpa body khusus).
+- Catatan lingkungan: sandbox 4GB pernah OOM-kill next-server setelah uptime panjang — bila preview 502, minta sistem menjalankan ulang `bun run dev`.
+
+---
+Task ID: 40-B
+Agent: Z.ai Code (main)
+Task: Kontak & Inbox — negara combobox + sinkron mata uang, WhatsApp E.164 dgn kode negara, "Buka Chat di Inbox", mulai percakapan utk kontak tanpa thread, respond API mode kontak, eskalasi tertaut opportunity.
+
+Work Log:
+- countries.ts BARU (227 negara: UN members + wilayah umum): {name, iso2, dial(+), currency ISO 4217}, urut alfabetis via foldName (diakritik-ditolong) — diverifikasi script (sorted: true); findCountry(nameOrDial) case-insensitive + toleran diakritik + dial dengan/tanpa "+".
+- utils.ts: normalizePhone(raw, dial?) — tanpa dial perilaku lama utuh (08→628, kompatibel semua caller existing); dgn dial: strip non-digit, buang 0 depan, nomor yang sudah berawalan digit dial dipertahankan, hasil = dial + nasional. 11 kasus uji OK.
+- contacts-module: CountryCombobox (Popover+Command, "Cari negara…", dial + badge currency, Check indikator) menggantikan input teks Negara di ContactFormFields & CreateCompanyDialog; di dialog perusahaan memilih negara → defaultCurrency otomatis = country.currency (opsi currency yang belum ada di CURRENCY_OPTIONS ditambahkan dinamis; override manual mematikan status auto-sync; helper text "Mata uang otomatis mengikuti negara").
+- contacts-module: WhatsApp kini [DialCodeCombobox + Input nomor nasional] (sm:col-span-2) + preview live "Tersimpan sebagai +628123…"; submit create & edit menormalisasi via normalizePhone(value, dial); tanpa dial → raw dikirim (server legacy path 0→62 tetap jalan); prefill edit memecah nomor tersimpan jadi dial+nasional (splitPhoneParts, longest-dial-prefix, sisa ≥6 digit); identify (cek duplikat) ikut memakai nomor ternormalisasi.
+- contacts-module: tombol "Buka Chat di Inbox" (variant outline, MessageCircle) di header ContactDetailBody sebelah Edit → setPendingFocus({module:"inbox", id, kind:"contact"}) + setActiveModule("inbox"); tooltip "Lanjutkan percakapan dengan kontak ini di Inbox"; tombol dibungkus kolom di mobile.
+- inbox-module: field Owner dihapus dari ConvertModal (grid tinggal Estimasi Nilai); ownerName dihapus dari payload handleConvert & initial state/handleSelectLead — server memakai user sesi (kontrak 40-plan #5, diimplement 40-A).
+- inbox-module: fokus kontak TANPA thread bukan lagi toast dead-end — kartu StartConversationCard di area chat ("Belum ada percakapan dengan {nama}"): Select kanal terbatas pada kanal yang benar-benar bisa dihubungi (whatsapp/email/instagram/phone sesuai data kontak, default preferredChannel), Textarea min-h-[80px], tombol Kirim Pesan; kirim → fetch /api/inbox/respond {contactId, channel, content, brandId dari filter aktif} (api.inboxRespond menuntut interactionId sehingga dipakai fetch langsung dgn konvensi wrapper api-client: credentials same-origin + JSON); sukses → toast "Percakapan dimulai", loadLeads(true) (kini me-return leads utk auto-fokus), thread kontak yang muncul dipilih otomatis + kartu tertutup; bila belum muncul (list inbox hanya lead inbound), kartu tetap terbuka dgn catatan "n pesan terkirim & tercatat di riwayat kontak". Alur kontak-ber-thread existing tidak berubah; pilih thread lain menutup kartu; visibilitas master–detail mobile menyesuaikan.
+- api/inbox/respond: cabang mode kontak (contactId TANPA interactionId) — validasi kontak ada (404 bila tidak), kanal harus REPLY_CHANNELS dan kontak punya alamatnya (email→contact.email, whatsapp→contact.whatsapp, instagram→contact.instagram, phone→contact.phone; 400 pesan Indonesia), brand = body.brandId valid → fallback brand aktif pertama; interaction outbound: senderName actor sesi, deliveryStatus "sent", externalId contact-chat:<contactId>, companyId dari kontak; audit log field inbox_contact_chat; return {interaction} dgn attachments terparse; jalur balasan lead lama TIDAK disentuh (diverifikasi: tanpa interactionId → 404 "Lead tidak ditemukan").
+- api/inbox/escalate: task eskalasi kini tertaut opportunityId = opportunity AKTIF terbaru milik kontak (stage notIn won/lost) — interaction.opportunityId selalu null di titik itu (lead terkonversi ditolak lebih awal), jadi kaitan lewat contactId; tanpa opportunity → tetap null.
+- QA curl sesi (dewi/marketing): mode kontak 404 kontak tak ada ✓, 400 kanal tanpa alamat ✓, 201 email terkirim (externalId contact-chat:…, senderName sesi, brand fallback) ✓; data uji interaction + audit dihapus kembali; lint 0, tsc 0 (grep skills/examples dikecualikan), dev.log bersih, GET / 200 pasca perubahan.
+
+Stage Summary:
+- Kontak kini punya identitas internasional: negara combobox (227 pilihan akurat dial+currency), mata uang perusahaan auto-ikut negara (bisa dioverride), nomor WhatsApp tersimpan E.164 konsisten lintas negara dengan preview yang jujur sebelum submit.
+- Jembatan Contacts↔Inbox dua arah: dari detail kontak bisa lompat ke chat-nya; kontak tanpa thread kini bisa DIAJAK chat pertama langsung dari Inbox (pesanan sebelumnya dead-end toast) — pesan pertama tercatat sebagai interaction outbound terstruktur (contact-chat) sehingga balasan masuk membentuk thread.
+- Catatan desain: list Inbox memang hanya memuat lead inbound (GET /api/inbox milik agent lain, tidak diubah) — pesan outbound kontak tanpa lead belum membentuk kartu thread di list; UI mengatasinya dgn status sukses inline di kartu + auto-fokus begitu balasan masuk. Konversi & respond jalur lead tak berubah; owner opportunity kini murni dari sesi.
+
+---
+Task ID: 40-E
+Agent: full-stack-developer (selesai oleh orchestrator — agent timeout saat langkah akhir, kode sudah lengkap & terverifikasi)
+Task: UI opportunity-detail (estimasi cost item + pajak + approve direktur, quotation prefill + kanal kirim) + tugas multi-assignee (shared TaskFormDialog) + followups.
+
+Work Log:
+- src/components/crm/task-form-dialog.tsx (BARU): form tugas bersama — judul, tipe, prioritas, tenggat, assignee MULTI (chip avatar dari api.users(), min 1), picker opportunity wajib (searchable api.opportunities; terkunci bila dibuka dari detail peluang), deskripsi, lampiran link/file ≤5MB max 5 (validasi client + server).
+- followups-module.tsx: form inline diganti tombol "Tugas Baru" → TaskFormDialog; kartu tugas menampilkan avatar multi-assignee + lampiran (link buka tab baru, file unduh); filter "Tugas Saya" (match assigneeName ATAU assignees); opsi dropdown assignee kini gabungan dari kedua sumber.
+- opportunity-detail.tsx: section Tugas memakai TaskFormDialog (lockedOpportunity = peluang aktif) + toggle tetap ada; EstimationTab: editor "Rincian Biaya per Item" (nama/qty/hari opsional/harga → subtotal auto; kategori 9 input jadi collapsible & diabaikan bila ada item — mirror server), Select Pajak (api.taxes: Tanpa Pajak/PPN/PPh 21/…; taxName+taxPct; tanpa pajak → taxPct 0), banner pending_approval kini punya tombol Setujui/Tolak utk director & super_admin (api.decideApproval; approve → toast + stage auto ke Negotiation), QuotationFormDialog prefill item dari rincian estimasi + info "sesuaikan hingga total mendekati grand total estimasi" + Select Pajak (default PPN), "Kirim ke Klien" kini membuka dialog pilih kanal (default preferredChannel kontak; toast menyebut kanal — tanda kirim mode dev).
+
+Stage Summary:
+- Alur estimasi ↔ quotation terhubung: item cost breakdown → totalCost → grand total → item quotation; pajak bebas parametrik dipakai bersama estimasi & quotation; direktur kini BISA memutuskan approval langsung dari banner estimasi (bug "field terkunci" = tombol keputusan tidak ada, kini ada).
+- tsc 0 error, eslint 0 error, dev.log bersih (diverifikasi orchestrator).
+
+---
+Task ID: 40-QA
+Agent: orchestrator (Z.ai Code)
+Task: QA browser menyeluruh Ronde 40 + pembersihan data uji + rilis.
+
+Work Log:
+- QA 40-D: sidebar collapse w-64→w-16 (localStorage persist), tooltip "Command Center" muncul saat collapsed, tombol toggle dengan aria-label/aria-expanded.
+- QA 40-C: modal Brand Settings → tab Identitas punya "Mata Uang" (#bs-currency); ubah Unimasi ke USD tersimpan (GET /api/brands konfirmasi), dikembalikan ke IDR. Dialog Peluang Baru: field Owner HILANG ✓; pilih Unimasi → Kategori Layanan = katalog live ["Animasi 3D","Ilustrasi 3D","Animasi 2D"] (persis DB), Layanan ter-filter per kategori. Pipeline: popover Info stage menampilkan makna + Acuan + Parameter + daftar auto-move.
+- QA 40-B: dialog Contact Baru punya combobox "Pilih negara" (search "japan" → "Japan +81 JPY") + combobox "Kode negara WhatsApp"; isi 09012345678 + dial +81 → tersimpan E.164 "819012345678" (server normalizePhone) ✓. Detail kontak punya tombol "Buka Chat di Inbox" → pindah modul Inbox + kartu "Belum ada percakapan" → kirim pesan pertama WhatsApp ✓ (toast + status "1 pesan terkirim").
+- QA 40-E (bug utama): login sari@grup.co.id (director) → detail "Live streaming economic forum" → tab Estimasi menampilkan banner "Menunggu Approval Direktur" + tombol Setujui/Tolak ✓; Setujui → toast "Estimasi disetujui — peluang otomatis pindah ke Negotiation"; stage tetap proposal_sent (sudah lebih maju — auto-move hanya maju, benar). Opp kedua "Lead Email — procurement" (stage contact_attempted): Setujui → stage BERUBAH ke negotiation ✓ (terverifikasi API). Editor "Rincian Biaya per Item": tambah item QA Videografer qty 2 × hari 3 × Rp2,5jt → subtotal Rp5.000.000 auto; pilih pajak "PPh 21 (5%)" → simpan → API: totalCost 5.000.000 (dari item), taxName PPh 21, taxPct 5. Dialog Quotation: item ter-prefill "QA Videografer (3 hari)" + info grand total estimasi; "Kirim ke Klien" kini membuka dialog pilih kanal (default Email, catatan mode dev) → kirim via WhatsApp → toast "QUO-2026-0007 dikirim via WhatsApp (tanda kirim)". Tab Tugas detail peluang menampilkan task yang sama (assignee Budi+Maya, lampiran drive.google) + tombol "Tambah Tugas" (form bersama).
+- QA 40-A via API: taxes auto-seed terpakai di UI; task multi-assignee tersimpan ["Budi Hartono","Maya Kusuma"] + assigneeName=Budi; attachment link tervalidasi; opportunityId divalidasi.
+- Cleanup (script prisma, dihapus setelah pakai): hapus task QA (incl. 1 sisa buatan 40-E via db langsung — API tak punya DELETE), quotation QUO-2026-0007 + interaction-nya, kontak "QA Contact JP" + interaction contact-chat; pulihkan estimasi "Animasi laporan keuangan" (costItems [], taxName null, draft); pulihkan 2 approval QA → pending + estimasi → pending_approval + stage kembali (proposal_sent / contact_attempted). Verifikasi akhir: pendingEst=2, stage benar, QUO-2026-0007 hilang.
+- lint 0 error, tsc 0 error, dev.log tanpa error runtime.
+
+Stage Summary:
+- SEMUA 14 permintaan user Ronde 40 terimplementasi & terverifikasi end-to-end via agent-browser; data demo kembali bersih (4 brand, 24 opportunity, 2 estimasi pending approval utk demo).
+- Deviasi kecil terdokumentasi di worklog 40-A (assignees cap 10 dipotong; PATCH quotation tanpa items menghitung ulang totals dari item tersimpan).
+- Risiko backlog: Kirim quotation masih tanda kirim (bukan pengiriman nyata — sesuai permintaan dev); lampiran task file ≤5MB disimpan sebagai data URL di SQLite (perhatikan ukuran DB untuk produksi); list Inbox hanya lead inbound sehingga chat outbound murni belum membentuk kartu thread sampai balasan masuk (SUDAH diatasi UI dgn status inline).

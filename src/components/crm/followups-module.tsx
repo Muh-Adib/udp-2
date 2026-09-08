@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BellRing, Building2, CalendarClock, CalendarDays, CheckCircle2, ClipboardList,
-  FileText, ListFilter, Mail, MessageCircle, Phone, Plus, RefreshCw, Send,
+  FileText, Link2, ListFilter, Mail, MessageCircle, Paperclip, Phone, Plus, RefreshCw, Send,
   Sparkles, Video, type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -14,7 +14,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -22,11 +21,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import TaskFormDialog from "@/components/crm/task-form-dialog";
 import { api } from "@/lib/crm/api-client";
-import { PRIORITIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { FollowUpTemplateDTO, TaskDTO } from "@/lib/crm/types";
-import { formatDate, initials, timeAgo } from "@/lib/crm/utils";
+import type { FollowUpTemplateDTO, TaskAttachment, TaskDTO } from "@/lib/crm/types";
+import { formatDate, initials, parseJsonArray, timeAgo } from "@/lib/crm/utils";
 
 // ============ Meta tipe task & prioritas ============
 
@@ -49,6 +48,54 @@ function priorityMeta(p: string): { label: string; cls: string } {
     case "low": return { label: "Rendah", cls: "bg-zinc-100 text-zinc-400" };
     default: return { label: p, cls: "bg-zinc-100 text-zinc-600" };
   }
+}
+
+// ============ Ronde 40-E — multi-assignee & lampiran ============
+
+/** TaskDTO.assignees bisa string JSON (dari DB) atau array — parse defensif. */
+export function taskAssigneeList(task: Pick<TaskDTO, "assignees" | "assigneeName">): string[] {
+  const raw = task.assignees;
+  let parsed: string[] = [];
+  if (Array.isArray(raw)) {
+    parsed = raw;
+  } else if (typeof raw === "string") {
+    parsed = parseJsonArray(raw);
+  }
+  const list = parsed.filter((n): n is string => typeof n === "string" && n.trim() !== "");
+  if (list.length === 0 && task.assigneeName) return [task.assigneeName];
+  return list;
+}
+
+/** Apakah task ditugaskan ke `name` (assignee utama ATAU multi-assignee). */
+function taskAssignedTo(task: TaskDTO, name: string): boolean {
+  return task.assigneeName === name || taskAssigneeList(task).includes(name);
+}
+
+/** TaskDTO.attachments bisa string JSON (dari DB) atau array — parse defensif. */
+function taskAttachmentList(raw: TaskDTO["attachments"]): TaskAttachment[] {
+  let list: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (a): a is TaskAttachment =>
+      !!a &&
+      typeof a === "object" &&
+      typeof (a as TaskAttachment).url === "string" &&
+      ((a as TaskAttachment).type === "link" || (a as TaskAttachment).type === "file")
+  );
+}
+
+function formatAttachmentSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ============ Helper tanggal ============
@@ -116,6 +163,11 @@ function TaskCard({ task, onToggle, busy, onSend }: {
   const overdue = isOverdue(task);
   const opp = task.opportunity;
   const brand = opp?.brand;
+  // Ronde 40-E — multi-assignee & lampiran
+  const assigneeList = taskAssigneeList(task);
+  const shownAssignees = assigneeList.slice(0, 3);
+  const extraAssignees = assigneeList.length - shownAssignees.length;
+  const attachmentList = taskAttachmentList(task.attachments);
   // Ronde 34 — task kini TERHUBUNG ke modul sumber: klik opportunity → Pipeline,
   // "Buka Percakapan" → chat lead/opportunity di Inbox. Dulu tombol opportunity hanya
   // toast "Buka dari modul Sales Pipeline" (dead end) dan satu-satunya aksi adalah
@@ -241,13 +293,26 @@ function TaskCard({ task, onToggle, busy, onSend }: {
             </div>
           ) : null}
         </div>
-        {task.assigneeName ? (
+        {assigneeList.length > 0 ? (
           <span
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white"
-            title={task.assigneeName}
-            aria-label={`Ditugaskan ke ${task.assigneeName}`}
+            className="flex shrink-0 items-center -space-x-1.5"
+            aria-label={`Ditugaskan ke ${assigneeList.join(", ")}`}
+            title={`Ditugaskan ke: ${assigneeList.join(", ")}`}
           >
-            {initials(task.assigneeName)}
+            {shownAssignees.map((name) => (
+              <span
+                key={name}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white ring-2 ring-white"
+                aria-hidden
+              >
+                {initials(name)}
+              </span>
+            ))}
+            {extraAssignees > 0 ? (
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600 ring-2 ring-white" aria-hidden>
+                +{extraAssignees}
+              </span>
+            ) : null}
           </span>
         ) : (
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-zinc-300 text-[11px] font-bold text-zinc-400" title="Belum di-assign" aria-hidden>
@@ -255,6 +320,31 @@ function TaskCard({ task, onToggle, busy, onSend }: {
           </span>
         )}
       </div>
+      {attachmentList.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5 border-t pt-2">
+          {attachmentList.map((a, i) => (
+            <a
+              key={`${a.type}-${i}`}
+              href={a.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-full items-center gap-1 rounded-md border bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-zinc-100"
+              aria-label={`Buka lampiran ${a.name}`}
+              title={a.url}
+            >
+              {a.type === "link" ? (
+                <Link2 className="h-3 w-3 shrink-0" aria-hidden />
+              ) : (
+                <Paperclip className="h-3 w-3 shrink-0" aria-hidden />
+              )}
+              <span className="max-w-[180px] truncate">{a.name}</span>
+              {a.type === "file" && a.size ? (
+                <span className="shrink-0 text-zinc-400">{formatAttachmentSize(a.size)}</span>
+              ) : null}
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -628,12 +718,10 @@ export default function FollowupsModule() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [onlyOverdue, setOnlyOverdue] = useState(false);
+  // Ronde 40-E — filter "Tugas saya" (default OFF), pencocokan multi-assignee di klien
+  const [myTasksOnly, setMyTasksOnly] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    title: "", type: "follow_up", priority: "medium", assigneeName: "", dueDate: "", opportunityId: "",
-  });
   // Fase 3 — kirim & catat pesan outbound dari task follow-up
   const [sendTarget, setSendTarget] = useState<TaskDTO | null>(null);
 
@@ -641,9 +729,10 @@ export default function FollowupsModule() {
     if (!silent) setLoading(true);
     setError(null);
     try {
+      // Ronde 40-E — filter assignee TIDAK lagi dikirim ke server (match server hanya
+      // assigneeName utama); multi-assignee difilter di klien agar semua penerima tampil.
       const res = await api.tasks({
         status: statusFilter !== "all" ? statusFilter : undefined,
-        assignee: assigneeFilter !== "all" ? assigneeFilter : undefined,
         overdue: onlyOverdue ? "true" : undefined,
       });
       setTasks(res.tasks);
@@ -653,18 +742,39 @@ export default function FollowupsModule() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, assigneeFilter, onlyOverdue]);
+  }, [statusFilter, onlyOverdue]);
 
   useEffect(() => { void load(); }, [load]);
 
+  // Ronde 40-E — opsi dropdown assignee diambil dari assigneeName + multi-assignees
   const assignees = useMemo(() => {
     const set = new Set<string>();
-    (tasks ?? []).forEach((t) => { if (t.assigneeName) set.add(t.assigneeName); });
+    (tasks ?? []).forEach((t) => {
+      taskAssigneeList(t).forEach((a) => set.add(a));
+      if (t.assigneeName) set.add(t.assigneeName);
+    });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [tasks]);
 
+  // Ronde 40-E — filter assignee kini client-side (match utama + multi-assignee)
+  const visibleTasks = useMemo(() => {
+    let list = tasks ?? [];
+    if (assigneeFilter !== "all") list = list.filter((t) => taskAssignedTo(t, assigneeFilter));
+    return list;
+  }, [tasks, assigneeFilter]);
+
+  const myTaskCount = useMemo(() => {
+    if (!user) return 0;
+    return visibleTasks.filter((t) => taskAssignedTo(t, user.name)).length;
+  }, [visibleTasks, user]);
+
+  const displayTasks = useMemo(() => {
+    if (!myTasksOnly || !user) return visibleTasks;
+    return visibleTasks.filter((t) => taskAssignedTo(t, user.name));
+  }, [visibleTasks, myTasksOnly, user]);
+
   const stats = useMemo(() => {
-    const list = tasks ?? [];
+    const list = displayTasks;
     const todayEnd = endOfToday().getTime();
     const weekAgo = todayEnd - 7 * 24 * 60 * 60 * 1000;
     return {
@@ -675,17 +785,17 @@ export default function FollowupsModule() {
         && new Date(t.completedAt).getTime() >= weekAgo
         && new Date(t.completedAt).getTime() <= todayEnd).length,
     };
-  }, [tasks]);
+  }, [displayTasks]);
 
   const groups = useMemo(() => {
-    const list = tasks ?? [];
+    const list = displayTasks;
     return {
       overdue: list.filter((t) => isOverdue(t)),
       today: list.filter((t) => t.status === "open" && isToday(t)),
       upcoming: list.filter((t) => t.status === "open" && !isOverdue(t) && !isToday(t)),
       done: list.filter((t) => t.status === "done"),
     };
-  }, [tasks]);
+  }, [displayTasks]);
 
   async function handleToggle(t: TaskDTO) {
     const nextStatus = t.status === "done" ? "open" : "done";
@@ -698,32 +808,6 @@ export default function FollowupsModule() {
       toast.error(err instanceof Error ? err.message : "Gagal memperbarui task");
     } finally {
       setBusyId(null);
-    }
-  }
-
-  async function handleCreate(e: React.FormEvent) {
-    e?.preventDefault();
-    if (!form.title.trim()) { toast.error("Judul task wajib diisi"); return; }
-    setSaving(true);
-    try {
-      await api.createTask({
-        title: form.title.trim(),
-        type: form.type,
-        priority: form.priority,
-        assigneeName: form.assigneeName.trim() || undefined,
-        dueDate: form.dueDate || undefined,
-        opportunityId: form.opportunityId.trim() || undefined,
-        actorName: user?.name ?? "System",
-        actorRole: user?.role ?? "system",
-      });
-      toast.success("Task follow-up dibuat");
-      setCreateOpen(false);
-      setForm({ title: "", type: "follow_up", priority: "medium", assigneeName: "", dueDate: "", opportunityId: "" });
-      await load(true);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Gagal membuat task");
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -747,6 +831,8 @@ export default function FollowupsModule() {
       </div>
     );
 
+  const hasActiveTaskFilter = (tasks ?? []).length > 0 && displayTasks.length === 0;
+
   return (
     <div className="space-y-6">
       {/* Header + filter */}
@@ -765,8 +851,8 @@ export default function FollowupsModule() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)} aria-label="Tambah task follow-up baru">
-            <Plus className="h-4 w-4" aria-hidden /> Tambah Task
+          <Button size="sm" onClick={() => setCreateOpen(true)} aria-label="Tambah tugas baru">
+            <Plus className="h-4 w-4" aria-hidden /> Tugas Baru
           </Button>
         </div>
       </div>
@@ -800,6 +886,16 @@ export default function FollowupsModule() {
           <Switch checked={onlyOverdue} onCheckedChange={setOnlyOverdue} aria-label="Hanya tampilkan task overdue" />
           Hanya overdue
         </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700">
+          {/* Ronde 40-E — filter "Tugas saya" (multi-assignee aware) dgn badge jumlah */}
+          <Switch checked={myTasksOnly} onCheckedChange={setMyTasksOnly} aria-label="Hanya tampilkan tugas saya" />
+          Tugas saya
+          {myTaskCount > 0 ? (
+            <Badge className="border-transparent bg-zinc-900 px-1.5 text-[10px] text-white hover:bg-zinc-900">
+              {myTaskCount}
+            </Badge>
+          ) : null}
+        </label>
       </div>
 
       {/* Stat strip */}
@@ -818,7 +914,7 @@ export default function FollowupsModule() {
 
       {/* List dikelompokkan */}
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
-        {assigneeFilter !== "all" && assignees.length === 0 && tasks?.length === 0 ? (
+        {hasActiveTaskFilter ? (
           <EmptyGroup text="Tidak ada task untuk filter ini" />
         ) : null}
         <div className="space-y-6">
@@ -843,78 +939,12 @@ export default function FollowupsModule() {
         </div>
       </div>
 
-      {/* Dialog tambah task */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Tambah Task Follow-up</DialogTitle>
-            <DialogDescription>Buat task baru untuk jadwal follow-up, meeting, atau pekerjaan internal.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleCreate} className="grid gap-4 py-2">
-            <div className="grid gap-2">
-              <Label htmlFor="task-title">Judul Task *</Label>
-              <Input
-                id="task-title" value={form.title} required
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                placeholder="Contoh: Follow-up proposal redesign website"
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="task-type">Tipe</Label>
-                <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
-                  <SelectTrigger id="task-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TASK_TYPES.map((t) => <SelectItem key={t.key} value={t.key}>{t.label}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="task-priority">Prioritas</Label>
-                <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v }))}>
-                  <SelectTrigger id="task-priority"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {PRIORITIES.map((p) => (
-                      <SelectItem key={p} value={p}>{priorityMeta(p).label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="task-assignee">Assignee</Label>
-                <Input
-                  id="task-assignee" value={form.assigneeName}
-                  onChange={(e) => setForm((f) => ({ ...f, assigneeName: e.target.value }))}
-                  placeholder="Nama orang yang mengerjakan"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="task-due">Due Date</Label>
-                <Input
-                  id="task-due" type="date" value={form.dueDate}
-                  onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="task-opp">Opportunity ID (opsional)</Label>
-              <Input
-                id="task-opp" value={form.opportunityId}
-                onChange={(e) => setForm((f) => ({ ...f, opportunityId: e.target.value }))}
-                placeholder="Tempel ID opportunity bila terkait"
-              />
-            </div>
-            <DialogFooter className="mt-2">
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
-              <Button type="submit" disabled={saving} aria-label="Simpan task baru">
-                {saving ? "Menyimpan…" : "Simpan Task"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {/* Ronde 40-E — dialog tugas bersama (multi-assignee + lampiran + opportunity picker) */}
+      <TaskFormDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSaved={() => { void load(true); }}
+      />
 
       {/* Dialog kirim & catat pesan outbound (Fase 3) */}
       <SendOutboundDialog task={sendTarget} onClose={() => setSendTarget(null)} onSent={handleSent} />

@@ -1,18 +1,20 @@
 // ============ Pipeline stages (standar perusahaan) ============
+// Ronde 40-C — `params` = parameter acuan: data/sinyal apa yang menjadi syarat
+// stage tsb (dipakai popover info di kanban pipeline).
 
 export const PIPELINE_STAGES = [
-  { key: "new", label: "New", meaning: "Lead baru masuk", required: "Assign marketing dan SLA", color: "#78716c" },
-  { key: "contact_attempted", label: "Contact Attempted", meaning: "Sudah dicoba dihubungi", required: "Catat kanal dan hasil", color: "#a8a29e" },
-  { key: "connected", label: "Connected", meaning: "Sudah mendapat respons", required: "Verifikasi kebutuhan", color: "#d97706" },
-  { key: "qualified", label: "Qualified", meaning: "Layak diproses", required: "Budget, authority, need, timeline", color: "#ea580c" },
-  { key: "discovery", label: "Discovery", meaning: "Penggalian brief", required: "Meeting dan brief", color: "#f59e0b" },
-  { key: "estimation", label: "Estimation", meaning: "Penyusunan scope dan biaya", required: "Kolaborasi finance/produksi", requiredKey: "finance", color: "#0d9488" },
-  { key: "proposal_sent", label: "Proposal Sent", meaning: "Proposal dikirim", required: "Versi dan masa berlaku", color: "#8b5cf6" },
-  { key: "negotiation", label: "Negotiation", meaning: "Negosiasi berjalan", required: "Revisi scope/harga", color: "#a855f7" },
-  { key: "verbal_agreement", label: "Verbal Agreement", meaning: "Persetujuan awal", required: "Kontrak/PO/DP", color: "#16a34a" },
-  { key: "won", label: "Won", meaning: "Deal berhasil", required: "Buat project", color: "#15803d" },
-  { key: "lost", label: "Lost", meaning: "Tidak berhasil", required: "Alasan wajib", color: "#dc2626" },
-  { key: "nurture", label: "Nurture", meaning: "Belum siap membeli", required: "Jadwal penawaran ulang", color: "#64748b" },
+  { key: "new", label: "New", meaning: "Lead baru masuk", required: "Assign marketing dan SLA", params: "Lead masuk + owner terisi otomatis dari sesi; SLA follow-up ≤ SLA jam brand", color: "#78716c" },
+  { key: "contact_attempted", label: "Contact Attempted", meaning: "Sudah dicoba dihubungi", required: "Catat kanal dan hasil", params: "Ada interaksi outbound pertama (interaction tercatat)", color: "#a8a29e" },
+  { key: "connected", label: "Connected", meaning: "Sudah mendapat respons", required: "Verifikasi kebutuhan", params: "Kontak membalas / percakapan dua arah di Inbox", color: "#d97706" },
+  { key: "qualified", label: "Qualified", meaning: "Layak diproses", required: "Budget, authority, need, timeline", params: "Kebutuhan jelas + brand & kontak valid + estimasi nilai awal", color: "#ea580c" },
+  { key: "discovery", label: "Discovery", meaning: "Penggalian brief", required: "Meeting dan brief", params: "Brief klien dibuat & kebutuhan detail terkumpul", color: "#f59e0b" },
+  { key: "estimation", label: "Estimation", meaning: "Penyusunan scope dan biaya", required: "Kolaborasi finance/produksi", params: "Estimasi cost breakdown diajukan (status pending_approval)", requiredKey: "finance", color: "#0d9488" },
+  { key: "proposal_sent", label: "Proposal Sent", meaning: "Proposal dikirim", required: "Versi dan masa berlaku", params: "Quotation berstatus sent (sentAt terisi)", color: "#8b5cf6" },
+  { key: "negotiation", label: "Negotiation", meaning: "Negosiasi berjalan", required: "Revisi scope/harga", params: "Estimasi disetujui Direktur / negosiasi harga & diskusi potongan", color: "#a855f7" },
+  { key: "verbal_agreement", label: "Verbal Agreement", meaning: "Persetujuan awal", required: "Kontrak/PO/DP", params: "Quotation diterima klien (status accepted)", color: "#16a34a" },
+  { key: "won", label: "Won", meaning: "Deal berhasil", required: "Buat project", params: "Kontrak & invoice DP otomatis dibuat; project otomatis ter-generate", color: "#15803d" },
+  { key: "lost", label: "Lost", meaning: "Tidak berhasil", required: "Alasan wajib", params: "Alasan kalah wajib dipilih (LOST_REASONS)", color: "#dc2626" },
+  { key: "nurture", label: "Nurture", meaning: "Belum siap membeli", required: "Jadwal penawaran ulang", params: "Segmen nurture dipilih (NURTURE_SEGMENTS) + tanggal follow-up", color: "#64748b" },
 ] as const;
 
 export type StageKey = (typeof PIPELINE_STAGES)[number]["key"];

@@ -53,7 +53,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
-import { briefsApi } from "@/lib/crm/api-client";
+import { api, briefsApi } from "@/lib/crm/api-client";
 import { BRIEF_STATUS_META, computeBriefCompleteness } from "@/lib/crm/brief";
 import { BRAND_SERVICES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
@@ -223,6 +223,7 @@ export default function BriefPanel({
   onBriefStatusChange,
   onChanged,
 }: BriefPanelProps) {
+  const brands = useCrmStore((s) => s.brands);
   const { user } = useCrmStore();
 
   const [brief, setBrief] = useState<ClientBriefDTO | null>(null);
@@ -252,7 +253,36 @@ export default function BriefPanel({
   const [revisionNote, setRevisionNote] = useState("");
   const [revisionError, setRevisionError] = useState<string | null>(null);
 
-  const catalog = useMemo(() => BRAND_SERVICES[brandSlug] ?? [], [brandSlug]);
+  // Ronde 40-C — layanan chips dari katalog live DB brand (fallback konstanta statis).
+  const [liveServices, setLiveServices] = useState<string[] | null>(null);
+  const brandId = useMemo(
+    () => brands.find((b) => b.slug === brandSlug)?.id ?? null,
+    [brands, brandSlug]
+  );
+
+  useEffect(() => {
+    if (!brandId) {
+      setLiveServices(null);
+      return;
+    }
+    let cancelled = false;
+    api.brandServices(brandId)
+      .then((res) => {
+        if (!cancelled) setLiveServices(res.services.map((s) => s.name));
+      })
+      .catch(() => {
+        if (!cancelled) setLiveServices(null); // gagal → fallback statis
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  const catalog = useMemo(() => {
+    if (liveServices && liveServices.length > 0) return liveServices;
+    return BRAND_SERVICES[brandSlug] ?? [];
+  }, [liveServices, brandSlug]);
+  const catalogLive = !!liveServices && liveServices.length > 0;
 
   const load = useCallback(async () => {
     if (!open || !opportunityId) return;
@@ -706,6 +736,9 @@ export default function BriefPanel({
 
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-zinc-600">Layanan (pilih salah satu / lebih)</p>
+              {catalogLive ? (
+                <p className="text-[10px] text-zinc-400">Layanan dari katalog brand</p>
+              ) : null}
               {catalog.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {catalog.map((s) => {

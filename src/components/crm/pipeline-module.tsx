@@ -22,6 +22,7 @@ import {
   FileUp,
   Flame,
   Inbox,
+  Info,
   KanbanSquare,
   Loader2,
   Plus,
@@ -40,6 +41,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -61,7 +63,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import OpportunityDetail from "@/components/crm/opportunity-detail";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import { api } from "@/lib/crm/api-client";
-import { LOST_REASONS, OPEN_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+import { LOST_REASONS, OPEN_STAGES, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
@@ -371,6 +373,43 @@ function OppCard({ opp, onOpen }: { opp: OpportunityDTO; onOpen: (id: string) =>
 
 // ---------- Kolom stage (droppable) ----------
 
+/** Ronde 40-C — popover info stage: makna, acuan, parameter acuan, + keterangan
+ * perpindahan otomatis. Trigger di header kolom (di luar area kartu) sehingga
+ * tidak mengganggu drag & drop kartu. */
+function StageInfoPopover({ stageKey }: { stageKey: string }) {
+  const stage = PIPELINE_STAGES.find((s) => s.key === stageKey);
+  if (!stage) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Info stage ${stage.label}`}
+          className="flex size-5 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 transition-colors hover:border-zinc-300 hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20"
+        >
+          <Info className="size-3" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-3 text-xs">
+        <p className="text-sm font-semibold text-zinc-900">{stage.label}</p>
+        <p className="mt-1 leading-relaxed text-zinc-600">{stage.meaning}</p>
+        <p className="mt-2 leading-relaxed text-zinc-600">
+          <span className="font-medium text-zinc-500">Acuan: </span>{stage.required}
+        </p>
+        {stage.params ? (
+          <p className="mt-1 leading-relaxed text-zinc-600">
+            <span className="font-medium text-zinc-500">Parameter: </span>{stage.params}
+          </p>
+        ) : null}
+        <p className="mt-3 border-t pt-2 text-[10px] leading-relaxed text-zinc-400">
+          Stage berpindah otomatis saat: quotation dikirim → Proposal Sent; quotation diterima → Verbal
+          Agreement; estimasi disetujui → Negotiation; deal Won → Project dibuat.
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function StageColumn({
   stageKey,
   opportunities,
@@ -400,6 +439,7 @@ function StageColumn({
         <Badge variant="secondary" className="px-1.5 text-[11px]">
           {opportunities.length}
         </Badge>
+        <StageInfoPopover stageKey={stageKey} />
       </div>
       <p className="px-3 pt-1.5 text-[11px] text-zinc-400">{formatCurrency(total)}</p>
       <div className="crm-scroll flex max-h-[600px] flex-col gap-2 overflow-y-auto p-2">

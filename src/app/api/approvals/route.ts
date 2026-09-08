@@ -55,6 +55,21 @@ export async function PATCH(req: NextRequest) {
     await db.estimation.update({ where: { id: approval.entityId }, data: { status: "rejected" } });
   }
 
+  // Ronde 40 — auto-move: estimasi disetujui → opportunity maju ke tahap negosiasi
+  // (hanya bila masih di tahap awal; proposal_sent ke atas biarkan apa adanya).
+  if (decision === "approve" && approval.entityType === "estimation" && approval.opportunityId) {
+    const AUTO_MOVE_FROM = ["new", "contact_attempted", "connected", "qualified", "discovery", "estimation"];
+    const opp = await db.opportunity.findUnique({ where: { id: approval.opportunityId } });
+    if (opp && AUTO_MOVE_FROM.includes(opp.stage)) {
+      await db.opportunity.update({ where: { id: opp.id }, data: { stage: "negotiation" } });
+      await logAudit({
+        actorName, actorRole, action: "update", entity: "opportunity", entityId: opp.id,
+        entityLabel: opp.title, field: "stage", oldValue: opp.stage, newValue: "negotiation",
+        metadata: "Auto-move: estimasi disetujui", req,
+      });
+    }
+  }
+
   await logAudit({
     actorName, actorRole, action: decision === "approve" ? "approve" : "reject",
     entity: "approval", entityId: id, entityLabel: approval.entityLabel,

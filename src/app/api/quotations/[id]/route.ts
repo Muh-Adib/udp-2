@@ -3,6 +3,10 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, clampNum, dateOrNull, isUniqueViolation } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 import { sendPushToRoles } from "@/lib/crm/push";
+import { CHANNELS } from "@/lib/crm/constants";
+
+// Ronde 40 — kanal pengiriman quotation: whitelist key CHANNELS (fallback email)
+const CHANNEL_KEYS: readonly string[] = CHANNELS.map((c) => c.key);
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -23,6 +27,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // ---- Aksi khusus ----
   if (action === "send") {
     if (quotation.status !== "draft") return fail("Hanya quotation berstatus draft yang dapat dikirim");
+    // Ronde 40 — kanal kirim bebas pilih (whitelist CHANNELS), default email
+    const channel = body.channel && CHANNEL_KEYS.includes(String(body.channel)) ? String(body.channel) : "email";
     const updated = await db.quotation.update({
       where: { id },
       data: { status: "sent", sentAt: new Date() },
@@ -32,7 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (quotation.opportunityId) {
       await db.interaction.create({
         data: {
-          channel: "email",
+          channel,
           direction: "outbound",
           brandId: quotation.brandId,
           opportunityId: quotation.opportunityId,
@@ -49,7 +55,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     await logAudit({
       actorName, actorRole, action: "update", entity: "quotation", entityId: id,
-      entityLabel: quotation.number, field: "status", oldValue: "draft", newValue: "sent", req,
+      entityLabel: quotation.number, field: "status", oldValue: "draft", newValue: "sent",
+      metadata: `Quotation dikirim via ${channel}`, req,
     });
     // Ronde 39 — push VAPID: quotation terkirim ke klien
     void sendPushToRoles(
@@ -129,6 +136,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             description: `Invoice dari quotation ${quotation.number}`,
             amount,
             taxRate: quotation.taxPct,
+            // Ronde 40 — nama pajak ikut dibawa ke invoice (null = tanpa pajak)
+            taxName: quotation.taxName,
             taxAmount: quotation.taxAmount,
             total: quotation.total,
             currency: quotation.currency,
@@ -154,6 +163,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // ---- Update umum (draft saja) ----
   if (quotation.status !== "draft") return fail("Hanya quotation draft yang dapat diedit");
   const data: Record<string, unknown> = {};
+  // Ronde 40 — pajak bebas: taxName passthrough; null/kosong → tanpa pajak (taxPct 0)
+  if ("taxName" in body) {
+    const taxNameRaw = body.taxName === null || body.taxName === undefined ? null : String(body.taxName).trim().slice(0, 80);
+    data.taxName = taxNameRaw ? taxNameRaw : null;
+  }
   if (body.items) {
     const items = (Array.isArray(body.items) ? body.items : [])
       .filter((it: { description?: string }) => it && String(it.description ?? "").trim())
@@ -167,13 +181,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const subtotal = items.reduce((s: number, it: { subtotal: number }) => s + it.subtotal, 0);
     // FIX r26: persen dipatok 0–100 (dulu discountPct:1000 → total invoice negatif)
     const discountPct = clampNum(body.discountPct ?? quotation.discountPct, 0, 100, quotation.discountPct);
-    const taxPct = clampNum(body.taxPct ?? quotation.taxPct, 0, 100, quotation.taxPct);
+    // Ronde 40 — tanpa pajak (taxName null/kosong) → taxPct dipaksa 0
+    const taxPct = data.taxName === null ? 0 : clampNum(body.taxPct ?? quotation.taxPct, 0, 100, quotation.taxPct);
     const discountAmount = Math.round((subtotal * discountPct) / 100);
     const afterDiscount = subtotal - discountAmount;
     const taxAmount = Math.round((afterDiscount * taxPct) / 100);
     data.subtotal = subtotal;
     data.discountPct = discountPct;
     data.discountAmount = discountAmount;
+    data.taxPct = taxPct;
+    data.taxAmount = taxAmount;
+    data.total = afterDiscount + taxAmount;
+  } else if ("taxName" in body) {
+    // Ronde 40 — pajak berubah tanpa perubahan item: hitung ulang pajak & total dari item tersimpan
+    const taxPct = data.taxName === null ? 0 : clampNum(body.taxPct ?? quotation.taxPct, 0, 100, quotation.taxPct);
+    const afterDiscount = quotation.subtotal - quotation.discountAmount;
+    const taxAmount = Math.round((afterDiscount * taxPct) / 100);
     data.taxPct = taxPct;
     data.taxAmount = taxAmount;
     data.total = afterDiscount + taxAmount;

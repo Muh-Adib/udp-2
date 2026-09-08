@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { api } from "@/lib/crm/api-client";
 import type { SessionUser, Brand } from "@/lib/crm/types";
 
 export type ModuleKey =
@@ -39,6 +40,10 @@ interface CrmState {
   setActiveBrandFilter: (b: string) => void;
   setPendingFocus: (f: { module: ModuleKey; id: string; kind?: string }) => void;
   clearPendingFocus: () => void;
+  /** Ronde 40-C — muat ulang daftar brand dari server (form/dialog tidak lagi
+   * menampilkan daftar brand basi setelah brand dibuat/diubah; brand hanya
+   * dimuat sekali di page mount). Aman dipanggil kapan saja; gagal = diamkan. */
+  refreshBrands: () => Promise<void>;
 }
 
 export const useCrmStore = create<CrmState>()(
@@ -55,6 +60,14 @@ export const useCrmStore = create<CrmState>()(
       setActiveBrandFilter: (activeBrandFilter) => set({ activeBrandFilter }),
       setPendingFocus: (f) => set({ pendingFocus: { ...f, nonce: Date.now() } }),
       clearPendingFocus: () => set({ pendingFocus: null }),
+      refreshBrands: async () => {
+        try {
+          const { brands } = await api.brands();
+          set({ brands });
+        } catch {
+          // diamkan — daftar brand lama tetap terpakai sampai refresh berhasil
+        }
+      },
     }),
     { name: "grupcrm-session", partialize: (s) => ({ user: s.user }) }
   )

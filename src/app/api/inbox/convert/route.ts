@@ -33,6 +33,10 @@ export async function POST(req: NextRequest) {
   const requestedBrandId = String(oppData.brandId ?? interaction.brandId ?? "");
   if (!requestedBrandId) return fail("Brand wajib dipilih");
 
+  // Ronde 40 — brand divalidasi + dipakai utk fallback mata uang brand
+  const oppBrand = await db.brand.findUnique({ where: { id: requestedBrandId } });
+  if (!oppBrand) return fail("Brand tidak ditemukan", 404);
+
   type ConvertResult = {
     opportunity: NonNullable<Awaited<ReturnType<typeof db.opportunity.findFirst>>>;
     contactId: string;
@@ -134,8 +138,10 @@ export async function POST(req: NextRequest) {
           leadSource: interaction.channel,
           brief: interaction.content,
           estimatedValue: oppData.estimatedValue ? Number(oppData.estimatedValue) : null,
-          currency: oppData.currency ? String(oppData.currency) : "IDR",
-          ownerName: oppData.ownerName ? String(oppData.ownerName) : actorName,
+          // Ronde 40 — mata uang: body ?? mata uang utama brand ?? IDR
+          currency: oppData.currency ? String(oppData.currency) : (oppBrand.primaryCurrency ?? "IDR"),
+          // Ronde 40 — owner default dari sesi (actorName), body hanya bila eksplisit
+          ownerName: oppData.ownerName ? String(oppData.ownerName).trim() : actorName,
           stage: String(oppData.stage ?? "new"),
           temperature: String(oppData.temperature ?? "warm"),
           priority: String(oppData.priority ?? "medium"),

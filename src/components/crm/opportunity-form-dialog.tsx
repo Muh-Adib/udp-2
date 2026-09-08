@@ -5,7 +5,10 @@
  * Sales Pipeline ("Peluang Baru"), dan dapat dipakai ulang modul lain.
  * Field-set identik dengan form konversi lead di Lead Inbox agar pengalaman
  * sales konsisten: brand, kontak, judul, kategori/layanan, prioritas,
- * estimasi nilai, owner, sumber lead, tanggal.
+ * estimasi nilai, sumber lead, tanggal.
+ * Ronde 40-C — kategori & layanan sinkron katalog live dari DB brand
+ * (api.brandServices), fallback ke konstanta statis bila katalog kosong/gagal.
+ * Field Owner dihapus: owner = pembuat, diisi server dari sesi.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -27,7 +30,7 @@ import {
   BRAND_SERVICES, LEAD_SOURCES, PRIORITIES, SERVICE_CATEGORIES,
 } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
-import type { ContactRef, OpportunityDTO } from "@/lib/crm/types";
+import type { ContactRef, OpportunityDTO, ServiceCategoryDTO, ServiceDTO } from "@/lib/crm/types";
 
 const PRIORITY_LABELS: Record<string, string> = { low: "Rendah", medium: "Sedang", high: "Tinggi", urgent: "Urgent" };
 
@@ -62,10 +65,14 @@ export default function OpportunityFormDialog({
 }) {
   const brands = useCrmStore((s) => s.brands);
   const user = useCrmStore((s) => s.user);
+  const refreshBrands = useCrmStore((s) => s.refreshBrands);
 
   const [contacts, setContacts] = useState<ContactRef[] | null>(null);
   const [contactQuery, setContactQuery] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Ronde 40-C — katalog live dari DB brand (null = belum termuat/gagal → fallback statis).
+  const [catalog, setCatalog] = useState<{ categories: ServiceCategoryDTO[]; services: ServiceDTO[] } | null>(null);
 
   // Field form — urutan & label sama dengan form konversi lead di Inbox.
   const [brandId, setBrandId] = useState("");
@@ -75,22 +82,24 @@ export default function OpportunityFormDialog({
   const [serviceName, setServiceName] = useState("");
   const [priority, setPriority] = useState("medium");
   const [estimatedValue, setEstimatedValue] = useState("");
-  const [ownerName, setOwnerName] = useState("");
   const [leadSource, setLeadSource] = useState("none");
   const [expectedCloseDate, setExpectedCloseDate] = useState("");
   const [targetDeadline, setTargetDeadline] = useState("");
   const [brief, setBrief] = useState("");
 
   // Lazy: daftar kontak dimuat sekali saat dialog dibuka.
+  // Ronde 40-C — daftar brand bisa basi/kosong (brand baru dibuat setelah page mount)
+  // → muat ulang dari server saat dialog dibuka bila store masih kosong.
   useEffect(() => {
     if (!open) return;
+    if (useCrmStore.getState().brands.length === 0) void refreshBrands();
     api.contacts()
       .then((res) => setContacts(res.contacts))
       .catch(() => {
         setContacts([]);
         toast.error("Gagal memuat daftar kontak");
       });
-  }, [open]);
+  }, [open, refreshBrands]);
 
   // Reset setiap kali dialog dibuka — Ronde 39: mode edit prefill dari editData.
   useEffect(() => {
@@ -106,7 +115,6 @@ export default function OpportunityFormDialog({
       setServiceName(editData.serviceName ?? "");
       setPriority(editData.priority || "medium");
       setEstimatedValue(editData.estimatedValue != null ? String(editData.estimatedValue) : "");
-      setOwnerName(editData.ownerName ?? user?.name ?? "");
       setLeadSource(editData.leadSource ?? "none");
       setExpectedCloseDate(d(editData.expectedCloseDate));
       setTargetDeadline(d(editData.targetDeadline));
@@ -121,18 +129,58 @@ export default function OpportunityFormDialog({
     setServiceName("");
     setPriority("medium");
     setEstimatedValue("");
-    setOwnerName(user?.name ?? "");
     setLeadSource("none");
     setExpectedCloseDate("");
     setTargetDeadline("");
     setBrief("");
     setContactQuery("");
-  }, [open, editData, user?.name]);
+  }, [open, editData]);
 
+  // Ronde 40-C — katalog layanan live per brand: fetch saat brand berubah (guard cancel).
+  useEffect(() => {
+    if (!brandId) {
+      setCatalog(null);
+      return;
+    }
+    let cancelled = false;
+    setCatalog(null);
+    api.brandServices(brandId)
+      .then((res) => {
+        if (!cancelled) setCatalog({ categories: res.categories, services: res.services });
+      })
+      .catch(() => {
+        if (!cancelled) setCatalog(null); // gagal → fallback statis di bawah
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  const selectedBrand = useMemo(() => brands.find((b) => b.id === brandId), [brandId, brands]);
+
+  // Kategori: nama kategori live dari katalog brand; fallback konstanta statis.
+  // Saat edit, nilai lama tetap ditampilkan meski tidak ada di katalog (jangan hilangkan data).
+  const kategoriOptions = useMemo(() => {
+    const live = catalog && catalog.categories.length > 0
+      ? catalog.categories.map((c) => c.name)
+      : [...SERVICE_CATEGORIES];
+    if (serviceCategory !== "none" && !live.includes(serviceCategory)) live.unshift(serviceCategory);
+    return live;
+  }, [catalog, serviceCategory]);
+
+  // Layanan: semua nama layanan brand; bila kategori terpilih cocok dgn kategori katalog,
+  // filter per kategori tsb. Nilai lama (mode edit) selalu ikut sebagai opsi.
   const serviceNameOptions = useMemo(() => {
-    const brand = brands.find((b) => b.id === brandId);
-    return brand ? BRAND_SERVICES[brand.slug] ?? [] : [];
-  }, [brandId, brands]);
+    if (catalog) {
+      const cat = catalog.categories.find((c) => c.name === serviceCategory);
+      const list = (cat
+        ? catalog.services.filter((s) => s.categoryId === cat.id)
+        : catalog.services
+      ).map((s) => s.name);
+      return serviceName && !list.includes(serviceName) ? [serviceName, ...list] : list;
+    }
+    return selectedBrand ? BRAND_SERVICES[selectedBrand.slug] ?? [] : [];
+  }, [catalog, serviceCategory, serviceName, selectedBrand]);
 
   const contactOptions = useMemo(() => {
     const list = contacts ?? [];
@@ -143,6 +191,22 @@ export default function OpportunityFormDialog({
         `${c.fullName} ${c.email ?? ""}`.toLowerCase().includes(q))
       .slice(0, 100);
   }, [contacts, contactQuery]);
+
+  // Ronde 40-C — saat kategori berubah, reset layanan hanya bila nilai lama
+  // tidak lagi cocok dengan daftar layanan katalog untuk kategori baru.
+  function handleCategoryChange(v: string) {
+    setServiceCategory(v);
+    if (catalog) {
+      const cat = catalog.categories.find((c) => c.name === v);
+      const list = (cat
+        ? catalog.services.filter((s) => s.categoryId === cat.id)
+        : catalog.services
+      ).map((s) => s.name);
+      if (serviceName && !list.includes(serviceName)) setServiceName("");
+    } else {
+      setServiceName("");
+    }
+  }
 
   async function submit() {
     if (!user) {
@@ -160,7 +224,6 @@ export default function OpportunityFormDialog({
           serviceName: serviceName.trim() || null,
           priority,
           estimatedValue: estimatedValue.trim() !== "" && Number(estimatedValue) > 0 ? Number(estimatedValue) : null,
-          ownerName: ownerName.trim() || null,
           leadSource: leadSource === "none" ? null : leadSource,
           expectedCloseDate: expectedCloseDate || null,
           targetDeadline: targetDeadline || null,
@@ -190,7 +253,7 @@ export default function OpportunityFormDialog({
         ...(serviceName ? { serviceName } : {}),
         priority,
         ...(estimatedValue.trim() !== "" && Number(estimatedValue) > 0 ? { estimatedValue: Number(estimatedValue) } : {}),
-        ...(ownerName.trim() ? { ownerName: ownerName.trim() } : {}),
+        // Owner tidak dikirim — server memakai aktor sesi sebagai owner (Ronde 40-C).
         ...(leadSource !== "none" ? { leadSource } : {}),
         ...(expectedCloseDate ? { expectedCloseDate } : {}),
         ...(targetDeadline ? { targetDeadline } : {}),
@@ -296,12 +359,12 @@ export default function OpportunityFormDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Kategori Layanan</Label>
-              <Select value={serviceCategory} onValueChange={(v) => { setServiceCategory(v); setServiceName(""); }}>
+              <Select value={serviceCategory} onValueChange={handleCategoryChange}>
                 <SelectTrigger className="w-full" aria-label="Kategori layanan">
                   <SelectValue placeholder="Pilih kategori" />
                 </SelectTrigger>
                 <SelectContent>
-                  {SERVICE_CATEGORIES.map((cat) => (
+                  {kategoriOptions.map((cat) => (
                     <SelectItem key={cat} value={cat}>{SERVICE_CATEGORY_LABELS[cat] ?? cat}</SelectItem>
                   ))}
                 </SelectContent>
@@ -339,15 +402,7 @@ export default function OpportunityFormDialog({
                 placeholder="cth. 25000000"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="oppf-owner">Owner</Label>
-              <Input
-                id="oppf-owner"
-                value={ownerName}
-                onChange={(e) => setOwnerName(e.target.value)}
-                placeholder="Nama owner"
-              />
-            </div>
+            {/* Ronde 40-C — field Owner dihapus: owner = pembuat (diisi server dari sesi). */}
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

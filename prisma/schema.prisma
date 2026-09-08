@@ -217,7 +217,9 @@ model Task {
   type          String       @default("follow_up") // follow_up, meeting, internal, admin
   priority      String       @default("medium") // low, medium, high
   status        String       @default("open") // open, done, cancelled
-  assigneeName  String?
+  assigneeName  String? // assignee utama (kompatibilitas; = assignees[0])
+  assignees     String       @default("[]") // Ronde 40: JSON array nama assignee (multi-tag)
+  attachments   String       @default("[]") // Ronde 40: JSON [{type:"link"|"file", name, url, size?}] (file ≤5MB)
   dueDate       DateTime?
   opportunityId String?
   opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
@@ -258,6 +260,7 @@ model Invoice {
   description     String?
   amount          Float          @default(0)
   taxRate         Float          @default(11) // PPN %
+  taxName         String? // Ronde 40: nama pajak bebas (PPN, PPh 21, dll; null = tanpa pajak)
   taxAmount       Float          @default(0)
   total           Float          @default(0)
   currency        String         @default("IDR")
@@ -432,10 +435,12 @@ model Estimation {
   locationFee      Float       @default(0)
   softwareLicense  Float       @default(0)
   hostingDomain    Float       @default(0)
+  costItems        String      @default("[]") // Ronde 40: JSON [{name, qty, days?, unitPrice, subtotal}] — rincian biaya per item
   contingencyPct   Float       @default(5)
   managementFeePct Float       @default(5)
   discountPct      Float       @default(0)
   taxPct           Float       @default(11)
+  taxName          String? // Ronde 40: nama pajak bebas (PPN, PPh 21, dll; null = tanpa pajak)
   targetMarginPct  Float       @default(30)
   // Hasil kalkulasi (disimpan saat save)
   totalCost        Float       @default(0)
@@ -471,6 +476,7 @@ model Quotation {
   discountPct    Float       @default(0)
   discountAmount Float       @default(0)
   taxPct         Float       @default(11)
+  taxName        String? // Ronde 40: nama pajak bebas (PPN, PPh 21, dll; null = tanpa pajak)
   taxAmount      Float       @default(0)
   total          Float       @default(0)
   currency       String      @default("IDR")
@@ -722,4 +728,14 @@ model ChannelConfig {
 
   @@index([channel])
   @@index([brandId])
+}
+
+// Ronde 40 — parameter pajak bebas: nama + persentase (PPN, PPh 21, PPh 23, dll.)
+model Tax {
+  id        String   @id @default(cuid())
+  name      String
+  rate      Float    @default(11) // persentase pajak
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

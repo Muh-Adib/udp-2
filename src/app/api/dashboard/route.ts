@@ -4,6 +4,7 @@ import { ok } from "@/lib/crm/server";
 import { OPEN_STAGES } from "@/lib/crm/constants";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
 import { getSessionUser } from "@/lib/crm/session";
+import { parseTaskAssignees } from "@/lib/crm/task-parse";
 import type { DashboardMineView, DashboardProductionView, DashboardTeamView, DashboardFinanceView, DashboardRoleView as DashboardRoleViewType } from "@/lib/crm/types";
 
 const HOUR = 60 * 60 * 1000;
@@ -198,7 +199,8 @@ export async function GET(req: NextRequest) {
       const mine = opportunities.filter((o) => o.ownerName === userName);
       const myOpen = mine.filter((o) => (OPEN_STAGES as string[]).includes(o.stage));
       const myWon = mine.filter((o) => o.stage === "won");
-      const myTasks = tasks.filter((t) => t.assigneeName === userName);
+      // Ronde 40 — tugas saya: assignee utama ATAU tercantum di assignees (multi-tag)
+      const myTasks = tasks.filter((t) => t.assigneeName === userName || parseTaskAssignees(t.assignees).includes(userName));
       const mineView: DashboardMineView = {
         openLeads: myOpen.length,
         pipelineValue: myOpen.reduce((s, o) => s + (o.estimatedValue ?? 0), 0),
