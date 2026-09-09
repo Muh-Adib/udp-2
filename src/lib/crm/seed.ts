@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
 import { hashSecret } from "@/lib/crm/auth";
 
-/** Ronde 46 — kredensial demo: login PASSWORD + PIN kunci layar (semuanya scrypt). */
-const DEMO_PASSWORD = "grup1234";
+/** Ronde 46-b — kredensial tim UDP: login PASSWORD + PIN kunci layar (semuanya scrypt). */
+const DEMO_PASSWORD = "udp1234";
 const DEMO_PIN = "1234";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -336,16 +336,19 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     })),
   });
 
-  // ============ USERS — akun nyata dgn kredensial ter-hash (Ronde 46) ============
+  // ============ USERS — tim UDP, 9 akun nyata dgn kredensial ter-hash (Ronde 46-b) ============
   // Login: email + password. PIN BUKAN untuk login — PIN membuka layar terkunci.
+  // Struktur tim: 1 Direktur · 1 Manajer · 4 Produksi · 1 Finance · 1 HR · 1 Marketing.
   await db.user.createMany({ data: [
-    { name: "Rian Pratama", email: "rian@grup.co.id", role: "super_admin", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0f766e" },
-    { name: "Sari Wulandari", email: "sari@grup.co.id", role: "director", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#b45309" },
-    { name: "Dewi Lestari", email: "dewi@grup.co.id", role: "marketing", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#be123c" },
-    { name: "Andi Saputra", email: "andi@grup.co.id", role: "marketing", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#7c3aed" },
-    { name: "Maya Kusuma", email: "maya@grup.co.id", role: "finance", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0369a1" },
-    { name: "Budi Hartono", email: "budi@grup.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#4d7c0f" },
-    { name: "Hendra Wijaya", email: "hendra@nusantaranet.com", role: "client", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#525252" },
+    { name: "Andri Saputro", email: "andri@udp.co.id", role: "director", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0f766e" },
+    { name: "Budi M. Kurniawan", email: "budi@udp.co.id", role: "manager", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#b45309" },
+    { name: "Yusi", email: "yusi@udp.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#be123c" },
+    { name: "Rustam Aji", email: "rustam@udp.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#7c3aed" },
+    { name: "Fais", email: "fais@udp.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0369a1" },
+    { name: "Adib", email: "adib@udp.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#4d7c0f" },
+    { name: "Sika", email: "sika@udp.co.id", role: "finance", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#db2777" },
+    { name: "Latifa", email: "latifa@udp.co.id", role: "hr", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#ca8a04" },
+    { name: "Fadel", email: "fadel@udp.co.id", role: "marketing", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#ea580c" },
   ]});
 
   // ============ COMPANIES ============
@@ -390,30 +393,30 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     currency?: string; lastOfferValue?: number; followUpDate?: Date;
   };
   const oppSeeds: OppSeed[] = [
-    { title: "Website corporate baru + SEO", brand: segia.id, company: 0, contact: 0, serviceCategory: "website", serviceName: "Website Company Profile", leadSource: "referral", stage: "won", value: 245000000, probability: 100, owner: "Dewi Lestari", temperature: "hot", createdDaysAgo: 75, brief: "Redesign total website korporat dengan CMS, multibahasa, dan SEO on-page untuk 50 halaman." },
-    { title: "Video company profile 2025", brand: unicam.id, company: 0, contact: 0, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "instagram", stage: "won", value: 185000000, probability: 100, owner: "Andi Saputra", createdDaysAgo: 60, brief: "Video profile 3 menit dengan drone dan motion graphic untuk investor relation." },
-    { title: "Animasi edukasi literasi digital", brand: unimasi.id, company: 1, contact: 1, serviceCategory: "animation", serviceName: "Animasi Pembelajaran", leadSource: "website", stage: "won", value: 320000000, probability: 100, owner: "Dewi Lestari", createdDaysAgo: 90, brief: "12 episode animasi pembelajaran literasi digital untuk siswa SMA." },
-    { title: "Dokumentasi pabrik + drone", brand: erfo.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Dokumentasi Foto/Video", leadSource: "whatsapp", stage: "negotiation", value: 96000000, probability: 60, owner: "Andi Saputra", temperature: "hot", createdDaysAgo: 20, nextAction: "Kirim revisi penawaran final" },
-    { title: "Live streaming economic forum", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Live Streaming", leadSource: "event", stage: "proposal_sent", value: 145000000, probability: 50, owner: "Dewi Lestari", createdDaysAgo: 15, nextAction: "Follow-up proposal 3 kamera" },
-    { title: "Virtual tour destinasi wisata", brand: unicam.id, company: 4, contact: 4, serviceCategory: "immersive", serviceName: "Virtual Tour", leadSource: "instagram", stage: "discovery", value: 210000000, probability: 40, owner: "Andi Saputra", createdDaysAgo: 12, nextAction: "Jadwalkan survey lokasi" },
-    { title: "Website booking + UI/UX", brand: segia.id, company: 4, contact: 4, serviceCategory: "website", serviceName: "Web Application", leadSource: "referral", stage: "estimation", value: 165000000, probability: 45, owner: "Dewi Lestari", createdDaysAgo: 18 },
-    { title: "Animasi 3D edukasi rumah sakit", brand: unimasi.id, company: 5, contact: 5, serviceCategory: "animation", serviceName: "Animasi 3D", leadSource: "email", stage: "qualified", value: 275000000, probability: 35, owner: "Dewi Lestari", createdDaysAgo: 9 },
-    { title: "Projection mapping annual night", brand: unicam.id, company: 9, contact: 9, serviceCategory: "immersive", serviceName: "Projection Mapping", leadSource: "event", stage: "connected", value: 385000000, probability: 30, owner: "Andi Saputra", priority: "high", createdDaysAgo: 7 },
-    { title: "Video AI onboarding karyawan", brand: unicam.id, company: 7, contact: 7, serviceCategory: "video", serviceName: "AI Video Production", leadSource: "linkedin", stage: "proposal_sent", value: 88000000, probability: 55, owner: "Dewi Lestari", createdDaysAgo: 22 },
-    { title: "SEO & konten digital 6 bulan", brand: segia.id, company: 2, contact: 2, serviceCategory: "digital_marketing", serviceName: "SEO Optimization", leadSource: "website", stage: "verbal_agreement", value: 120000000, probability: 85, owner: "Andi Saputra", temperature: "hot", createdDaysAgo: 30, nextAction: "Tunggu PO resmi" },
-    { title: "Animasi sosialisasi K3", brand: unimasi.id, company: 7, contact: 7, serviceCategory: "animation", serviceName: "Video Sosialisasi", leadSource: "whatsapp", stage: "contact_attempted", value: 65000000, probability: 20, owner: "Dewi Lestari", createdDaysAgo: 4 },
-    { title: "Video profil internasional EN", brand: unicam.id, company: 8, contact: 8, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "linkedin", stage: "negotiation", value: 28000000, currency: "USD", probability: 65, owner: "Dewi Lestari", createdDaysAgo: 25 },
+    { title: "Website corporate baru + SEO", brand: segia.id, company: 0, contact: 0, serviceCategory: "website", serviceName: "Website Company Profile", leadSource: "referral", stage: "won", value: 245000000, probability: 100, owner: "Fadel", temperature: "hot", createdDaysAgo: 75, brief: "Redesign total website korporat dengan CMS, multibahasa, dan SEO on-page untuk 50 halaman." },
+    { title: "Video company profile 2025", brand: unicam.id, company: 0, contact: 0, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "instagram", stage: "won", value: 185000000, probability: 100, owner: "Fadel", createdDaysAgo: 60, brief: "Video profile 3 menit dengan drone dan motion graphic untuk investor relation." },
+    { title: "Animasi edukasi literasi digital", brand: unimasi.id, company: 1, contact: 1, serviceCategory: "animation", serviceName: "Animasi Pembelajaran", leadSource: "website", stage: "won", value: 320000000, probability: 100, owner: "Fadel", createdDaysAgo: 90, brief: "12 episode animasi pembelajaran literasi digital untuk siswa SMA." },
+    { title: "Dokumentasi pabrik + drone", brand: erfo.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Dokumentasi Foto/Video", leadSource: "whatsapp", stage: "negotiation", value: 96000000, probability: 60, owner: "Fadel", temperature: "hot", createdDaysAgo: 20, nextAction: "Kirim revisi penawaran final" },
+    { title: "Live streaming economic forum", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Live Streaming", leadSource: "event", stage: "proposal_sent", value: 145000000, probability: 50, owner: "Budi M. Kurniawan", createdDaysAgo: 15, nextAction: "Follow-up proposal 3 kamera" },
+    { title: "Virtual tour destinasi wisata", brand: unicam.id, company: 4, contact: 4, serviceCategory: "immersive", serviceName: "Virtual Tour", leadSource: "instagram", stage: "discovery", value: 210000000, probability: 40, owner: "Fadel", createdDaysAgo: 12, nextAction: "Jadwalkan survey lokasi" },
+    { title: "Website booking + UI/UX", brand: segia.id, company: 4, contact: 4, serviceCategory: "website", serviceName: "Web Application", leadSource: "referral", stage: "estimation", value: 165000000, probability: 45, owner: "Budi M. Kurniawan", createdDaysAgo: 18 },
+    { title: "Animasi 3D edukasi rumah sakit", brand: unimasi.id, company: 5, contact: 5, serviceCategory: "animation", serviceName: "Animasi 3D", leadSource: "email", stage: "qualified", value: 275000000, probability: 35, owner: "Fadel", createdDaysAgo: 9 },
+    { title: "Projection mapping annual night", brand: unicam.id, company: 9, contact: 9, serviceCategory: "immersive", serviceName: "Projection Mapping", leadSource: "event", stage: "connected", value: 385000000, probability: 30, owner: "Fadel", priority: "high", createdDaysAgo: 7 },
+    { title: "Video AI onboarding karyawan", brand: unicam.id, company: 7, contact: 7, serviceCategory: "video", serviceName: "AI Video Production", leadSource: "linkedin", stage: "proposal_sent", value: 88000000, probability: 55, owner: "Budi M. Kurniawan", createdDaysAgo: 22 },
+    { title: "SEO & konten digital 6 bulan", brand: segia.id, company: 2, contact: 2, serviceCategory: "digital_marketing", serviceName: "SEO Optimization", leadSource: "website", stage: "verbal_agreement", value: 120000000, probability: 85, owner: "Fadel", temperature: "hot", createdDaysAgo: 30, nextAction: "Tunggu PO resmi" },
+    { title: "Animasi sosialisasi K3", brand: unimasi.id, company: 7, contact: 7, serviceCategory: "animation", serviceName: "Video Sosialisasi", leadSource: "whatsapp", stage: "contact_attempted", value: 65000000, probability: 20, owner: "Fadel", createdDaysAgo: 4 },
+    { title: "Video profil internasional EN", brand: unicam.id, company: 8, contact: 8, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "linkedin", stage: "negotiation", value: 28000000, currency: "USD", probability: 65, owner: "Fadel", createdDaysAgo: 25 },
     { title: "Dokumentasi seminar nasional", brand: erfo.id, company: 1, contact: 10, serviceCategory: "video", serviceName: "Dokumentasi Foto/Video", leadSource: "email", stage: "new", value: 55000000, probability: 15, createdDaysAgo: 1 },
     { title: "Animasi laporan keuangan", brand: unimasi.id, company: 3, contact: 3, serviceCategory: "animation", serviceName: "Video Infografis", leadSource: "website", stage: "new", value: 72000000, probability: 15, createdDaysAgo: 2 },
     // Lost + alasan
-    { title: "Shooting iklan ramadan", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Shooting Iklan", leadSource: "referral", stage: "lost", value: 320000000, probability: 0, owner: "Andi Saputra", createdDaysAgo: 70, lostReason: "Harga terlalu tinggi", lostNotes: "Klien memilih vendor dengan harga 35% lebih rendah, kualitas set resiko.", competitor: "Kroma Pictures", lastOfferValue: 320000000 },
-    { title: "Redesign portal vendor", brand: segia.id, company: 7, contact: 7, serviceCategory: "website", serviceName: "Web Application", leadSource: "cold_outreach", stage: "lost", value: 190000000, probability: 0, owner: "Dewi Lestari", createdDaysAgo: 45, lostReason: "Ditunda internal klien", lostNotes: "Budget 2026 dialihkan ke ERP, reaktivasi awal 2026." },
-    { title: "Animasi campaign antikorupsi", brand: unimasi.id, company: 9, contact: 9, serviceCategory: "animation", serviceName: "Video Marketing", leadSource: "instagram", stage: "lost", value: 95000000, probability: 0, owner: "Andi Saputra", createdDaysAgo: 50, lostReason: "Memilih kompetitor", competitor: "Studio Animasi Nusantara", lostNotes: "Rekomendasi re-offer untuk campaign 17 Agustus." },
+    { title: "Shooting iklan ramadan", brand: erfo.id, company: 3, contact: 3, serviceCategory: "video", serviceName: "Shooting Iklan", leadSource: "referral", stage: "lost", value: 320000000, probability: 0, owner: "Fadel", createdDaysAgo: 70, lostReason: "Harga terlalu tinggi", lostNotes: "Klien memilih vendor dengan harga 35% lebih rendah, kualitas set resiko.", competitor: "Kroma Pictures", lastOfferValue: 320000000 },
+    { title: "Redesign portal vendor", brand: segia.id, company: 7, contact: 7, serviceCategory: "website", serviceName: "Web Application", leadSource: "cold_outreach", stage: "lost", value: 190000000, probability: 0, owner: "Fadel", createdDaysAgo: 45, lostReason: "Ditunda internal klien", lostNotes: "Budget 2026 dialihkan ke ERP, reaktivasi awal 2026." },
+    { title: "Animasi campaign antikorupsi", brand: unimasi.id, company: 9, contact: 9, serviceCategory: "animation", serviceName: "Video Marketing", leadSource: "instagram", stage: "lost", value: 95000000, probability: 0, owner: "Fadel", createdDaysAgo: 50, lostReason: "Memilih kompetitor", competitor: "Studio Animasi Nusantara", lostNotes: "Rekomendasi re-offer untuk campaign 17 Agustus." },
     // Nurture
-    { title: "Company profile keberlanjutan", brand: unicam.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "whatsapp", stage: "nurture", value: 155000000, probability: 25, owner: "Dewi Lestari", createdDaysAgo: 40, nurtureSegment: "budget_season", followUpDate: ahead(21) },
-    { title: "Website marketplace UMKM", brand: segia.id, company: 6, contact: 6, serviceCategory: "website", serviceName: "Website E-Commerce", leadSource: "instagram", stage: "nurture", value: 135000000, probability: 25, owner: "Andi Saputra", createdDaysAgo: 35, nurtureSegment: "reoffer_30", followUpDate: ahead(9) },
+    { title: "Company profile keberlanjutan", brand: unicam.id, company: 2, contact: 2, serviceCategory: "video", serviceName: "Corporate Video", leadSource: "whatsapp", stage: "nurture", value: 155000000, probability: 25, owner: "Fadel", createdDaysAgo: 40, nurtureSegment: "budget_season", followUpDate: ahead(21) },
+    { title: "Website marketplace UMKM", brand: segia.id, company: 6, contact: 6, serviceCategory: "website", serviceName: "Website E-Commerce", leadSource: "instagram", stage: "nurture", value: 135000000, probability: 25, owner: "Fadel", createdDaysAgo: 35, nurtureSegment: "reoffer_30", followUpDate: ahead(9) },
     // Cross-sell dari won
-    { title: "Animasi produk digital banking", brand: unimasi.id, company: 3, contact: 3, serviceCategory: "animation", serviceName: "Animasi Program/Produk", leadSource: "referral", stage: "estimation", value: 110000000, probability: 45, owner: "Dewi Lestari", createdDaysAgo: 14, brief: "Cross-sell dari Bank Berkah setelah sukses live streaming." },
+    { title: "Animasi produk digital banking", brand: unimasi.id, company: 3, contact: 3, serviceCategory: "animation", serviceName: "Animasi Program/Produk", leadSource: "referral", stage: "estimation", value: 110000000, probability: 45, owner: "Fadel", createdDaysAgo: 14, brief: "Cross-sell dari Bank Berkah setelah sukses live streaming." },
   ];
 
   const opps: Awaited<ReturnType<typeof db.opportunity.create>>[] = [];
@@ -467,8 +470,8 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     ]),
     timelineStart: ago(70), timelineEnd: ahead(30),
     budgetMin: 220000000, budgetMax: 260000000, currency: "IDR",
-    status: "approved", createdBy: "Dewi Lestari", submittedAt: ago(72),
-    approvedAt: ago(68), approvedBy: "Sari Wulandari",
+    status: "approved", createdBy: "Fadel", submittedAt: ago(72),
+    approvedAt: ago(68), approvedBy: "Andri Saputro",
     createdAt: ago(75),
   }});
   await db.clientBrief.create({ data: {
@@ -485,7 +488,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     ]),
     timelineStart: ahead(10), timelineEnd: ahead(12),
     budgetMin: 130000000, budgetMax: 160000000, currency: "IDR",
-    status: "in_review", createdBy: "Dewi Lestari", submittedAt: ago(1),
+    status: "in_review", createdBy: "Fadel", submittedAt: ago(1),
     createdAt: ago(3),
   }});
   await db.clientBrief.create({ data: {
@@ -500,7 +503,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     ]),
     timelineStart: ahead(14), timelineEnd: ahead(45),
     budgetMin: 190000000, budgetMax: 230000000, currency: "IDR",
-    status: "draft", createdBy: "Andi Saputra",
+    status: "draft", createdBy: "Fadel",
     createdAt: ago(2),
   }});
 
@@ -521,16 +524,16 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     }});
   }
 
-  await inter(0, { channel: "referral", direction: "inbound", content: "Hendra dari Nusantara Digital minta info paket redesign website korporat, direferensikan oleh Bpk. Darmawan.", sender: "Hendra Wijaya", respondedBy: "Dewi Lestari" });
-  await inter(0, { channel: "email", direction: "outbound", content: "Terima kasih Pak Hendra, kami kirimkan company deck Segia Tech dan jadwal discovery call minggu ini.", respondedBy: "Dewi Lestari" });
+  await inter(0, { channel: "referral", direction: "inbound", content: "Hendra dari Nusantara Digital minta info paket redesign website korporat, direferensikan oleh Bpk. Darmawan.", sender: "Hendra Wijaya", respondedBy: "Fadel" });
+  await inter(0, { channel: "email", direction: "outbound", content: "Terima kasih Pak Hendra, kami kirimkan company deck Segia Tech dan jadwal discovery call minggu ini.", respondedBy: "Fadel" });
   await inter(0, { channel: "meeting", direction: "inbound", content: "Discovery call 45 menit: kebutuhan CMS, multibahasa, integrasi HRIS, timeline Q2.", sender: "Tim Segia" });
-  await inter(1, { channel: "instagram", direction: "inbound", content: "DM Instagram: Kak, kami butuh video company profile untuk investor summit bulan depan. Bisa info paketnya?", sender: "hendra.wijaya", respondedBy: "Andi Saputra" });
-  await inter(2, { channel: "website", direction: "inbound", content: "Form website: Permintaan proposal animasi pembelajaran literasi digital 12 episode, anggaran APBN 2025.", sender: "Ratna Sari", subject: "Request Proposal - Website Form", respondedBy: "Dewi Lestari" });
+  await inter(1, { channel: "instagram", direction: "inbound", content: "DM Instagram: Kak, kami butuh video company profile untuk investor summit bulan depan. Bisa info paketnya?", sender: "hendra.wijaya", respondedBy: "Fadel" });
+  await inter(2, { channel: "website", direction: "inbound", content: "Form website: Permintaan proposal animasi pembelajaran literasi digital 12 episode, anggaran APBN 2025.", sender: "Ratna Sari", subject: "Request Proposal - Website Form", respondedBy: "Fadel" });
   await inter(2, { channel: "email", direction: "outbound", content: "Lampiran proposal animasi literasi digital dengan breakdown episode, timeline 4 bulan.", subject: "Proposal Animasi Pembelajaran - Unimasi" });
-  await inter(3, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: Butuh tim dokumentasi pabrik 2 hari + drone untuk laporan keberlanjutan.", sender: "Bambang Sutrisno", respondedBy: "Andi Saputra" });
-  await inter(4, { channel: "email", direction: "inbound", content: "Rundown economic forum 2 hari, est. 800 peserta. Mohon penawaran live streaming multi-kamera.", sender: "Lina Hartati", subject: "RFQ Live Streaming Economic Forum", respondedBy: "Dewi Lestari" });
-  await inter(5, { channel: "instagram", direction: "inbound", content: "DM: Minat virtual tour 360 untuk 5 destinasi wisata unggulan.", sender: "kadek.wisata", respondedBy: "Andi Saputra" });
-  await inter(8, { channel: "linkedin", direction: "inbound", content: "LinkedIn InMail:Butuh video onboarding AI presenter virtual untuk 300 karyawan baru/tahun.", sender: "Wei Ling Tan", respondedBy: "Dewi Lestari" });
+  await inter(3, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: Butuh tim dokumentasi pabrik 2 hari + drone untuk laporan keberlanjutan.", sender: "Bambang Sutrisno", respondedBy: "Fadel" });
+  await inter(4, { channel: "email", direction: "inbound", content: "Rundown economic forum 2 hari, est. 800 peserta. Mohon penawaran live streaming multi-kamera.", sender: "Lina Hartati", subject: "RFQ Live Streaming Economic Forum", respondedBy: "Fadel" });
+  await inter(5, { channel: "instagram", direction: "inbound", content: "DM: Minat virtual tour 360 untuk 5 destinasi wisata unggulan.", sender: "kadek.wisata", respondedBy: "Fadel" });
+  await inter(8, { channel: "linkedin", direction: "inbound", content: "LinkedIn InMail:Butuh video onboarding AI presenter virtual untuk 300 karyawan baru/tahun.", sender: "Wei Ling Tan", respondedBy: "Fadel" });
 
   // Lead inbox mentah (belum jadi opportunity)
   const rawLeads = [
@@ -554,44 +557,53 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
   await inter(4, { channel: "email", direction: "outbound", content: "Proposal live streaming 3 kamera + LED wall + operator, berlaku 14 hari.", subject: "Proposal Live Streaming - Erfo Multimedia" });
   await inter(6, { channel: "whatsapp", direction: "inbound", content: "Kadek kirim referensi virtual tour dari hotel kompetitor, minta yang lebih interaktif dengan hotspot info.", sender: "Kadek Adnyana" });
   await inter(9, { channel: "email", direction: "inbound", content: "Wei Ling setuju scope, nego diskon 8% untuk kontrak 2 video per tahun.", sender: "Wei Ling Tan" });
-  await inter(10, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: PO SEO bakal turun minggu ini, tolong siapkan onboarding.", sender: "Bambang Sutrisno", respondedBy: "Andi Saputra" });
+  await inter(10, { channel: "whatsapp", direction: "inbound", content: "Pak Bambang: PO SEO bakal turun minggu ini, tolong siapkan onboarding.", sender: "Bambang Sutrisno", respondedBy: "Fadel" });
 
-  // ============ TASKS ============
-  const taskSeeds = [
-    { title: "Follow-up 1: konfirmasi pesan diterima", type: "follow_up", priority: "high", assignee: "Dewi Lestari", due: ahead(1), opp: 13 },
-    { title: "Kirim portfolio animasi RS", type: "follow_up", priority: "high", assignee: "Dewi Lestari", due: ahead(0), opp: 14 },
-    { title: "Jadwalkan survey lokasi Denpasar", type: "meeting", priority: "medium", assignee: "Andi Saputra", due: ahead(3), opp: 5 },
-    { title: "Siapkan estimasi biaya virtual tour", type: "internal", priority: "high", assignee: "Maya Kusuma", due: ahead(2), opp: 5 },
-    { title: "Final revisi penawaran dokumentasi pabrik", type: "follow_up", priority: "urgent", assignee: "Andi Saputra", due: ahead(0), opp: 3 },
-    { title: "Meeting negosiasi diskon Video AI", type: "meeting", priority: "high", assignee: "Dewi Lestari", due: ahead(1), opp: 9 },
-    { title: "Tunggu & verifikasi PO SEO", type: "admin", priority: "medium", assignee: "Andi Saputra", due: ahead(5), opp: 10 },
-    { title: "Re-offer animasi K3 setelah 7 hari", type: "follow_up", priority: "low", assignee: "Dewi Lestari", due: ahead(7), opp: 11 },
-    { title: "Brief produksi: animasi literasi EP1-3", type: "internal", priority: "high", assignee: "Budi Hartono", due: ago(2), opp: 2, status: "done" },
-    { title: "Kirim invoice termin 2 website Nusantara", type: "admin", priority: "high", assignee: "Maya Kusuma", due: ahead(1), opp: 0 },
-    { title: "Follow-up ulang marketplace UMKM", type: "follow_up", priority: "medium", assignee: "Andi Saputra", due: ahead(9), opp: 19 },
-    { title: "Reaktivasi campaign antikorupsi (17 Agustus)", type: "follow_up", priority: "low", assignee: "Andi Saputra", due: ahead(45), opp: 17 },
+  // ============ TASKS (Ronde 46-b — bentuk task baru: assignees JSON multi-tag) ============
+  const taskSeeds: Array<{ title: string; type: string; priority: string; assignee: string; assignees?: string[]; due: Date; opp?: number; status?: string }> = [
+    { title: "Follow-up 1: konfirmasi pesan diterima", type: "follow_up", priority: "high", assignee: "Fadel", due: ahead(1), opp: 13 },
+    { title: "Kirim portfolio animasi RS", type: "follow_up", priority: "high", assignee: "Fadel", due: ahead(0), opp: 14 },
+    { title: "Jadwalkan survey lokasi Denpasar", type: "meeting", priority: "medium", assignee: "Fadel", due: ahead(3), opp: 5 },
+    { title: "Siapkan estimasi biaya virtual tour", type: "internal", priority: "high", assignee: "Sika", due: ahead(2), opp: 5 },
+    { title: "Final revisi penawaran dokumentasi pabrik", type: "follow_up", priority: "urgent", assignee: "Fadel", due: ahead(0), opp: 3 },
+    { title: "Meeting negosiasi diskon Video AI", type: "meeting", priority: "high", assignee: "Fadel", due: ahead(1), opp: 9 },
+    { title: "Tunggu & verifikasi PO SEO", type: "admin", priority: "medium", assignee: "Fadel", due: ahead(5), opp: 10 },
+    { title: "Re-offer animasi K3 setelah 7 hari", type: "follow_up", priority: "low", assignee: "Fadel", due: ahead(7), opp: 11 },
+    { title: "Brief produksi: animasi literasi EP1-3", type: "internal", priority: "high", assignee: "Yusi", due: ago(2), opp: 2, status: "done" },
+    { title: "Persiapan aset video episode 4-6", type: "internal", priority: "medium", assignee: "Rustam Aji", due: ahead(4), opp: 2 },
+    { title: "QC footage drone dokumentasi pabrik", type: "internal", priority: "high", assignee: "Fais", assignees: ["Fais", "Adib"], due: ahead(2), opp: 3 },
+    { title: "Draft storyboard virtual tour", type: "internal", priority: "medium", assignee: "Adib", due: ahead(5), opp: 5 },
+    { title: "Kirim invoice termin 2 website Nusantara", type: "admin", priority: "high", assignee: "Sika", due: ahead(1), opp: 0 },
+    { title: "Follow-up ulang marketplace UMKM", type: "follow_up", priority: "medium", assignee: "Fadel", due: ahead(9), opp: 19 },
+    { title: "Reaktivasi campaign antikorupsi (17 Agustus)", type: "follow_up", priority: "low", assignee: "Fadel", due: ahead(45), opp: 17 },
+    // Manajer & HR — task internal tanpa opportunity terkait
+    { title: "Review beban kerja tim produksi mingguan", type: "internal", priority: "medium", assignee: "Budi M. Kurniawan", due: ahead(3) },
+    { title: "Onboarding checklist personel baru", type: "admin", priority: "low", assignee: "Latifa", due: ahead(6) },
   ];
   for (const t of taskSeeds) {
+    const assigneeList = t.assignees ?? [t.assignee];
     await db.task.create({ data: {
-      title: t.title, type: t.type, priority: t.priority, assigneeName: t.assignee,
-      dueDate: t.due, opportunityId: opps[t.opp].id, status: t.status ?? "open",
+      title: t.title, type: t.type, priority: t.priority,
+      assignees: JSON.stringify(assigneeList),
+      assigneeName: t.assignee,
+      dueDate: t.due, opportunityId: t.opp !== undefined ? opps[t.opp].id : null, status: t.status ?? "open",
       completedAt: t.status === "done" ? ago(1) : null,
     }});
   }
 
   // ============ NOTES ============
-  await db.note.create({ data: { body: "Direktur: Nilai nego maksimal -5% dari offer terakhir. Prioritaskan closing sebelum akhir kuartal.", authorName: "Sari Wulandari", type: "director_feedback", opportunityId: opps[3].id } });
-  await db.note.create({ data: { body: "Klien sensitif harga tapi volume besar. Tawarkan paket dokumentasi 3 hari + bonus 1 hari drone.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[3].id } });
-  await db.note.create({ data: { body: "Kompetitor utama: vendor lokal Medan dengan harga murah. Kami unggul di kualitas equipment dan tim bersertifikasi.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[3].id } });
-  await db.note.create({ data: { body: "Direktur: Approve diskon 8% untuk kontrak multi-video Global EdTech. Jaga margin minimal 30%.", authorName: "Sari Wulandari", type: "director_feedback", opportunityId: opps[12].id } });
-  await db.note.create({ data: { body: "Pemerintahan: siapkan dokumen administrasi lengkap (NPWP, NIB, pengalaman kerja). Pembayaran via LS karena APBN.", authorName: "Dewi Lestari", type: "internal", opportunityId: opps[2].id } });
-  await db.note.create({ data: { body: "Cross-sell potensi animasi edukasi pasien setelah virtual tour selesai.", authorName: "Andi Saputra", type: "internal", opportunityId: opps[5].id } });
+  await db.note.create({ data: { body: "Direktur: Nilai nego maksimal -5% dari offer terakhir. Prioritaskan closing sebelum akhir kuartal.", authorName: "Andri Saputro", type: "director_feedback", opportunityId: opps[3].id } });
+  await db.note.create({ data: { body: "Klien sensitif harga tapi volume besar. Tawarkan paket dokumentasi 3 hari + bonus 1 hari drone.", authorName: "Fadel", type: "internal", opportunityId: opps[3].id } });
+  await db.note.create({ data: { body: "Kompetitor utama: vendor lokal Medan dengan harga murah. Kami unggul di kualitas equipment dan tim bersertifikasi.", authorName: "Fadel", type: "internal", opportunityId: opps[3].id } });
+  await db.note.create({ data: { body: "Direktur: Approve diskon 8% untuk kontrak multi-video Global EdTech. Jaga margin minimal 30%.", authorName: "Andri Saputro", type: "director_feedback", opportunityId: opps[12].id } });
+  await db.note.create({ data: { body: "Pemerintahan: siapkan dokumen administrasi lengkap (NPWP, NIB, pengalaman kerja). Pembayaran via LS karena APBN.", authorName: "Fadel", type: "internal", opportunityId: opps[2].id } });
+  await db.note.create({ data: { body: "Cross-sell potensi animasi edukasi pasien setelah virtual tour selesai.", authorName: "Fadel", type: "internal", opportunityId: opps[5].id } });
 
   // ============ PROJECTS dari Won ============
   const wonDefs = [
-    { opp: 0, code: "SGT-2025-001", name: "Redesign Website PT Nusantara Digital Raya", pm: "Budi Hartono", progress: 72, status: "in_progress", category: "website", start: ago(50), due: ahead(20) },
-    { opp: 1, code: "UCS-2025-014", name: "Corporate Video Nusantara 2025", pm: "Budi Hartono", progress: 45, status: "in_progress", category: "video", start: ago(30), due: ahead(25) },
-    { opp: 2, code: "UMS-2025-007", name: "Animasi Edukasi Literasi Digital 12 Episode", pm: "Budi Hartono", progress: 88, status: "review", category: "animation", start: ago(80), due: ahead(10) },
+    { opp: 0, code: "SGT-2025-001", name: "Redesign Website PT Nusantara Digital Raya", pm: "Budi M. Kurniawan", progress: 72, status: "in_progress", category: "website", start: ago(50), due: ahead(20) },
+    { opp: 1, code: "UCS-2025-014", name: "Corporate Video Nusantara 2025", pm: "Budi M. Kurniawan", progress: 45, status: "in_progress", category: "video", start: ago(30), due: ahead(25) },
+    { opp: 2, code: "UMS-2025-007", name: "Animasi Edukasi Literasi Digital 12 Episode", pm: "Budi M. Kurniawan", progress: 88, status: "review", category: "animation", start: ago(80), due: ahead(10) },
   ];
   for (const w of wonDefs) {
     const opp = opps[w.opp];
@@ -650,7 +662,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     revenue: vtRevenue, discountAmount: 0, netRevenue: vtRevenue, taxAmount: Math.round(vtRevenue * 0.11),
     grandTotal: Math.round(vtRevenue * 1.11), margin: vtMargin,
     marginPct: Math.round((vtMargin / vtRevenue) * 1000) / 10,
-    status: "draft", createdBy: "Andi Saputra",
+    status: "draft", createdBy: "Fadel",
     notes: "Survey 5 lokasi, kamera 360 + drone, hosting tour 1 tahun.",
   }});
 
@@ -671,13 +683,13 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     revenue: lsRevenue, discountAmount: lsDiscount, netRevenue: lsNet,
     taxAmount: Math.round(lsNet * 0.11), grandTotal: Math.round(lsNet * 1.11), margin: lsMargin,
     marginPct: Math.round((lsMargin / lsNet) * 1000) / 10,
-    status: "pending_approval", createdBy: "Dewi Lestari",
+    status: "pending_approval", createdBy: "Fadel",
     notes: "Diskon 8% untuk event 2 hari — butuh approval Direktur karena margin di bawah target.",
   }});
   await db.approvalRequest.create({ data: {
     entityType: "estimation", entityId: estLs.id,
     entityLabel: "Estimasi — Live streaming economic forum",
-    opportunityId: oppLs.id, requestedBy: "Dewi Lestari",
+    opportunityId: oppLs.id, requestedBy: "Fadel",
     amount: Math.round(lsNet * 1.11), discountPct: 8,
     note: "Margin " + (Math.round((lsMargin / lsNet) * 1000) / 10) + "% (di bawah target 30%) karena kompetitif. Mohon persetujuan diskon 8%.",
   }});
@@ -729,15 +741,15 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
       description: "Invoice tambahan — Change Request CR-2026-0001: Tambahan 3 episode subtitle bilingual",
       amount: 12000000, taxRate: 11, taxAmount: cr1Tax, total: 12000000 + cr1Tax,
       currency: "IDR", status: "sent", issueDate: ago(6), dueDate: ahead(8),
-      notes: "Dibuat otomatis dari change request CR-2026-0001 (disetujui oleh Sari Wulandari)",
+      notes: "Dibuat otomatis dari change request CR-2026-0001 (disetujui oleh Andri Saputro)",
     }});
     const cr1 = await db.changeRequest.create({ data: {
       number: "CR-2026-0001", projectId: projUms.id,
       title: "Tambahan 3 episode subtitle bilingual",
       description: "Klien meminta 3 episode tambahan subtitle bahasa Inggris + Spain untuk distribusi internasional. Menambah beban translation & QC 3 hari kerja.",
       additionalCost: 12000000, additionalDays: 5,
-      status: "approved", requestedBy: "Budi Hartono",
-      decidedBy: "Sari Wulandari", decidedAt: ago(6),
+      status: "approved", requestedBy: "Yusi",
+      decidedBy: "Andri Saputro", decidedAt: ago(6),
       decisionNote: "Disetujui via email klien (Kemdikbud). Invoice tambahan diterbitkan.",
       invoiceId: cr1Invoice.id,
     }});
@@ -749,7 +761,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
       title: "Tambahan versi bahasa Inggris video corporate",
       description: "PT Nusantara Digital Raya meminta narasi & grafis versi bahasa Inggris untuk pemirsa regional. Menambah voice over EN + 2 hari editing.",
       additionalCost: 18500000, additionalDays: 7,
-      status: "pending", requestedBy: "Budi Hartono",
+      status: "pending", requestedBy: "Yusi",
     }});
   }
 
@@ -764,13 +776,13 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
 
   // ============ AUDIT LOGS ============
   const auditSeeds = [
-    { actor: "Rian Pratama", role: "super_admin", action: "create", entity: "brand", label: "Unicam Studio", meta: "Konfigurasi brand baru dengan SLA 8 jam" },
-    { actor: "Dewi Lestari", role: "marketing", action: "convert", entity: "opportunity", label: "Animasi edukasi literasi digital", meta: "Konversi dari lead website form" },
-    { actor: "Sari Wulandari", role: "director", action: "stage_change", entity: "opportunity", label: "Dokumentasi pabrik + drone", field: "stage", oldValue: "estimation", newValue: "negotiation" },
-    { actor: "Maya Kusuma", role: "finance", action: "create", entity: "invoice", label: "SGT-2025-INV-002", meta: "Termin 2 (40%) - Milestone Development" },
-    { actor: "Andi Saputra", role: "marketing", action: "update", entity: "opportunity", label: "Video AI onboarding karyawan", field: "estimatedValue", oldValue: "95000000", newValue: "88000000" },
-    { actor: "Andi Saputra", role: "marketing", action: "stage_change", entity: "opportunity", label: "Animasi campaign antikorupsi", field: "lostReason", oldValue: null, newValue: "Memilih kompetitor" },
-    { actor: "Budi Hartono", role: "production", action: "create", entity: "change_request", label: "CR-2026-0002 — Tambahan versi bahasa Inggris video corporate", meta: "Change request +Rp 18.500.000, +7 hari — menunggu persetujuan klien" },
+    { actor: "Andri Saputro", role: "director", action: "create", entity: "brand", label: "Unicam Studio", meta: "Konfigurasi brand baru dengan SLA 8 jam" },
+    { actor: "Fadel", role: "marketing", action: "convert", entity: "opportunity", label: "Animasi edukasi literasi digital", meta: "Konversi dari lead website form" },
+    { actor: "Andri Saputro", role: "director", action: "stage_change", entity: "opportunity", label: "Dokumentasi pabrik + drone", field: "stage", oldValue: "estimation", newValue: "negotiation" },
+    { actor: "Sika", role: "finance", action: "create", entity: "invoice", label: "SGT-2025-INV-002", meta: "Termin 2 (40%) - Milestone Development" },
+    { actor: "Fadel", role: "marketing", action: "update", entity: "opportunity", label: "Video AI onboarding karyawan", field: "estimatedValue", oldValue: "95000000", newValue: "88000000" },
+    { actor: "Fadel", role: "marketing", action: "stage_change", entity: "opportunity", label: "Animasi campaign antikorupsi", field: "lostReason", oldValue: null, newValue: "Memilih kompetitor" },
+    { actor: "Yusi", role: "production", action: "create", entity: "change_request", label: "CR-2026-0002 — Tambahan versi bahasa Inggris video corporate", meta: "Change request +Rp 18.500.000, +7 hari — menunggu persetujuan klien" },
   ];
   for (let i = 0; i < auditSeeds.length; i++) {
     const a = auditSeeds[i];
@@ -784,7 +796,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
   }
 
   const counts = {
-    brands: 4, users: 7, companies: companies.length, contacts: contacts.length,
+    brands: 4, users: 9, companies: companies.length, contacts: contacts.length,
     opportunities: opps.length, projects: wonDefs.length, invoices: invDefs.length + 1,
     changeRequests: 2,
   };

@@ -78,7 +78,7 @@ export function QuotationPrintArea({ quotation: q, brand }: { quotation: Quotati
             ) : null}
             <div>
               <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
-                {brand?.name ?? "Grup Agensi Kreatif"}
+                {brand?.name ?? "UDP"}
               </p>
               {brand?.tagline ? <p className="text-xs italic text-zinc-600">{brand.tagline}</p> : null}
               {brand?.address || brand?.city ? (

@@ -1,13 +1,13 @@
 import type { MetadataRoute } from "next";
 
 /**
- * Ronde 46 — PWA Manifest: Grup CRM dapat dipasang (installable) di
+ * Ronde 46 — PWA Manifest: UDP CRM dapat dipasang (installable) di
  * Android/iOS/desktop sebagai aplikasi standalone.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Grup CRM — Multi-Brand Creative Agency Platform",
-    short_name: "Grup CRM",
+    name: "UDP CRM — Multi-Brand Creative Agency Platform",
+    short_name: "UDP CRM",
     description:
       "Multi-brand CRM, sales pipeline, finance, project production & client portal untuk Unimasi, Segia Tech, Erfo Multimedia, dan Unicam Studio.",
     id: "/",

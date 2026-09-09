@@ -989,7 +989,7 @@ function ClientWelcome({ onOpen }: { onOpen: (m: ModuleKey) => void }) {
   return (
     <section aria-label="Selamat datang klien" className="rounded-xl border bg-white p-8 text-center shadow-sm">
       <UserCheck className="mx-auto h-10 w-10 text-orange-500" aria-hidden />
-      <h2 className="mt-3 text-lg font-bold text-zinc-900">Selamat datang di Grup CRM</h2>
+      <h2 className="mt-3 text-lg font-bold text-zinc-900">Selamat datang di UDP CRM</h2>
       <p className="mx-auto mt-1 max-w-md text-sm text-zinc-500">
         Akun klien diproses lewat Portal Klien — di sana Anda bisa meninjau deliverable, memberi persetujuan, dan mengajukan change request.
       </p>

@@ -5,9 +5,9 @@ import { resolveActor, assertRole, hashSecret } from "@/lib/crm/auth";
 import { ROLES } from "@/lib/crm/constants";
 
 /**
- * Ronde 46 — kelola satu pengguna (hanya super_admin; audit per perubahan).
+ * Ronde 46 — kelola satu pengguna (super_admin/direktur; audit per perubahan).
  * PATCH: name/role/avatarColor/phone/brandAccess/active + reset password/pin.
- * Proteksi: super_admin tidak bisa menonaktifkan/menurunkan dirinya sendiri
+ * Proteksi: admin tidak bisa menonaktifkan/menurunkan dirinya sendiri
  * (mencegah terkunci dari sistem tanpa admin lain).
  */
 const VALID_ROLES = new Set<string>(ROLES.map((r) => r.key));
@@ -18,7 +18,8 @@ export async function PATCH(
 ) {
   const actor = await resolveActor(req);
   if (actor.denied) return fail(actor.reason, 401);
-  const gate = assertRole(actor, ["super_admin"]);
+  // Ronde 46-b — direktur ikut mengelola pengguna (tim UDP tanpa super_admin khusus).
+  const gate = assertRole(actor, ["super_admin", "director"]);
   if (!gate.ok) return fail(gate.reason, 403);
 
   const { id } = await params;
@@ -35,7 +36,7 @@ export async function PATCH(
   }
   if (typeof body.role === "string" && body.role !== target.role) {
     if (!VALID_ROLES.has(body.role)) return fail("Peran tidak dikenal", 400);
-    if (target.id === actor.id) return fail("Tidak bisa menurunkan peran akun sendiri — minta super_admin lain", 400);
+    if (target.id === actor.id) return fail("Tidak bisa menurunkan peran akun sendiri — minta admin lain", 400);
     data.role = body.role;
     changes.push(`peran → ${body.role}`);
   }

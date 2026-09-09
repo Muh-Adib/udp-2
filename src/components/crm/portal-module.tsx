@@ -87,6 +87,8 @@ function reviewerRoleLabel(role?: string | null): string {
   switch (role) {
     case "production": return "Produksi";
     case "director": return "Direktur";
+    case "manager": return "Manajer";
+    case "hr": return "HR";
     case "super_admin": return "Super Admin";
     case "client": return "Klien";
     default: return role ?? "";

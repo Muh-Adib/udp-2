@@ -26,9 +26,9 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: "Grup CRM", body: event.data ? event.data.text() : "" };
+    data = { title: "UDP CRM", body: event.data ? event.data.text() : "" };
   }
-  const title = data.title || "Grup CRM";
+  const title = data.title || "UDP CRM";
   const options = {
     body: data.body || "",
     tag: data.tag || undefined,
@@ -65,7 +65,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request).catch(() =>
         new Response(
-          "<!doctype html><html lang=\"id\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Grup CRM — Offline</title><style>body{font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#fafafa;color:#3f3f46;margin:0}</style></head><body><main style=\"text-align:center\"><div style=\"font-size:40px\">📡</div><h1 style=\"font-size:18px;margin:8px 0\">Anda sedang offline</h1><p style=\"font-size:14px;color:#71717a;margin:0\">Sambungkan internet lalu muat ulang untuk membuka Grup CRM.</p></main></body></html>",
+          "<!doctype html><html lang=\"id\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>UDP CRM — Offline</title><style>body{font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#fafafa;color:#3f3f46;margin:0}</style></head><body><main style=\"text-align:center\"><div style=\"font-size:40px\">📡</div><h1 style=\"font-size:18px;margin:8px 0\">Anda sedang offline</h1><p style=\"font-size:14px;color:#71717a;margin:0\">Sambungkan internet lalu muat ulang untuk membuka UDP CRM.</p></main></body></html>",
           { headers: { "Content-Type": "text/html; charset=utf-8" } }
         )
       )

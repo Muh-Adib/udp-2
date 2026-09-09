@@ -11,6 +11,10 @@ import { logAudit } from "@/lib/crm/server";
  *   sweep melewati lead yang sudah punya task open dengan marker itu.
  * - Throttle in-memory: sweep paling sering 1x per 5 menit per proses
  *   (dipicu dari GET /api/inbox dan GET /api/dashboard).
+ * - Ronde 46-b — bentuk task baru: multi-assignee (JSON `assignees`, assignee
+ *   utama = assignees[0]) dan penerima eskalasi BUKAN nama hardcoded
+ *   "Direktur", melainkan user ber-role director yang aktif dari DB —
+ *   sehingga push notifikasi (nama → email) benar-benar sampai.
  * - return: jumlah task eskalasi yang dibuat pada sweep ini.
  */
 
@@ -56,6 +60,13 @@ export async function runSlaSweep(req?: NextRequest): Promise<number> {
   );
 
   let created = 0;
+  // Ronde 46-b — penanggung jawab eskalasi = Direktur aktif dari DB (RBAC, bukan hardcode).
+  const director = await db.user.findFirst({
+    where: { role: "director", active: true },
+    orderBy: { createdAt: "asc" },
+    select: { name: true },
+  });
+  const escalationOwner = director?.name ?? "Direktur";
   for (const lead of staleLeads) {
     if (escalated.has(lead.id)) continue;
     const sla = slaByBrand.get(lead.brandId ?? "") ?? 4;
@@ -75,7 +86,9 @@ export async function runSlaSweep(req?: NextRequest): Promise<number> {
         type: "internal",
         priority: "urgent",
         status: "open",
-        assigneeName: "Direktur",
+        // Ronde 46-b — bentuk task baru: assignees JSON multi-tag + assignee utama = assignees[0]
+        assignees: JSON.stringify([escalationOwner]),
+        assigneeName: escalationOwner,
         dueDate: new Date(now + 2 * 3600_000),
       },
     });

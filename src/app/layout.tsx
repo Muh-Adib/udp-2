@@ -14,14 +14,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Grup CRM — Multi-Brand Creative Agency Platform",
+  title: "UDP CRM — Multi-Brand Creative Agency Platform",
   description: "Multi-brand CRM, sales pipeline, finance, project production & client portal untuk Unimasi, Segia Tech, Erfo Multimedia, dan Unicam Studio.",
   keywords: ["CRM", "multi-brand", "sales pipeline", "creative agency", "Indonesia"],
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Grup CRM",
+    title: "UDP CRM",
   },
   icons: {
     icon: [

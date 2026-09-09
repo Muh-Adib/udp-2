@@ -273,9 +273,9 @@ export default function AppShell() {
         aria-label="Sidebar"
       >
         <div className={cn("flex items-center gap-2.5 px-4 py-4", collapsed && "justify-center px-2")}>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>G</div>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>U</div>
           <div className={cn("min-w-0", collapsed && "hidden")}>
-            <p className="truncate text-sm font-bold text-zinc-50">Grup CRM</p>
+            <p className="truncate text-sm font-bold text-zinc-50">UDP CRM</p>
             <p className="truncate text-[10px] text-zinc-500">Multi-Brand Platform</p>
           </div>
         </div>
@@ -307,7 +307,7 @@ export default function AppShell() {
               </SheetTrigger>
               <SheetContent side="left" className="w-72 bg-zinc-950 p-0 text-zinc-50 [&>button]:text-zinc-400">
                 <SheetHeader className="border-b border-zinc-800 px-4 py-4 text-left">
-                  <SheetTitle className="text-sm text-zinc-50">Grup CRM</SheetTitle>
+                  <SheetTitle className="text-sm text-zinc-50">UDP CRM</SheetTitle>
                 </SheetHeader>
                 <SidebarNav onNavigate={() => setMobileOpen(false)} />
                 <BrandStrip />
@@ -432,7 +432,7 @@ export default function AppShell() {
         <footer className="mt-auto border-t border-zinc-200 bg-white">
           <div className="flex flex-col items-center justify-between gap-1.5 px-4 py-3 text-center sm:flex-row sm:text-left lg:px-6" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
             <p className="text-xs text-zinc-500">
-              © 2026 Grup Agensi Kreatif — <span className="font-medium text-zinc-700">Unimasi</span> · <span className="font-medium text-zinc-700">Segia Tech</span> · <span className="font-medium text-zinc-700">Erfo Multimedia</span> · <span className="font-medium text-zinc-700">Unicam Studio</span>
+              © 2026 UDP — <span className="font-medium text-zinc-700">Unimasi</span> · <span className="font-medium text-zinc-700">Segia Tech</span> · <span className="font-medium text-zinc-700">Erfo Multimedia</span> · <span className="font-medium text-zinc-700">Unicam Studio</span>
             </p>
             <p className="text-[11px] text-zinc-400">Multi-Brand CRM v1.0 · Audit log aktif</p>
           </div>

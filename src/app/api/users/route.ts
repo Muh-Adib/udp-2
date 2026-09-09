@@ -8,7 +8,8 @@ import { ROLES } from "@/lib/crm/constants";
  * Ronde 46 — MANAJEMEN PENGGUNA NYATA (RBAC dari DB, bukan hardcode).
  * GET   → daftar pengguna (semua yang login; tanpa hash).
  * POST  → buat pengguna + kredensial (password & PIN di-hash scrypt) —
- *         hanya super_admin (assertRole, mirror matriks role).
+ *         hanya super_admin/direktur (assertRole; tim UDP tidak punya
+ *         super_admin khusus — direktur pemilik sistem, Ronde 46-b).
  */
 
 const VALID_ROLES = new Set<string>(ROLES.map((r) => r.key));
@@ -46,7 +47,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const actor = await resolveActor(req);
   if (actor.denied) return fail(actor.reason, 401);
-  const gate = assertRole(actor, ["super_admin"]);
+  // Ronde 46-b — direktur ikut mengelola pengguna (tim UDP tidak punya super_admin khusus).
+  const gate = assertRole(actor, ["super_admin", "director"]);
   if (!gate.ok) return fail(gate.reason, 403);
 
   const body = await readBody(req);

@@ -32,6 +32,8 @@ import { initials } from "@/lib/crm/utils";
 const ROLE_BADGE: Record<string, string> = {
   super_admin: "bg-zinc-900 text-zinc-50",
   director: "bg-amber-100 text-amber-700",
+  manager: "bg-teal-100 text-teal-700",
+  hr: "bg-purple-100 text-purple-700",
   marketing: "bg-rose-100 text-rose-600",
   finance: "bg-cyan-100 text-cyan-700",
   production: "bg-lime-100 text-lime-700",
@@ -174,7 +176,7 @@ function UserDialog({
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="u-email">Email {isEdit && <span className="text-xs text-zinc-400">(tetap)</span>}</Label>
-              <Input id="u-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nama@grup.co.id" disabled={isEdit} />
+              <Input id="u-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nama@udp.co.id" disabled={isEdit} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="u-phone">Telepon (opsional)</Label>
@@ -228,7 +230,8 @@ function UserDialog({
 
 export default function UsersModule() {
   const me = useCrmStore((s) => s.user);
-  const isSuperAdmin = me?.role === "super_admin";
+  // Ronde 46-b — manajemen user: super_admin ATAU direktur (tim UDP tanpa super_admin khusus).
+  const isSuperAdmin = me?.role === "super_admin" || me?.role === "director";
   const [users, setUsers] = useState<UserAdminRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -186,6 +186,11 @@ export async function handleWonTransition(oppId: string) {
       code = `${prefix}-${year}-${String(counter).padStart(3, "0")}`;
     }
 
+    // Ronde 46-b — PM default = Manajer aktif dari DB (fallback Direktur) — bukan nama hardcoded.
+    const defaultManager =
+      (await tx.user.findFirst({ where: { role: "manager", active: true }, orderBy: { createdAt: "asc" }, select: { name: true } }))
+      ?? (await tx.user.findFirst({ where: { role: "director", active: true }, orderBy: { createdAt: "asc" }, select: { name: true } }));
+
     const project = await tx.project.create({
       data: {
         code,
@@ -196,7 +201,7 @@ export async function handleWonTransition(oppId: string) {
         serviceCategory: opp.serviceCategory,
         status: "planning",
         progress: 0,
-        pmName: "Budi Hartono",
+        pmName: defaultManager?.name ?? "Manajer",
         startDate: new Date(),
         dueDate: opp.targetDeadline ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
         contractValue,

@@ -79,6 +79,8 @@ export const LEAD_SOURCES = [
 export const ROLES = [
   { key: "super_admin", label: "Super Admin", description: "Brand, user, role, permission, pipeline, template, integrasi, master data, audit log" },
   { key: "director", label: "Direktur", description: "Semua dashboard, revenue forecast, pipeline, workload, approval" },
+  { key: "manager", label: "Manajer", description: "Pantauan tim & SLA, pipeline, proyek produksi, laporan — tanpa keuangan" },
+  { key: "hr", label: "HR", description: "Data pengguna & beban kerja tim, tugas internal" },
   { key: "marketing", label: "Marketing", description: "Lead inbox, contact, opportunity, komunikasi, follow-up, proposal" },
   { key: "finance", label: "Keuangan", description: "Estimasi, budget, quotation, pajak, invoice, pembayaran, profitability" },
   { key: "production", label: "Produksi", description: "Brief, scope, resource planning, timeline, milestone, task, deliverable" },

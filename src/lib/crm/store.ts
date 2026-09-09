@@ -10,18 +10,18 @@ export type ModuleKey =
   | "finance" | "reports" | "projects" | "portal" | "channels" | "brands" | "users" | "audit";
 
 export const MODULE_META: Record<ModuleKey, { label: string; description: string; roles: string[] }> = {
-  dashboard: { label: "Command Center", description: "Dashboard eksekutif lintas brand", roles: ["super_admin", "director", "marketing", "finance", "production"] },
-  inbox: { label: "Lead Inbox", description: "Semua lead baru lintas kanal", roles: ["super_admin", "director", "marketing"] },
-  contacts: { label: "Contacts & Companies", description: "Identitas calon klien global", roles: ["super_admin", "director", "marketing", "finance"] },
-  pipeline: { label: "Sales Pipeline", description: "Kanban & tabel opportunity", roles: ["super_admin", "director", "marketing", "finance"] },
-  followups: { label: "Follow-up", description: "Task & jadwal follow-up", roles: ["super_admin", "director", "marketing", "production"] },
+  dashboard: { label: "Command Center", description: "Dashboard eksekutif lintas brand", roles: ["super_admin", "director", "manager", "hr", "marketing", "finance", "production"] },
+  inbox: { label: "Lead Inbox", description: "Semua lead baru lintas kanal", roles: ["super_admin", "director", "manager", "marketing"] },
+  contacts: { label: "Contacts & Companies", description: "Identitas calon klien global", roles: ["super_admin", "director", "manager", "marketing", "finance"] },
+  pipeline: { label: "Sales Pipeline", description: "Kanban & tabel opportunity", roles: ["super_admin", "director", "manager", "marketing", "finance"] },
+  followups: { label: "Follow-up", description: "Task & jadwal follow-up", roles: ["super_admin", "director", "manager", "hr", "marketing", "production"] },
   finance: { label: "Finance", description: "Invoice, pembayaran, aging receivable", roles: ["super_admin", "director", "finance"] },
-  reports: { label: "Laporan", description: "Laporan kinerja lintas brand & ekspor CSV", roles: ["super_admin", "director", "finance", "marketing"] },
-  projects: { label: "Projects", description: "Produksi setelah deal berhasil", roles: ["super_admin", "director", "production", "marketing"] },
+  reports: { label: "Laporan", description: "Laporan kinerja lintas brand & ekspor CSV", roles: ["super_admin", "director", "manager", "finance", "marketing"] },
+  projects: { label: "Projects", description: "Produksi setelah deal berhasil", roles: ["super_admin", "director", "manager", "production", "marketing"] },
   portal: { label: "Client Portal", description: "Tampilan terbatas untuk klien", roles: ["super_admin", "director", "client"] },
   channels: { label: "Saluran & Integrasi", description: "Hubungkan WhatsApp, Instagram, & Email", roles: ["super_admin", "director"] },
   brands: { label: "Brand Configuration", description: "Konfigurasi brand tanpa ubah source code", roles: ["super_admin", "director"] },
-  users: { label: "User & Access", description: "Role dan permission", roles: ["super_admin", "director"] },
+  users: { label: "User & Access", description: "Role dan permission", roles: ["super_admin", "director", "hr"] },
   audit: { label: "Audit Logs", description: "Siapa mengubah apa, kapan, dari mana", roles: ["super_admin", "director"] },
 };
 
@@ -69,7 +69,7 @@ export const useCrmStore = create<CrmState>()(
         }
       },
     }),
-    { name: "grupcrm-session", partialize: (s) => ({ user: s.user }) }
+    { name: "udp-crm-session", partialize: (s) => ({ user: s.user }) }
   )
 );
 

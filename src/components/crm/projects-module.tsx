@@ -194,6 +194,8 @@ function reviewerRoleLabel(role?: string | null): string {
   switch (role) {
     case "production": return "Produksi";
     case "director": return "Direktur";
+    case "manager": return "Manajer";
+    case "hr": return "HR";
     case "super_admin": return "Super Admin";
     case "client": return "Klien";
     default: return role ?? "";
@@ -2997,7 +2999,7 @@ export default function ProjectsModule() {
                 id="np-pm"
                 value={npPmName}
                 onChange={(e) => setNpPmName(e.target.value)}
-                placeholder="Contoh: Budi Hartono"
+                placeholder="Contoh: Budi M. Kurniawan"
                 aria-label="Nama project manager"
               />
             </div>

@@ -14,18 +14,21 @@ import { initials } from "@/lib/crm/utils";
 import { toast } from "sonner";
 import { LogIn, Lock, Loader2, Sparkles, ShieldCheck, KeyRound } from "lucide-react";
 
+/** Ronde 46-b — tim UDP: 9 akun nyata (email @udp.co.id), login PASSWORD + PIN kunci layar. */
 const DEMO_USERS = [
-  { email: "rian@grup.co.id", role: "super_admin" },
-  { email: "sari@grup.co.id", role: "director" },
-  { email: "dewi@grup.co.id", role: "marketing" },
-  { email: "andi@grup.co.id", role: "marketing" },
-  { email: "maya@grup.co.id", role: "finance" },
-  { email: "budi@grup.co.id", role: "production" },
-  { email: "hendra@nusantaranet.com", role: "client" },
+  { email: "andri@udp.co.id", role: "director" },
+  { email: "budi@udp.co.id", role: "manager" },
+  { email: "yusi@udp.co.id", role: "production" },
+  { email: "rustam@udp.co.id", role: "production" },
+  { email: "fais@udp.co.id", role: "production" },
+  { email: "adib@udp.co.id", role: "production" },
+  { email: "sika@udp.co.id", role: "finance" },
+  { email: "latifa@udp.co.id", role: "hr" },
+  { email: "fadel@udp.co.id", role: "marketing" },
 ];
 
 /** Ronde 46 — kredensial demo terpadu (password login + PIN kunci layar). */
-const DEMO_PASSWORD = "grup1234";
+const DEMO_PASSWORD = "udp1234";
 const DEMO_PIN = "1234";
 
 function roleLabel(role: string) {
@@ -35,7 +38,7 @@ function roleLabel(role: string) {
 export default function LoginScreen() {
   const setUser = useCrmStore((s) => s.setUser);
   const [users, setUsers] = useState<{ id: string; name: string; email: string; role: string; avatarColor: string }[]>([]);
-  const [email, setEmail] = useState("sari@grup.co.id");
+  const [email, setEmail] = useState("andri@udp.co.id");
   const [password, setPassword] = useState(DEMO_PASSWORD);
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
@@ -79,9 +82,9 @@ export default function LoginScreen() {
         <div className="absolute bottom-0 left-0 h-64 w-64 rounded-full bg-violet-600/10 blur-3xl" aria-hidden />
         <div className="relative">
           <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-orange-500 to-rose-600 flex items-center justify-center font-black text-lg">G</div>
+            <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-orange-500 to-rose-600 flex items-center justify-center font-black text-lg">U</div>
             <div>
-              <p className="font-bold text-lg leading-tight">Grup CRM</p>
+              <p className="font-bold text-lg leading-tight">UDP CRM</p>
               <p className="text-xs text-zinc-400">Multi-Brand Creative Agency Platform</p>
             </div>
           </div>
@@ -110,7 +113,7 @@ export default function LoginScreen() {
           </div>
         </div>
         <p className="relative mt-10 text-xs text-zinc-600">
-          © 2026 Grup Agensi Kreatif · Data komunikasi &amp; keuangan dilindungi audit log immutable
+          © 2026 UDP · Data komunikasi &amp; keuangan dilindungi audit log immutable
         </p>
       </div>
 
@@ -138,7 +141,7 @@ export default function LoginScreen() {
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@grup.co.id" required autoComplete="username" className="h-12" />
+                    <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@udp.co.id" required autoComplete="username" className="h-12" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="password">Password</Label>

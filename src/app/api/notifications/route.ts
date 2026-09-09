@@ -19,7 +19,7 @@ import type { NotificationDTO, NotificationSeverity } from "@/lib/crm/types";
 const SEVERITY_RANK: Record<NotificationSeverity, number> = { danger: 0, warning: 1, info: 2 };
 
 const DECIDER_ROLES = new Set(["director", "super_admin"]);
-const OPS_ROLES = new Set(["director", "super_admin", "production"]);
+const OPS_ROLES = new Set(["director", "super_admin", "manager", "production"]);
 const FINANCE_ROLES = new Set(["director", "super_admin", "finance"]);
 const MARKETING_ROLES = new Set(["director", "super_admin", "marketing"]);
 
@@ -367,6 +367,9 @@ export async function GET(req: NextRequest) {
       marketing: ["opportunity", "brief", "quotation", "contact", "company", "task", "interaction", "user"],
       finance: ["invoice", "quotation", "approval", "estimation", "payment", "project"],
       production: ["project", "task", "change_request", "brief", "milestone", "opportunity"],
+      // Ronde 46-b — role baru tim UDP:
+      manager: ["opportunity", "brief", "quotation", "invoice", "project", "task", "change_request", "contact", "company", "interaction", "milestone"],
+      hr: ["user", "task", "project", "opportunity"],
     };
     const interesting = DECIDER_ROLES.has(role)
       ? null // semua entitas
