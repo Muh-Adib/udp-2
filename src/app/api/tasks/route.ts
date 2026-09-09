@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, dateOrNull } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 import { parseTaskAssignees, parseTaskAttachments } from "@/lib/crm/task-parse";
+import { sendPushToUserKeys } from "@/lib/crm/push";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -73,5 +74,22 @@ export async function POST(req: NextRequest) {
     actorName: actor.name, actorRole: actor.role,
     action: "create", entity: "task", entityId: task.id, entityLabel: task.title, req,
   });
+  // Ronde 46 — push ke SEMUA assignee (nama → email di tabel User) kecuali pembuat.
+  if (assignees.length > 0) {
+    const users = await db.user.findMany({
+      where: { name: { in: assignees }, active: true },
+      select: { name: true, email: true },
+    });
+    const keys = users.map((u) => u.email).filter((e) => e && e !== actor.email);
+    if (keys.length > 0) {
+      void sendPushToUserKeys(keys, {
+        title: `Tugas baru untuk Anda: ${task.title.slice(0, 60)}`,
+        body: `${actor.name} menugaskan Anda${task.dueDate ? ` — tenggat ${task.dueDate.toLocaleDateString("id-ID", { day: "numeric", month: "short" })}` : ""}`.slice(0, 140),
+        url: "/?modul=followups",
+        tag: `task:${task.id}`,
+        type: "activity",
+      });
+    }
+  }
   return ok({ task }, 201);
 }

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, readBody, logAudit, numOrNull, pageLimit, fail, dateOrNull, isUniqueViolation } from "@/lib/crm/server";
 import { resolveActor, assertRole } from "@/lib/crm/auth";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -102,6 +103,14 @@ export async function POST(req: NextRequest) {
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "status", oldValue: "draft", newValue: "sent", req,
     });
+    // Ronde 46 — push: invoice dikirim ke klien → pimpinan ikut tahu.
+    void sendPushToRoles(["director", "super_admin"], {
+      title: `Invoice ${updated.number} dikirim`,
+      body: `${actor.name} mengirim tagihan ${updated.number} — ${updated.description ?? ""}`.slice(0, 140),
+      url: "/?modul=finance",
+      tag: `invoice:${updated.id}`,
+      type: "activity",
+    }, actor.name);
     return ok({ invoice: updated });
   }
   // Batalkan invoice
@@ -190,6 +199,14 @@ export async function POST(req: NextRequest) {
       newValue: `Invoice ${description} · ${amount}${taxRate ? ` + PPN ${taxRate}%` : ""} untuk project ${project.code}`,
       req,
     });
+    // Ronde 46 — push: invoice diterbitkan → pimpinan menerima notifikasi.
+    void sendPushToRoles(["director", "super_admin"], {
+      title: `Invoice ${invoice.number} diterbitkan`,
+      body: `${actor.name} menerbitkan tagihan ${description.slice(0, 80)} · ${amount + taxAmount}`.slice(0, 140),
+      url: "/?modul=finance",
+      tag: `invoice:${invoice.id}`,
+      type: "activity",
+    }, actor.name);
     return ok({ invoice }, 201);
   }
   return ok({ error: "Unknown action" }, 400);

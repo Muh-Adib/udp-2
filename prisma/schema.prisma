@@ -55,7 +55,8 @@ model User {
   name        String
   email       String   @unique
   role        String   @default("marketing") // super_admin, director, marketing, finance, production, client
-  pin         String   @default("1234")
+  pin         String   @default("1234") // PIN untuk membuka kunci layar sesi (scrypt)
+  password    String? // hash scrypt password login (null = akun legacy, login via PIN)
   avatarColor String   @default("#f97316")
   phone       String?
   active      Boolean  @default(true)

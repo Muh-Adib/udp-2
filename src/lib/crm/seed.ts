@@ -1,4 +1,9 @@
 import { db } from "@/lib/db";
+import { hashSecret } from "@/lib/crm/auth";
+
+/** Ronde 46 — kredensial demo: login PASSWORD + PIN kunci layar (semuanya scrypt). */
+const DEMO_PASSWORD = "grup1234";
+const DEMO_PIN = "1234";
 
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -331,15 +336,16 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     })),
   });
 
-  // ============ USERS ============
+  // ============ USERS — akun nyata dgn kredensial ter-hash (Ronde 46) ============
+  // Login: email + password. PIN BUKAN untuk login — PIN membuka layar terkunci.
   await db.user.createMany({ data: [
-    { name: "Rian Pratama", email: "rian@grup.co.id", role: "super_admin", pin: "1234", avatarColor: "#0f766e" },
-    { name: "Sari Wulandari", email: "sari@grup.co.id", role: "director", pin: "1234", avatarColor: "#b45309" },
-    { name: "Dewi Lestari", email: "dewi@grup.co.id", role: "marketing", pin: "1234", avatarColor: "#be123c" },
-    { name: "Andi Saputra", email: "andi@grup.co.id", role: "marketing", pin: "1234", avatarColor: "#7c3aed" },
-    { name: "Maya Kusuma", email: "maya@grup.co.id", role: "finance", pin: "1234", avatarColor: "#0369a1" },
-    { name: "Budi Hartono", email: "budi@grup.co.id", role: "production", pin: "1234", avatarColor: "#4d7c0f" },
-    { name: "Hendra Wijaya", email: "hendra@nusantaranet.com", role: "client", pin: "1234", avatarColor: "#525252" },
+    { name: "Rian Pratama", email: "rian@grup.co.id", role: "super_admin", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0f766e" },
+    { name: "Sari Wulandari", email: "sari@grup.co.id", role: "director", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#b45309" },
+    { name: "Dewi Lestari", email: "dewi@grup.co.id", role: "marketing", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#be123c" },
+    { name: "Andi Saputra", email: "andi@grup.co.id", role: "marketing", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#7c3aed" },
+    { name: "Maya Kusuma", email: "maya@grup.co.id", role: "finance", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#0369a1" },
+    { name: "Budi Hartono", email: "budi@grup.co.id", role: "production", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#4d7c0f" },
+    { name: "Hendra Wijaya", email: "hendra@nusantaranet.com", role: "client", pin: hashSecret(DEMO_PIN), password: hashSecret(DEMO_PASSWORD), avatarColor: "#525252" },
   ]});
 
   // ============ COMPANIES ============
@@ -442,6 +448,61 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     }});
     opps.push(o);
   }
+
+  // ============ BRIEF AWAL (Ronde 46 — struktur brief kini bagian seed) ============
+  // Satu approved (alur penuh), satu in_review (menunggu keputusan → memicu
+  // notifikasi/push review), satu draft (dikerjakan marketing).
+  const YEAR = new Date().getFullYear();
+  await db.clientBrief.create({ data: {
+    code: `BRF-${YEAR}-0001`, opportunityId: opps[0].id, brandId: segia.id,
+    title: "Brief Website corporate baru + SEO",
+    serviceTypes: JSON.stringify(["Website Company Profile"]),
+    objectives: "Redesign total website korporat dengan CMS, multibahasa, dan SEO on-page untuk 50 halaman.",
+    targetAudience: "Enterprise & calon klien korporat",
+    keyMessages: "Kredibilitas teknologi, portofolio, kemudahan kontak",
+    deliverables: JSON.stringify([
+      { name: "Desain UI/UX", qty: 1, notes: "Termasuk design system" },
+      { name: "Halaman CMS", qty: 50, notes: "Multibahasa ID/EN" },
+      { name: "SEO on-page", qty: 50, notes: "Keyword riset + meta + schema" },
+    ]),
+    timelineStart: ago(70), timelineEnd: ahead(30),
+    budgetMin: 220000000, budgetMax: 260000000, currency: "IDR",
+    status: "approved", createdBy: "Dewi Lestari", submittedAt: ago(72),
+    approvedAt: ago(68), approvedBy: "Sari Wulandari",
+    createdAt: ago(75),
+  }});
+  await db.clientBrief.create({ data: {
+    code: `BRF-${YEAR}-0002`, opportunityId: opps[4].id, brandId: erfo.id,
+    title: "Brief Live streaming economic forum",
+    serviceTypes: JSON.stringify(["Live Streaming"]),
+    objectives: "Live streaming forum ekonomi 2 hari, 3 kamera, multitrip ke YouTube & Zoom.",
+    targetAudience: "Peserta forum & publik online",
+    keyMessages: "Profesional, stabil, multi-platform",
+    deliverables: JSON.stringify([
+      { name: "Setup 3 kamera", qty: 1, notes: "Termasuk operator" },
+      { name: "Multistream", qty: 2, notes: "YouTube + Zoom" },
+      { name: "Highlight reel", qty: 1, notes: "Dirender H+2" },
+    ]),
+    timelineStart: ahead(10), timelineEnd: ahead(12),
+    budgetMin: 130000000, budgetMax: 160000000, currency: "IDR",
+    status: "in_review", createdBy: "Dewi Lestari", submittedAt: ago(1),
+    createdAt: ago(3),
+  }});
+  await db.clientBrief.create({ data: {
+    code: `BRF-${YEAR}-0003`, opportunityId: opps[5].id, brandId: unicam.id,
+    title: "Brief Virtual tour destinasi wisata",
+    serviceTypes: JSON.stringify(["Virtual Tour"]),
+    objectives: "Virtual tour 360° untuk 12 titik destinasi wisata dengan hotspot informasi.",
+    targetAudience: "Wisatawan domestik & internasional",
+    deliverables: JSON.stringify([
+      { name: "Titik panorama 360°", qty: 12, notes: "Sewa drone + kamera 360" },
+      { name: "Hotspot info", qty: 24, notes: "Teks + audio" },
+    ]),
+    timelineStart: ahead(14), timelineEnd: ahead(45),
+    budgetMin: 190000000, budgetMax: 230000000, currency: "IDR",
+    status: "draft", createdBy: "Andi Saputra",
+    createdAt: ago(2),
+  }});
 
   // ============ INTERACTIONS ============
   async function inter(oppIdx: number, data: {

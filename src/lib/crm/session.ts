@@ -23,7 +23,10 @@ if (IS_PROD && !SECRET) {
   );
 }
 
-export type SessionPayload = { uid: string; email: string; name: string; role: string; exp: number };
+export type SessionPayload = {
+  uid: string; email: string; name: string; role: string; exp: number;
+  kind?: "session" | "lock"; // "lock" = token cookie kunci layar (Ronde 46)
+};
 export type SessionUser = { id: string; name: string; email: string; role: string };
 
 const enc = new TextEncoder();
@@ -64,9 +67,13 @@ function safeEqualStr(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Buat token sesi bertanda tangan: `<payload-b64url>.<hmac>` (HMAC-SHA256). */
-export async function signSession(payload: Omit<SessionPayload, "exp">): Promise<string> {
-  const full: SessionPayload = { ...payload, exp: Date.now() + SESSION_TTL_MS };
+/** Buat token bertanda tangan: `<payload-b64url>.<hmac>` (HMAC-SHA256).
+ * ttlMs opsional — cookie kunci layar memakai TTL pendek (Ronde 46). */
+export async function signSession(
+  payload: Omit<SessionPayload, "exp">,
+  ttlMs: number = SESSION_TTL_MS,
+): Promise<string> {
+  const full: SessionPayload = { ...payload, exp: Date.now() + ttlMs };
   const body = bytesToB64url(enc.encode(JSON.stringify(full)));
   const sig = await hmac(body);
   return `${body}.${bytesToB64url(sig)}`;
@@ -93,13 +100,23 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 
 /**
  * Ambil user dari cookie sesi request (tanpa DB — cukup untuk middleware /
- * pemeriksaan ringan). Param sengaja bertipe minimal agar bisa dipakai di
- * Edge (NextRequest) maupun Node tanpa tarik dependensi.
+ * pemeriksaan ringan). Token kunci layar (kind="lock") TIDAK dianggap sesi.
  */
 export async function getSessionUser(
   req: { cookies: { get(name: string): { value?: string } | undefined } },
 ): Promise<SessionUser | null> {
   const p = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value);
-  if (!p) return null;
+  if (!p || p.kind === "lock") return null;
   return { id: p.uid, name: p.name, email: p.email, role: p.role };
+}
+
+export const LOCK_COOKIE = "crm_lock";
+/** Layar kunci otomatis kedaluwarsa setelah 12 jam (diminta login ulang penuh). */
+export const LOCK_TTL_MS = 12 * 60 * 60 * 1000;
+
+/** Verifikasi cookie kunci layar: token kind="lock" yang masih hidup. */
+export async function verifyLockToken(token: string | undefined | null): Promise<SessionPayload | null> {
+  const p = await verifySessionToken(token);
+  if (!p || p.kind !== "lock") return null;
+  return p;
 }

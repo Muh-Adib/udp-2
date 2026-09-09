@@ -12,7 +12,7 @@ import { useCrmStore, type ModuleKey, MODULE_META, canAccess } from "@/lib/crm/s
 import { ROLES } from "@/lib/crm/constants";
 import { initials } from "@/lib/crm/utils";
 import { toast } from "sonner";
-import { LogIn, Lock, Loader2, Sparkles, ShieldCheck } from "lucide-react";
+import { LogIn, Lock, Loader2, Sparkles, ShieldCheck, KeyRound } from "lucide-react";
 
 const DEMO_USERS = [
   { email: "rian@grup.co.id", role: "super_admin" },
@@ -24,6 +24,10 @@ const DEMO_USERS = [
   { email: "hendra@nusantaranet.com", role: "client" },
 ];
 
+/** Ronde 46 — kredensial demo terpadu (password login + PIN kunci layar). */
+const DEMO_PASSWORD = "grup1234";
+const DEMO_PIN = "1234";
+
 function roleLabel(role: string) {
   return ROLES.find((r) => r.key === role)?.label ?? role;
 }
@@ -32,7 +36,7 @@ export default function LoginScreen() {
   const setUser = useCrmStore((s) => s.setUser);
   const [users, setUsers] = useState<{ id: string; name: string; email: string; role: string; avatarColor: string }[]>([]);
   const [email, setEmail] = useState("sari@grup.co.id");
-  const [pin, setPin] = useState("1234");
+  const [password, setPassword] = useState(DEMO_PASSWORD);
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
 
@@ -54,18 +58,18 @@ export default function LoginScreen() {
     e?.preventDefault();
     setLoading(true);
     try {
-      const { user } = await api.login(email, pin);
+      const { user, legacyPin } = await api.login(email, password);
       setUser(user);
       toast.success(`Selamat datang, ${user.name}`);
+      if (legacyPin) {
+        toast.warning("Akun belum punya password — minta Super Admin mengaturnya di modul Pengguna", { duration: 6000 });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Login gagal");
     } finally {
       setLoading(false);
     }
   }
-
-  const firstModule = (role: string): ModuleKey =>
-    (Object.keys(MODULE_META) as ModuleKey[]).find((m) => canAccess(m, role)) ?? "dashboard";
 
   return (
     <div className="min-h-screen bg-zinc-100 flex flex-col lg:flex-row">
@@ -85,7 +89,7 @@ export default function LoginScreen() {
             Satu sistem untuk<br />empat brand, satu<br />basis data pelanggan.
           </h1>
           <p className="mt-4 text-sm text-zinc-400 max-w-md leading-relaxed">
-            Company-centric & contact-centric: setiap orang yang menghubungi lewat Instagram,
+            Company-centric &amp; contact-centric: setiap orang yang menghubungi lewat Instagram,
             email, atau WhatsApp tetap satu contact dengan satu timeline komunikasi.
           </p>
           <div className="mt-8 grid gap-3 max-w-md">
@@ -106,7 +110,7 @@ export default function LoginScreen() {
           </div>
         </div>
         <p className="relative mt-10 text-xs text-zinc-600">
-          © 2026 Grup Agensi Kreatif · Data komunikasi & keuangan dilindungi audit log immutable
+          © 2026 Grup Agensi Kreatif · Data komunikasi &amp; keuangan dilindungi audit log immutable
         </p>
       </div>
 
@@ -121,7 +125,7 @@ export default function LoginScreen() {
               <CardTitle className="text-xl flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-emerald-600" aria-hidden /> Masuk ke CRM
               </CardTitle>
-              <CardDescription>Pilih persona demo atau masukkan email & PIN Anda.</CardDescription>
+              <CardDescription>Masuk dengan email &amp; password. PIN dipakai untuk membuka layar terkunci.</CardDescription>
             </CardHeader>
             <CardContent>
               {booting ? (
@@ -137,14 +141,20 @@ export default function LoginScreen() {
                     <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@grup.co.id" required autoComplete="username" className="h-12" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="pin">PIN</Label>
-                    <Input id="pin" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••" required autoComplete="current-password" className="h-12" />
-                    <p className="text-xs text-zinc-500">PIN demo semua akun: <Badge variant="secondary">1234</Badge></p>
+                    <Label htmlFor="password">Password</Label>
+                    <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password Anda" required autoComplete="current-password" className="h-12" />
                   </div>
                   <Button type="submit" className="h-12 w-full" disabled={loading} aria-label="Tombol masuk">
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <LogIn className="h-4 w-4" aria-hidden />}
                     Masuk
                   </Button>
+                  <div className="flex items-start gap-2 rounded-lg bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600">
+                    <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
+                    <p>
+                      Demo — password semua akun: <Badge variant="secondary" className="font-mono">{DEMO_PASSWORD}</Badge>
+                      {" "}· PIN kunci layar: <Badge variant="secondary" className="font-mono">{DEMO_PIN}</Badge>
+                    </p>
+                  </div>
                 </form>
               )}
             </CardContent>
@@ -164,7 +174,7 @@ export default function LoginScreen() {
                     <button
                       key={u.id}
                       type="button"
-                      onClick={() => { setEmail(u.email); setPin("1234"); }}
+                      onClick={() => { setEmail(u.email); setPassword(DEMO_PASSWORD); }}
                       className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-zinc-50 ${email === u.email ? "border-zinc-900 bg-zinc-50" : "border-zinc-200"}`}
                       aria-label={`Pilih akun ${u.name} sebagai ${roleLabel(u.role)}`}
                     >

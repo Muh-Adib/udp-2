@@ -8,6 +8,7 @@ import { initials } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -15,6 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import DashboardModule from "@/components/crm/dashboard-module";
 import { GlobalSearch } from "@/components/crm/global-search";
 import NotificationCenter from "@/components/crm/notification-center";
+import SessionLockScreen from "@/components/crm/session-lock-screen";
 import PipelineModule from "@/components/crm/pipeline-module";
 import InboxModule from "@/components/crm/inbox-module";
 import ContactsModule from "@/components/crm/contacts-module";
@@ -30,7 +32,7 @@ import AuditModule from "@/components/crm/audit-module";
 import {
   LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
   FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu, PlugZap,
-  ChevronDown, CircleUser, PanelLeftClose, PanelLeftOpen,
+  ChevronDown, CircleUser, PanelLeftClose, PanelLeftOpen, LockKeyhole,
 } from "lucide-react";
 
 const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }>> = {
@@ -235,6 +237,14 @@ export default function AppShell() {
     void refreshBrands();
   }, [refreshBrands]);
 
+  // Ronde 46 — PWA: daftarkan service worker di startup (syarat installability;
+  // sw.js menangani Web Push + halaman offline). Gagal = diam (fitur opsional).
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
   if (!user) return null;
   const meta = MODULE_META[activeModule];
 
@@ -368,6 +378,21 @@ export default function AppShell() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={async () => {
+                    // Ronde 46 — kunci layar: sesi tetap hidup, mutasi API ditolak 423
+                    // sampai PIN dimasukkan. Cocok saat perangkat ditinggal.
+                    try {
+                      await api.lockSession();
+                      window.dispatchEvent(new CustomEvent("crm:locked"));
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Gagal mengunci layar");
+                    }
+                  }}
+                  aria-label="Kunci layar dengan PIN"
+                >
+                  <LockKeyhole className="h-4 w-4" aria-hidden /> Kunci Layar
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={async () => {
                     // Ronde 27: logout server-side (cookie sesi dihapus) lalu bersihkan store.
                     try { await api.logout(); } catch { /* tetap keluar lokal */ }
                     setUser(null);
@@ -416,6 +441,9 @@ export default function AppShell() {
 
       {/* Navigasi bawah khusus mobile */}
       <MobileNav onOpenMenu={() => setMobileOpen(true)} />
+
+      {/* Ronde 46 — layar kunci sesi (PIN); otomatis tampil saat sesi terkunci */}
+      <SessionLockScreen />
     </div>
   );
 }

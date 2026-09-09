@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import type { Prisma } from "@prisma/client";
 import { resolveActor } from "@/lib/crm/auth";
+import { sendPushToRoles, sendPushToUserKeys } from "@/lib/crm/push";
 
 /**
  * Ronde 18 — Brief Builder (Fase 2): brief terstruktur per opportunity.
@@ -123,6 +124,29 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       newValue: { status: to, revisionNote: updated.revisionNote ?? null },
       req,
     });
+    // Ronde 46 — PUSH NYATA utk peristiwa brief lintas pengguna:
+    if (action === "submit") {
+      // Brief dikirim utk review → pimpinan & finance menerima push.
+      void sendPushToRoles(["director", "super_admin", "finance"], {
+        title: `Brief ${updated.code} menunggu review`,
+        body: `${actorName} mengirim brief "${updated.title}" — ${updated.opportunity.title}`,
+        url: "/?modul=pipeline",
+        tag: `brief:${updated.id}`,
+        type: "activity",
+      }, actorName);
+    }
+    if (action === "approve") {
+      // Brief disetujui → pembuat brief (bila tercatat) menerima push.
+      if (brief.createdBy) {
+        void sendPushToUserKeys([brief.createdBy], {
+          title: `Brief ${updated.code} disetujui`,
+          body: `${actorName} menyetujui brief "${updated.title}" — lanjut ke penawaran`,
+          url: "/?modul=pipeline",
+          tag: `brief:${updated.id}`,
+          type: "activity",
+        });
+      }
+    }
     // Ratakan opportunity (updatedAt) agar urutan aktivitas ikut segar.
     await db.opportunity.update({ where: { id: brief.opportunityId }, data: { updatedAt: new Date() } });
     return ok({ brief: serialize(updated) });

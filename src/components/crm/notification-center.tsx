@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { io } from "socket.io-client";
 import {
   Bell, BellOff, CheckCheck, X, Timer, FileCheck2, GitPullRequestArrow,
-  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal, MessageSquare,
+  ListChecks, CalendarClock, ReceiptText, SlidersHorizontal, MessageSquare, Activity,
 } from "lucide-react";
 
 /** Event global untuk membuka pusat notifikasi dari widget dashboard. */
@@ -37,6 +37,7 @@ const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: stri
   meeting: CalendarClock, // Ronde 42 — reminder meeting 1 jam sebelum jadwal
   deadline: CalendarClock,
   invoice: ReceiptText,
+  activity: Activity, // Ronde 46 — umpan aktivitas lintas pengguna
 };
 
 const SEVERITY_STYLE: Record<NotificationSeverity, string> = {
@@ -45,8 +46,8 @@ const SEVERITY_STYLE: Record<NotificationSeverity, string> = {
   info: "bg-zinc-100 text-zinc-500",
 };
 
-/** Module tujuan navigasi yang valid untuk notifikasi (Fase 3). */
-const NAV_MODULES = new Set<string>(["dashboard", "inbox", "pipeline", "followups", "finance", "projects"]);
+/** Module tujuan navigasi yang valid untuk notifikasi (Fase 3; Ronde 46 + contacts/brands/users). */
+const NAV_MODULES = new Set<string>(["dashboard", "inbox", "pipeline", "followups", "finance", "projects", "contacts", "brands", "users"]);
 
 type FilterKey = "all" | "unread";
 

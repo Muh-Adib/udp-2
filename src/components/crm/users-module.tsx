@@ -1,11 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, KeyRound, RefreshCw, ShieldCheck, Users as UsersIcon, X } from "lucide-react";
+import { Check, KeyRound, Pencil, RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -13,7 +19,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { api } from "@/lib/crm/api-client";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { api, type UserAdminRow } from "@/lib/crm/api-client";
+import { useCrmStore } from "@/lib/crm/store";
 import { ROLES } from "@/lib/crm/constants";
 import { MODULE_META, type ModuleKey } from "@/lib/crm/store";
 import { initials } from "@/lib/crm/utils";
@@ -35,14 +43,7 @@ const MODULE_ORDER: ModuleKey[] = [
   "finance", "projects", "portal", "brands", "users", "audit",
 ];
 
-interface UserRow {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  avatarColor: string;
-  active: boolean;
-}
+const AVATAR_COLORS = ["#0f766e", "#b45309", "#be123c", "#7c3aed", "#0369a1", "#4d7c0f", "#525252", "#c2410c", "#0e7490", "#a21caf"];
 
 function roleLabel(role: string): string {
   return ROLES.find((r) => r.key === role)?.label ?? role;
@@ -77,13 +78,163 @@ function UsersSkeleton() {
   );
 }
 
+// ============ Dialog: buat / edit pengguna ============
+
+interface UserFormState {
+  name: string; email: string; role: string; avatarColor: string;
+  phone: string; password: string; pin: string; active: boolean;
+}
+
+const EMPTY_FORM: UserFormState = {
+  name: "", email: "", role: "marketing", avatarColor: AVATAR_COLORS[3],
+  phone: "", password: "", pin: "1234", active: true,
+};
+
+function UserDialog({
+  open, onOpenChange, target, onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  target: UserAdminRow | null; // null = buat baru
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<UserFormState>(EMPTY_FORM);
+  const [busy, setBusy] = useState(false);
+  const isEdit = !!target;
+
+  useEffect(() => {
+    if (open) {
+      setForm(target
+        ? { name: target.name, email: target.email, role: target.role, avatarColor: target.avatarColor, phone: target.phone ?? "", password: "", pin: "", active: target.active }
+        : { ...EMPTY_FORM, avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)] });
+    }
+  }, [open, target]);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      if (isEdit && target) {
+        const payload: Record<string, unknown> = {
+          name: form.name.trim(), role: form.role, avatarColor: form.avatarColor,
+          phone: form.phone.trim() || null, active: form.active,
+        };
+        if (form.password.trim()) payload.password = form.password.trim();
+        if (form.pin.trim()) payload.pin = form.pin.trim();
+        await api.updateUser(target.id, payload);
+        toast.success(`Perubahan ${target.name} tersimpan`);
+      } else {
+        await api.createUser({
+          name: form.name.trim(), email: form.email.trim(), role: form.role,
+          password: form.password.trim(), pin: form.pin.trim() || "1234",
+          avatarColor: form.avatarColor, phone: form.phone.trim() || undefined,
+        });
+        toast.success(`Pengguna ${form.name} dibuat — sudah bisa login dengan password`);
+      }
+      onOpenChange(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan pengguna");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canSubmit = form.name.trim().length >= 2
+    && (isEdit || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
+    && (isEdit || form.password.trim().length >= 8)
+    && (!form.pin.trim() || /^\d{4,8}$/.test(form.pin.trim()));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? `Edit Pengguna — ${target?.name}` : "Tambah Pengguna"}</DialogTitle>
+          <DialogDescription>
+            {isEdit
+              ? "Perubahan role/status langsung berlaku. Biarkan kolom rahasia kosong bila tidak diubah."
+              : "Buat akun nyata: login dengan email + password (min. 8 karakter); PIN dipakai untuk membuka layar terkunci."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3.5 py-1">
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="u-name">Nama lengkap</Label>
+              <Input id="u-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="mis. Rina Kartika" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="u-role">Role</Label>
+              <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+                <SelectTrigger id="u-role" aria-label="Role pengguna"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="u-email">Email {isEdit && <span className="text-xs text-zinc-400">(tetap)</span>}</Label>
+              <Input id="u-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nama@grup.co.id" disabled={isEdit} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="u-phone">Telepon (opsional)</Label>
+              <Input id="u-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+6281…" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="u-password">{isEdit ? "Reset password (opsional)" : "Password"}</Label>
+              <Input id="u-password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={isEdit ? "biarkan kosong = tidak diubah" : "min. 8 karakter"} autoComplete="new-password" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="u-pin">{isEdit ? "Reset PIN layar (opsional)" : "PIN kunci layar"}</Label>
+              <Input id="u-pin" inputMode="numeric" value={form.pin} onChange={(e) => setForm({ ...form, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })} placeholder="4–8 digit" autoComplete="off" />
+            </div>
+          </div>
+          <div className="flex items-center justify-between rounded-lg border bg-zinc-50 px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium">Warna avatar</p>
+              <div className="mt-1.5 flex gap-1.5">
+                {AVATAR_COLORS.map((c) => (
+                  <button
+                    key={c} type="button" aria-label={`Pilih warna ${c}`}
+                    onClick={() => setForm({ ...form, avatarColor: c })}
+                    className={`h-6 w-6 rounded-full ring-offset-2 transition-transform hover:scale-110 ${form.avatarColor === c ? "ring-2 ring-zinc-900" : ""}`}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            </div>
+            {isEdit && (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="u-active" className="text-sm">Aktif</Label>
+                <Switch id="u-active" checked={form.active} onCheckedChange={(v) => setForm({ ...form, active: v })} />
+              </div>
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Batal</Button>
+          <Button onClick={() => void submit()} disabled={!canSubmit || busy}>
+            {isEdit ? "Simpan Perubahan" : "Buat Pengguna"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ============ Module utama ============
 
 export default function UsersModule() {
-  const [users, setUsers] = useState<UserRow[] | null>(null);
+  const me = useCrmStore((s) => s.user);
+  const isSuperAdmin = me?.role === "super_admin";
+  const [users, setUsers] = useState<UserAdminRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState("all");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<UserAdminRow | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -113,6 +264,16 @@ export default function UsersModule() {
     return map;
   }, [users]);
 
+  async function toggleActive(u: UserAdminRow) {
+    try {
+      await api.updateUser(u.id, { active: !u.active });
+      toast.success(`${u.name} ${u.active ? "dinonaktifkan" : "diaktifkan"}`);
+      void load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengubah status");
+    }
+  }
+
   if (loading && users === null) return <UsersSkeleton />;
 
   return (
@@ -121,11 +282,18 @@ export default function UsersModule() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-zinc-900">User &amp; Access</h1>
-          <p className="text-sm text-zinc-500">Role dan hak akses per modul</p>
+          <p className="text-sm text-zinc-500">Akun nyata dari database — login password, PIN kunci layar, role RBAC</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar user">
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
-        </Button>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && (
+            <Button size="sm" onClick={() => { setEditTarget(null); setDialogOpen(true); }} aria-label="Tambah pengguna baru">
+              <UserPlus className="h-4 w-4" aria-hidden /> Tambah Pengguna
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Muat ulang daftar user">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+          </Button>
+        </div>
       </div>
 
       {error ? (
@@ -162,7 +330,9 @@ export default function UsersModule() {
                 <TableHead>User</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Kredensial</TableHead>
                 <TableHead>Status</TableHead>
+                {isSuperAdmin && <TableHead className="text-right">Aksi</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -177,23 +347,64 @@ export default function UsersModule() {
                       >
                         {initials(u.name)}
                       </span>
-                      <span className="text-sm font-semibold text-zinc-900">{u.name}</span>
+                      <span className="text-sm font-semibold text-zinc-900">
+                        {u.name}
+                        {me?.id === u.id && <span className="ml-1.5 text-[10px] font-normal text-zinc-400">(Anda)</span>}
+                      </span>
                     </span>
                   </TableCell>
                   <TableCell className="text-sm text-zinc-600">{u.email}</TableCell>
                   <TableCell><RoleBadge role={u.role} /></TableCell>
                   <TableCell>
-                    {u.active ? (
+                    <span className="flex flex-wrap items-center gap-1">
+                      {u.hasPassword ? (
+                        <Badge variant="outline" className="border-transparent bg-emerald-100 text-emerald-700">password ✓</Badge>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className="border-transparent bg-amber-100 text-amber-700">tanpa password</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>Akun legacy — masih login via PIN. Reset password lewat Edit.</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {u.legacyPin && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className="border-transparent bg-zinc-100 text-zinc-500">PIN plaintext</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>PIN belum ter-hash — otomatis dimigrasi saat login berikutnya.</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {isSuperAdmin && me?.id !== u.id ? (
+                      <label className="flex items-center gap-2 text-xs text-zinc-600">
+                        <Switch checked={u.active} onCheckedChange={() => void toggleActive(u)} aria-label={`Aktifkan/nonaktifkan ${u.name}`} />
+                        {u.active ? "Aktif" : "Nonaktif"}
+                      </label>
+                    ) : u.active ? (
                       <Badge variant="outline" className="border-transparent bg-emerald-100 text-emerald-700">Aktif</Badge>
                     ) : (
                       <Badge variant="outline" className="border-transparent bg-zinc-100 text-zinc-400">Nonaktif</Badge>
                     )}
                   </TableCell>
+                  {isSuperAdmin && (
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost" size="icon" className="h-8 w-8"
+                        aria-label={`Edit pengguna ${u.name}`}
+                        onClick={() => { setEditTarget(u); setDialogOpen(true); }}
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-zinc-500" aria-hidden />
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
               {filteredUsers.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-10 text-center text-sm text-zinc-400">
+                  <TableCell colSpan={isSuperAdmin ? 6 : 5} className="py-10 text-center text-sm text-zinc-400">
                     Tidak ada user untuk role ini.
                   </TableCell>
                 </TableRow>
@@ -202,6 +413,14 @@ export default function UsersModule() {
           </Table>
         </div>
       </div>
+
+      {/* Dialog buat/edit — satu instance */}
+      <UserDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        target={editTarget}
+        onSaved={() => void load(true)}
+      />
 
       {/* B. Matriks permission */}
       <section aria-label="Matriks hak akses" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">

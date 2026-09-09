@@ -23,7 +23,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    // Ronde 46 — LAYAR KUNCI: middleware menolak mutasi dgn 423 saat sesi terkunci.
+    // Siapa pun pemanggil, kunci layar langsung muncul (event global).
+    if (res.status === 423 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("crm:locked"));
+    }
+    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
   return data as T;
 }
 
@@ -33,17 +40,34 @@ export type SessionUserResponse = {
   avatarColor: string; brandAccess: string; companyName?: string | null;
 };
 
+/** Baris pengguna utk modul Users (Ronde 46 — tanpa hash). */
+export type UserAdminRow = {
+  id: string; name: string; email: string; role: string; avatarColor: string;
+  active: boolean; phone: string | null; brandAccess: string;
+  hasPassword: boolean; legacyPin: boolean; createdAt?: string;
+};
+
 export const api = {
   // Bootstrap
   bootstrap: () => request<{ ready: boolean }>("/api/bootstrap"),
-  login: (email: string, pin: string) =>
-    request<{ user: SessionUserResponse }>(
-      "/api/auth/login", { method: "POST", body: JSON.stringify({ email, pin }) }
+  // Ronde 46 — login dengan PASSWORD (PIN khusus kunci layar; legacy pin masih diterima server utk akun lama)
+  login: (email: string, password: string) =>
+    request<{ user: SessionUserResponse; legacyPin?: boolean }>(
+      "/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }
     ),
-  // Ronde 27 — sesi nyata: introspeksi cookie + logout server-side
-  session: () => request<{ user: SessionUserResponse | null }>("/api/auth/session"),
+  // Ronde 27 — sesi nyata: introspeksi cookie + logout server-side (+ status kunci layar Ronde 46)
+  session: () => request<{ user: SessionUserResponse | null; locked: boolean }>("/api/auth/session"),
   logout: () => request<{ loggedOut: boolean }>("/api/auth/session", { method: "POST" }),
-  users: () => request<{ users: { id: string; name: string; email: string; role: string; avatarColor: string; active: boolean }[] }>("/api/users"),
+  // Ronde 46 — kunci layar sesi (PIN untuk membuka kembali)
+  lockSession: () => request<{ locked: boolean }>("/api/auth/lock", { method: "POST" }),
+  unlockSession: (pin: string) =>
+    request<{ locked: boolean }>("/api/auth/unlock", { method: "POST", body: JSON.stringify({ pin }) }),
+  users: () =>
+    request<{ users: UserAdminRow[] }>("/api/users"),
+  createUser: (payload: { name: string; email: string; role: string; password: string; pin?: string; avatarColor?: string; phone?: string; brandAccess?: string }) =>
+    request<{ user: UserAdminRow }>("/api/users", { method: "POST", body: JSON.stringify(payload) }),
+  updateUser: (id: string, payload: { name?: string; role?: string; active?: boolean; avatarColor?: string; phone?: string | null; brandAccess?: string; password?: string; pin?: string }) =>
+    request<{ user: UserAdminRow }>(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
 
   // Brands
   brands: () => request<{ brands: Brand[] }>("/api/brands"),

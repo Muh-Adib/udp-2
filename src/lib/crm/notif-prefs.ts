@@ -37,6 +37,7 @@ export const NOTIF_TYPES: { key: NotificationType; label: string; hint: string }
   { key: "meeting", label: "Reminder Meeting", hint: "Meeting dimulai kurang dari 1 jam lagi" },
   { key: "deadline", label: "Deadline Proyek", hint: "Milestone & proyek mendekati due" },
   { key: "invoice", label: "Invoice", hint: "Tagihan jatuh tempo & pembayaran" },
+  { key: "activity", label: "Aktivitas Tim", hint: "Aksi rekan: brief dikirim, invoice terbit, approval diajukan, dll. (Ronde 46)" },
 ];
 
 const STORAGE_PREFIX = "grupcrm-notif-prefs:";

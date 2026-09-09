@@ -1,7 +1,10 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { getSessionUser, SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySessionToken } from "@/lib/crm/session";
+import {
+  getSessionUser, SESSION_COOKIE, SESSION_TTL_MS, LOCK_COOKIE, LOCK_TTL_MS,
+  signSession, verifySessionToken, verifyLockToken,
+} from "@/lib/crm/session";
 
 /**
  * Ronde 27 — AUTH SESI NYATA (pengganti model demo "actorName dari body").
@@ -18,7 +21,10 @@ import { getSessionUser, SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySess
  */
 
 // Re-export inti sesi (edge-safe) supaya route Node cukup impor dari sini.
-export { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySessionToken, getSessionUser };
+export {
+  SESSION_COOKIE, SESSION_TTL_MS, LOCK_COOKIE, LOCK_TTL_MS,
+  signSession, verifySessionToken, verifyLockToken, getSessionUser,
+};
 export type { SessionPayload, SessionUser } from "@/lib/crm/session";
 
 export type ResolvedActor =
@@ -72,12 +78,21 @@ export function assertRole(
   return { ok: false, reason: "Peran Anda tidak berhak melakukan aksi ini" };
 }
 
-// ===== PIN (scrypt + salt; migrasi otomatis dari plaintext legacy) =====
+// ===== PIN & PASSWORD (scrypt + salt; migrasi otomatis dari plaintext legacy) =====
+
+/** Hash generik scrypt (dipakai PIN kunci layar & password login, Ronde 46). */
+export function hashSecret(secret: string): string {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(secret, salt, 32).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
 
 export function hashPin(pin: string): string {
-  const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(pin, salt, 32).toString("hex");
-  return `scrypt$${salt}$${hash}`;
+  return hashSecret(pin);
+}
+
+export function hashPassword(password: string): string {
+  return hashSecret(password);
 }
 
 function safeEqualBuffer(a: Buffer, b: Buffer): boolean {
@@ -85,6 +100,11 @@ function safeEqualBuffer(a: Buffer, b: Buffer): boolean {
 }
 
 export function verifyPin(input: string, stored: string): boolean {
+  return verifySecret(input, stored);
+}
+
+/** Verifikasi rahasia (PIN/password) — scrypt atau plaintext legacy, timing-safe. */
+export function verifySecret(input: string, stored: string): boolean {
   if (stored.startsWith("scrypt$")) {
     const [, salt, hash] = stored.split("$");
     if (!salt || !hash) return false;

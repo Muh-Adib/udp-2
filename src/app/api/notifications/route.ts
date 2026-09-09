@@ -35,6 +35,15 @@ function money(n: number): string {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 }
 
+/** Ronde 46 — entitas audit → modul tujuan navigasi saat notifikasi diklik. */
+const ACTIVITY_MODULE: Record<string, string> = {
+  opportunity: "pipeline", brief: "pipeline", quotation: "finance", invoice: "finance",
+  estimation: "pipeline", payment: "finance", approval: "dashboard",
+  project: "projects", milestone: "projects", change_request: "projects",
+  task: "followups", contact: "contacts", company: "contacts", interaction: "inbox",
+  user: "users", brand: "brands",
+};
+
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const email = sp.get("user")?.trim().toLowerCase();
@@ -342,6 +351,73 @@ export async function GET(req: NextRequest) {
         at: inv.dueDate.toISOString(),
         ageHours: ageHours(inv.dueDate),
       });
+    }
+  }
+
+  // 7. Ronde 46 — AKTIVITAS ANTAR PENGGUNA dari audit log:
+  //    "rekan saya barusan melakukan apa" — brief dikirim/disetujui, invoice
+  //    diterbitkan/dikirim, approval diajukan/diputuskan, task dibuat, lead
+  //    dikonversi, dsb. Sumber kebenaran = AuditLog (immutable, sudah mencatat
+  //    setiap mutasi). Difilter: bukan aksi sendiri, bukan noise login, dan
+  //    entitas yang relevan dgn role pembaca.
+  {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Entitas yang menarik per role (pimpinan melihat semuanya).
+    const INTEREST: Record<string, string[]> = {
+      marketing: ["opportunity", "brief", "quotation", "contact", "company", "task", "interaction", "user"],
+      finance: ["invoice", "quotation", "approval", "estimation", "payment", "project"],
+      production: ["project", "task", "change_request", "brief", "milestone", "opportunity"],
+    };
+    const interesting = DECIDER_ROLES.has(role)
+      ? null // semua entitas
+      : (INTEREST[role] ?? null);
+    // Aksi bernilai informasi (exclude noise sesi & pembacaan).
+    const SKIP_ACTIONS = new Set(["login", "login_failed", "logout", "session_lock", "session_unlock", "session_unlock_failed", "read"]);
+    const audits = await db.auditLog.findMany({
+      where: { createdAt: { gte: dayAgo } },
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    });
+    let activityCount = 0;
+    for (const a of audits) {
+      if (activityCount >= 15) break;
+      if (a.actorName === user.name) continue; // bukan aksi sendiri
+      if (SKIP_ACTIONS.has(a.action)) continue;
+      if (interesting && !interesting.includes(a.entity)) continue;
+      const entityName: Record<string, string> = {
+        opportunity: "peluang", brief: "brief", quotation: "penawaran", invoice: "invoice",
+        approval: "approval", estimation: "estimasi", project: "project", task: "tugas",
+        change_request: "change request", contact: "kontak", company: "perusahaan",
+        interaction: "lead", user: "pengguna", brand: "brand", payment: "pembayaran",
+        milestone: "milestone", "client_document": "dokumen",
+      };
+      const actionText: Record<string, string> = {
+        create: "menambahkan", update: "memperbarui", delete: "menghapus",
+        convert: "mengonversi", stage_change: "memindahkan tahap", approve: "menyetujui",
+        merge: "menggabungkan", send: "mengirim",
+      };
+      const verb = actionText[a.action] ?? a.action;
+      const label = a.entityLabel ?? a.entityId;
+      // Ronde 46 — metadata teknis (JSON payload) tidak ditampilkan mentah:
+      // hanya metadata naratif (mis. "Pengguna baru X dibuat") yang ikut.
+      const metaText =
+        a.metadata && !a.metadata.trim().startsWith("{")
+          ? ` — ${a.metadata.slice(0, 90)}`
+          : "";
+      push({
+        key: `activity:${a.id}`,
+        type: "activity",
+        severity: "info",
+        title: `${a.actorName} ${verb} ${entityName[a.entity] ?? a.entity}`,
+        description: `${label}${metaText}`,
+        module: ACTIVITY_MODULE[a.entity] ?? "dashboard",
+        brandName: null,
+        brandColor: null,
+        entityLabel: label.slice(0, 60),
+        at: a.createdAt.toISOString(),
+        ageHours: ageHours(a.createdAt),
+      });
+      activityCount += 1;
     }
   }
 

@@ -680,8 +680,10 @@ export interface DashboardRoleView {
 // ============ NOTIFIKASI (Fase 3) ============
 
 /** Ronde 32 — tambah type "message": pesan baru dari lead (inbound belum direspons ≤24 jam).
- * Ronde 42 — tambah type "meeting": reminder meeting 1 jam sebelum jadwal (tanggal JAM jam). */
-export type NotificationType = "sla" | "message" | "approval" | "cr" | "task" | "deadline" | "invoice" | "meeting";
+ * Ronde 42 — tambah type "meeting": reminder meeting 1 jam sebelum jadwal (tanggal JAM jam).
+ * Ronde 46 — tambah type "activity": umpan aktivitas lintas pengguna (brief dikirim,
+ * invoice diterbitkan, approval diajukan, dsb.) dari audit log. */
+export type NotificationType = "sla" | "message" | "approval" | "cr" | "task" | "deadline" | "invoice" | "meeting" | "activity";
 export type NotificationSeverity = "info" | "warning" | "danger";
 
 /** Notifikasi komputasi: isi dibangun dari data operasional, state baca/dismiss persist di NotificationState. */
