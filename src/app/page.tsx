@@ -21,6 +21,7 @@ function PortalGate() {
   const setUser = useCrmStore((s) => s.setUser);
   const setBrands = useCrmStore((s) => s.setBrands);
   const setActiveModule = useCrmStore((s) => s.setActiveModule);
+  const loadPermissions = useCrmStore((s) => s.loadPermissions);
   // Ronde 27: sesi server = sumber kebenaran identitas. Tampilkan splash sampai
   // introspeksi selesai supaya tidak ada kedipan login-screen / sesi basi.
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -53,10 +54,13 @@ function PortalGate() {
       } catch {
         // network gagal: pertahankan identitas store, jangan logout paksa
       }
+      // Ronde 47 — matriks hak akses dinamis dimuat setelah sesi diketahui
+      // (navigasi & guard modul kini mengikuti konfigurasi admin di DB).
+      if (alive) void loadPermissions();
       if (alive) setSessionChecked(true);
     })();
     return () => { alive = false; };
-  }, [portal, setBrands, setUser]);
+  }, [portal, setBrands, setUser, loadPermissions]);
 
   if (portal) return <ClientTokenPortal token={portal} />;
   if (!sessionChecked) {

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, CalendarDays, CheckCheck, CircleDollarSign, Clock3, FileSignature, FileText,
-  HandCoins, Layers, Loader2, Printer, ReceiptText, RefreshCw, Send, Wallet, XCircle,
+  AlertTriangle, CalendarDays, CheckCheck, CircleDollarSign, Clock3, Download, FileSignature, FileText,
+  HandCoins, Layers, Loader2, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send, Trash2, Wallet, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -33,9 +34,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
-import type { Brand, InvoiceDTO, QuotationDTO, QuotationItemDTO } from "@/lib/crm/types";
+import type { Brand, InvoiceDTO, QuotationDTO, QuotationItemDTO, TaxDTO } from "@/lib/crm/types";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
+import { InvoicePrintArea } from "@/components/crm/invoice-print";
 
 /** API mengirim relasi project, belum ada di tipe bersama — perluasan lokal defensif. */
 export type InvoiceWithProject = InvoiceDTO & { project?: { id: string; name: string } | null };
@@ -99,6 +101,54 @@ function parseQuotationItems(items: string | QuotationItemDTO[]): QuotationItemD
 }
 
 // ============ Sub-komponen kecil ============
+
+/** Ronde 47 — opsi pajak: "none" = tanpa pajak; selain itu `taxName|taxRate`. */
+const TAX_NONE = "none";
+function taxOptionValue(t: { name: string; rate: number }) {
+  return `${t.name}|${t.rate}`;
+}
+function parseTaxOption(v: string): { name: string | null; rate: number } {
+  if (v === TAX_NONE) return { name: null, rate: 0 };
+  const [name, rate] = v.split("|");
+  const parsed = Number(rate);
+  return { name: name || null, rate: Number.isFinite(parsed) ? parsed : 0 };
+}
+
+/** Ronde 47 — unduh daftar invoice terfilter sebagai CSV (BOM UTF-8 agar Excel rapi). */
+function exportInvoicesCsv(list: InvoiceDTO[]) {
+  const esc = (v: unknown) => {
+    const s = String(v ?? "");
+    return /[";,\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const rows: string[] = [
+    ["Number", "Perusahaan", "Brand", "Deskripsi", "Subtotal", "Pajak", "Total", "Mata Uang", "Status", "Terbayar", "Sisa", "Terbit", "Jatuh Tempo"].join(";"),
+  ];
+  for (const inv of list) {
+    const paid = (inv.payments ?? []).reduce((s, p) => s + p.amount, 0);
+    rows.push([
+      esc(inv.number),
+      esc(inv.company?.name ?? ""),
+      esc(inv.brand?.name ?? ""),
+      esc(inv.description ?? ""),
+      String(inv.amount),
+      esc(inv.taxName ? `${inv.taxName} ${inv.taxRate}%` : "-"),
+      String(inv.total),
+      inv.currency,
+      esc(statusMeta(inv.status).label),
+      String(paid),
+      String(Math.max(0, inv.total - paid)),
+      formatDate(inv.issueDate),
+      formatDate(inv.dueDate),
+    ].join(";"));
+  }
+  const blob = new Blob(["\uFEFF" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `invoice-udp-crm-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function SectionTitle({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
   return (
@@ -210,6 +260,26 @@ export default function FinanceModule() {
   const [cancelTarget, setCancelTarget] = useState<InvoiceWithProject | null>(null);
   const [invBusy, setInvBusy] = useState(false);
 
+  // --- Ronde 47: buat invoice manual / edit draft / cetak / koreksi pembayaran ---
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBrandId, setCreateBrandId] = useState("");
+  const [createCompanyId, setCreateCompanyId] = useState("");
+  const [createDesc, setCreateDesc] = useState("");
+  const [createAmount, setCreateAmount] = useState("");
+  const [createTax, setCreateTax] = useState(TAX_NONE);
+  const [createDue, setCreateDue] = useState("");
+  const [createNotes, setCreateNotes] = useState("");
+  const [companies, setCompanies] = useState<{ id: string; name: string }[] | null>(null);
+  const [taxes, setTaxes] = useState<TaxDTO[] | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const [editTarget, setEditTarget] = useState<InvoiceWithProject | null>(null);
+  const [editForm, setEditForm] = useState({ description: "", amount: "", tax: TAX_NONE, due: "", notes: "" });
+  const [editing, setEditing] = useState(false);
+
+  const [printInvoice, setPrintInvoice] = useState<InvoiceWithProject | null>(null);
+  const [payDeleteTarget, setPayDeleteTarget] = useState<{ paymentId: string; label: string; invoice: InvoiceWithProject } | null>(null);
+
   // --- Quotation state ---
   const [quotations, setQuotations] = useState<QuotationDTO[] | null>(null);
   const [quotationsLoading, setQuotationsLoading] = useState(false);
@@ -278,6 +348,144 @@ export default function FinanceModule() {
       window.removeEventListener("afterprint", after);
     };
   }, [printTarget]);
+
+  // Ronde 47 — cetak INVOICE dgn kop surat brand: pola sama dgn cetak quotation.
+  useEffect(() => {
+    if (!printInvoice) return;
+    const timer = setTimeout(() => window.print(), 100);
+    const after = () => setPrintInvoice(null);
+    window.addEventListener("afterprint", after);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("afterprint", after);
+    };
+  }, [printInvoice]);
+
+  // Ronde 47 — data pendukung dialog Buat Invoice: perusahaan & pajak parametrik (lazy sekali).
+  useEffect(() => {
+    if (!createOpen) return;
+    void (async () => {
+      try {
+        const [c, t] = await Promise.all([api.companies(), api.taxes()]);
+        setCompanies(c.companies.map((x) => ({ id: x.id, name: x.name })));
+        setTaxes(t.taxes);
+      } catch {
+        toast.error("Gagal memuat data perusahaan/pajak");
+      }
+    })();
+  }, [createOpen]);
+
+  // Sinkron brand pada dialog buat invoice: ganti brand → pajak brand dipertahankan,
+  // currency ditampilkan dari primaryCurrency brand (server yang menetapkan final).
+  const createBrand = useMemo(
+    () => storeBrands.find((b) => b.id === createBrandId) ?? null,
+    [storeBrands, createBrandId],
+  );
+  const createTotals = useMemo(() => {
+    const amount = Number(createAmount) || 0;
+    const { name, rate } = parseTaxOption(createTax);
+    const taxAmount = name ? Math.round((amount * rate) / 100) : 0;
+    return { amount, taxAmount, total: amount + taxAmount, taxName: name, taxRate: rate };
+  }, [createAmount, createTax]);
+
+  async function submitCreateInvoice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!createBrandId) return toast.error("Brand wajib dipilih");
+    if (!createCompanyId) return toast.error("Perusahaan wajib dipilih");
+    const amount = Number(createAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
+    setCreating(true);
+    try {
+      const res = await api.createStandaloneInvoice({
+        brandId: createBrandId,
+        companyId: createCompanyId,
+        description: createDesc.trim() || undefined,
+        amount,
+        taxName: createTotals.taxName,
+        taxRate: createTotals.taxName ? createTotals.taxRate : undefined,
+        dueDate: createDue || undefined,
+        notes: createNotes.trim() || undefined,
+      });
+      toast.success(`Invoice ${res.invoice.number} dibuat (draft)`);
+      setCreateOpen(false);
+      setCreateDesc("");
+      setCreateAmount("");
+      setCreateNotes("");
+      setCreateTax(TAX_NONE);
+      setCreateDue("");
+      await load(true);
+      setDetail(res.invoice as InvoiceWithProject);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat invoice");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function openEditDraft(inv: InvoiceWithProject) {
+    setEditTarget(inv);
+    setEditForm({
+      description: inv.description ?? "",
+      amount: String(inv.amount),
+      tax: inv.taxName ? taxOptionValue({ name: inv.taxName, rate: inv.taxRate }) : TAX_NONE,
+      due: inv.dueDate ? inv.dueDate.slice(0, 10) : "",
+      notes: inv.notes ?? "",
+    });
+  }
+
+  const editTotals = useMemo(() => {
+    const amount = Number(editForm.amount) || 0;
+    const { name, rate } = parseTaxOption(editForm.tax);
+    const taxAmount = name ? Math.round((amount * rate) / 100) : 0;
+    return { amount, taxAmount, total: amount + taxAmount, taxName: name, taxRate: rate };
+  }, [editForm.amount, editForm.tax]);
+
+  async function submitEditDraft(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    const amount = Number(editForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
+    setEditing(true);
+    try {
+      const res = await api.updateInvoice({
+        invoiceId: editTarget.id,
+        description: editForm.description.trim(),
+        amount,
+        taxName: editTotals.taxName,
+        taxRate: editTotals.taxName ? editTotals.taxRate : 0,
+        dueDate: editForm.due || null,
+        notes: editForm.notes.trim() || null,
+      });
+      toast.success(`Invoice ${res.invoice.number} diperbarui`);
+      setEditTarget(null);
+      const fresh = res.invoice as InvoiceWithProject;
+      setDetail((prev) => (prev && prev.id === fresh.id ? fresh : prev));
+      setInvoices((prev) => (prev ?? []).map((inv) => (inv.id === fresh.id ? fresh : inv)));
+      await load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengubah invoice");
+    } finally {
+      setEditing(false);
+    }
+  }
+
+  async function confirmDeletePayment() {
+    if (!payDeleteTarget) return;
+    setInvBusy(true);
+    try {
+      const res = await api.deletePayment({ paymentId: payDeleteTarget.paymentId });
+      const fresh = res.invoice as InvoiceWithProject;
+      toast.success(`Pembayaran pada ${fresh.number} dikoreksi`);
+      setDetail((prev) => (prev && prev.id === fresh.id ? fresh : prev));
+      setInvoices((prev) => (prev ?? []).map((inv) => (inv.id === fresh.id ? fresh : inv)));
+      setPayDeleteTarget(null);
+      await load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengoreksi pembayaran");
+    } finally {
+      setInvBusy(false);
+    }
+  }
 
   const summary = useMemo(() => {
     const list = invoices ?? [];
@@ -449,6 +657,12 @@ export default function FinanceModule() {
     <div className="space-y-6">
       {/* Area cetak quotation (hanya tampil saat window.print) */}
       {printTarget ? <QuotationPrintArea quotation={printTarget} brand={printBrand} /> : null}
+      {printInvoice ? (
+        <InvoicePrintArea
+          invoice={printInvoice}
+          brand={printInvoice.brand ?? storeBrands.find((b) => b.id === printInvoice.brandId) ?? null}
+        />
+      ) : null}
 
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -456,14 +670,32 @@ export default function FinanceModule() {
           <h1 className="text-xl font-bold tracking-tight text-zinc-900">Finance</h1>
           <p className="text-sm text-zinc-500">Invoice, pembayaran, quotation, dan aging receivable</p>
         </div>
-        <Button
-          variant="outline" size="sm"
-          onClick={() => { if (activeTab === "quotation") void loadQuotations(); else void load(); }}
-          disabled={loading || quotationsLoading}
-          aria-label="Muat ulang data finance"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading || quotationsLoading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline" size="sm"
+            onClick={() => exportInvoicesCsv(invoices ?? [])}
+            disabled={!invoices || invoices.length === 0}
+            aria-label="Ekspor daftar invoice ke CSV"
+          >
+            <Download className="h-4 w-4" aria-hidden /> Ekspor CSV
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => setCreateOpen(true)}
+            className="bg-zinc-900 text-white hover:bg-zinc-800"
+            aria-label="Buat invoice baru"
+          >
+            <Plus className="h-4 w-4" aria-hidden /> Buat Invoice
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => { if (activeTab === "quotation") void loadQuotations(); else void load(); }}
+            disabled={loading || quotationsLoading}
+            aria-label="Muat ulang data finance"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading || quotationsLoading ? "animate-spin" : ""}`} aria-hidden /> Muat ulang
+          </Button>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -594,6 +826,13 @@ export default function FinanceModule() {
                                   <Send className="h-3.5 w-3.5" aria-hidden /> Kirim
                                 </Button>
                               ) : null}
+                              <Button
+                                variant="outline" size="sm"
+                                onClick={(e) => { e.stopPropagation(); setPrintInvoice(inv); }}
+                                aria-label={`Cetak invoice ${inv.number}`}
+                              >
+                                <Printer className="h-3.5 w-3.5" aria-hidden /> Cetak
+                              </Button>
                               {canCancel ? (
                                 <Button
                                   variant="outline" size="sm"
@@ -689,9 +928,27 @@ export default function FinanceModule() {
                       <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
                         {statusMeta(detail.status).label}
                       </Badge>
-                      <span className="text-sm font-bold tabular-nums text-zinc-900">
-                        {formatCurrencyFull(detail.total, detail.currency)}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={() => setPrintInvoice(detail)}
+                          aria-label={`Cetak invoice ${detail.number}`}
+                        >
+                          <Printer className="h-3.5 w-3.5" aria-hidden /> Cetak
+                        </Button>
+                        {detail.status === "draft" ? (
+                          <Button
+                            variant="outline" size="sm"
+                            onClick={() => openEditDraft(detail)}
+                            aria-label={`Edit draft invoice ${detail.number}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
+                          </Button>
+                        ) : null}
+                        <span className="text-sm font-bold tabular-nums text-zinc-900">
+                          {formatCurrencyFull(detail.total, detail.currency)}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-sm">
@@ -760,7 +1017,23 @@ export default function FinanceModule() {
                                   {p.reference ? ` · ${p.reference}` : ""}
                                 </p>
                               </div>
-                              <span className="whitespace-nowrap text-xs text-zinc-400">{formatDateTime(p.paidAt)}</span>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <span className="whitespace-nowrap text-xs text-zinc-400">{formatDateTime(p.paidAt)}</span>
+                                {detail.status !== "cancelled" ? (
+                                  <Button
+                                    variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+                                    onClick={() => setPayDeleteTarget({
+                                      paymentId: p.id,
+                                      label: `${formatCurrencyFull(p.amount, detail.currency)} · ${PAYMENT_METHODS.find((m) => m.key === p.method)?.label ?? p.method}`,
+                                      invoice: detail,
+                                    })}
+                                    aria-label={`Hapus koreksi pembayaran ${formatCurrencyFull(p.amount, detail.currency)}`}
+                                    title="Koreksi (hapus) pembayaran ini"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                                  </Button>
+                                ) : null}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -860,6 +1133,220 @@ export default function FinanceModule() {
                 >
                   {invBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <XCircle className="h-4 w-4" aria-hidden />}
                   Ya, Batalkan
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          {/* Ronde 47 — Dialog buat invoice manual (sinkron brand: currency & prefix nomor di server) */}
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Buat Invoice Manual</DialogTitle>
+                <DialogDescription>
+                  Tagihan langsung tanpa project/quotation — cocok untuk DP, kerja sama one-off, atau penyesuaian. Nomor &amp; mata uang mengikuti brand.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={submitCreateInvoice} className="grid gap-4 py-2">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-brand">Brand *</Label>
+                    <Select value={createBrandId} onValueChange={setCreateBrandId} required>
+                      <SelectTrigger id="inv-brand"><SelectValue placeholder="Pilih brand" /></SelectTrigger>
+                      <SelectContent>
+                        {storeBrands.map((b) => (
+                          <SelectItem key={b.id} value={b.id}>
+                            {b.name} · {b.invoicePrefix} · {b.primaryCurrency}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {createBrand ? (
+                      <p className="text-[11px] text-zinc-500">
+                        Nomor: {createBrand.invoicePrefix}-… · Mata uang: {createBrand.primaryCurrency}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-company">Perusahaan *</Label>
+                    <Select value={createCompanyId} onValueChange={setCreateCompanyId} required>
+                      <SelectTrigger id="inv-company"><SelectValue placeholder="Pilih perusahaan" /></SelectTrigger>
+                      <SelectContent className="max-h-60">
+                        {(companies ?? []).map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                        {companies !== null && companies.length === 0 ? (
+                          <div className="px-2 py-1.5 text-xs text-zinc-400">Tidak ada perusahaan terdaftar</div>
+                        ) : null}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-desc">Deskripsi</Label>
+                  <Input
+                    id="inv-desc" value={createDesc}
+                    onChange={(e) => setCreateDesc(e.target.value)}
+                    placeholder="Contoh: DP 50% paket produksi video company profile"
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-amount">Nominal *</Label>
+                    <Input
+                      id="inv-amount" type="number" min={1} step="any" required
+                      value={createAmount}
+                      onChange={(e) => setCreateAmount(e.target.value)}
+                      placeholder="5000000"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-tax">Pajak</Label>
+                    <Select value={createTax} onValueChange={setCreateTax}>
+                      <SelectTrigger id="inv-tax"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={TAX_NONE}>Tanpa Pajak</SelectItem>
+                        {(taxes ?? []).map((t) => (
+                          <SelectItem key={t.id} value={taxOptionValue(t)}>{t.name} ({t.rate}%)</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-due">Jatuh Tempo</Label>
+                    <Input
+                      id="inv-due" type="date"
+                      value={createDue}
+                      onChange={(e) => setCreateDue(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-notes">Catatan</Label>
+                  <Textarea
+                    id="inv-notes" rows={2}
+                    value={createNotes}
+                    onChange={(e) => setCreateNotes(e.target.value)}
+                    placeholder="Instruksi pembayaran, rekening, dll."
+                  />
+                </div>
+                <div className="rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>Subtotal</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.amount, createBrand?.primaryCurrency ?? "IDR")}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>{createTotals.taxName ? `${createTotals.taxName} ${createTotals.taxRate}%` : "Pajak"}</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between border-t pt-1 font-semibold text-zinc-900">
+                    <span>Total</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.total, createBrand?.primaryCurrency ?? "IDR")}</span>
+                  </div>
+                </div>
+                <DialogFooter className="mt-1">
+                  <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
+                  <Button type="submit" disabled={creating} aria-label="Buat invoice draft">
+                    {creating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+                    Buat Invoice (Draft)
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          {/* Ronde 47 — Dialog edit invoice draft */}
+          <Dialog open={editTarget !== null} onOpenChange={(open) => { if (!open) setEditTarget(null); }}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Edit Draft Invoice</DialogTitle>
+                <DialogDescription>
+                  {editTarget ? `${editTarget.number} · ${editTarget.company?.name ?? "-"}` : ""} — koreksi sebelum dikirim ke klien.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={submitEditDraft} className="grid gap-4 py-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-edit-desc">Deskripsi</Label>
+                  <Input
+                    id="inv-edit-desc" value={editForm.description}
+                    onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-edit-amount">Nominal *</Label>
+                    <Input
+                      id="inv-edit-amount" type="number" min={1} step="any" required
+                      value={editForm.amount}
+                      onChange={(e) => setEditForm((f) => ({ ...f, amount: e.target.value }))}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-edit-tax">Pajak</Label>
+                    <Select value={editForm.tax} onValueChange={(v) => setEditForm((f) => ({ ...f, tax: v }))}>
+                      <SelectTrigger id="inv-edit-tax"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={TAX_NONE}>Tanpa Pajak</SelectItem>
+                        {(taxes ?? []).map((t) => (
+                          <SelectItem key={t.id} value={taxOptionValue(t)}>{t.name} ({t.rate}%)</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-edit-due">Jatuh Tempo</Label>
+                    <Input
+                      id="inv-edit-due" type="date"
+                      value={editForm.due}
+                      onChange={(e) => setEditForm((f) => ({ ...f, due: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-edit-notes">Catatan</Label>
+                  <Textarea
+                    id="inv-edit-notes" rows={2}
+                    value={editForm.notes}
+                    onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
+                  />
+                </div>
+                <div className="rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between font-semibold text-zinc-900">
+                    <span>Total setelah pajak</span>
+                    <span className="tabular-nums">
+                      {formatCurrencyFull(editTotals.total, editTarget?.currency ?? "IDR")}
+                    </span>
+                  </div>
+                </div>
+                <DialogFooter className="mt-1">
+                  <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>Batal</Button>
+                  <Button type="submit" disabled={editing} aria-label="Simpan perubahan invoice">
+                    {editing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Pencil className="h-4 w-4" aria-hidden />}
+                    Simpan Perubahan
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          {/* Ronde 47 — AlertDialog koreksi (hapus) pembayaran */}
+          <AlertDialog open={payDeleteTarget !== null} onOpenChange={(open) => { if (!open) setPayDeleteTarget(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Koreksi Pembayaran</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Hapus pembayaran {payDeleteTarget?.label} pada invoice {payDeleteTarget?.invoice.number}? Status invoice dihitung ulang otomatis. Tindakan ini tercatat di audit log.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={invBusy}>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-rose-600 hover:bg-rose-700"
+                  disabled={invBusy}
+                  onClick={(e) => { e.preventDefault(); void confirmDeletePayment(); }}
+                  aria-label="Konfirmasi hapus pembayaran"
+                >
+                  {invBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Trash2 className="h-4 w-4" aria-hidden />}
+                  Ya, Hapus
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

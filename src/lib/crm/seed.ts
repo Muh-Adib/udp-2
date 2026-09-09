@@ -795,10 +795,29 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
     }});
   }
 
+  // Ronde 47 — matriks hak akses dinamis: reset lalu isi sesuai default RBAC
+  // (sama dengan DEFAULT_MATRIX di lib/crm/permissions.ts) agar seed konsisten.
+  await db.modulePermission.deleteMany();
+  const defaultMatrix: Record<string, Record<string, string>> = {
+    super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
+    director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
+    manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write" },
+    hr: { dashboard: "read", followups: "write", users: "read" },
+    marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write" },
+    finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read" },
+    production: { dashboard: "read", followups: "write", projects: "write" },
+    client: { dashboard: "read", portal: "read" },
+  };
+  const permRows: { role: string; module: string; level: string }[] = [];
+  for (const [role, modules] of Object.entries(defaultMatrix)) {
+    for (const [module, level] of Object.entries(modules)) permRows.push({ role, module, level });
+  }
+  await db.modulePermission.createMany({ data: permRows });
+
   const counts = {
     brands: 4, users: 9, companies: companies.length, contacts: contacts.length,
     opportunities: opps.length, projects: wonDefs.length, invoices: invDefs.length + 1,
-    changeRequests: 2,
+    changeRequests: 2, modulePermissions: permRows.length,
   };
   return { seeded: true, counts };
 }

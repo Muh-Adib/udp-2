@@ -329,6 +329,21 @@ export const api = {
   /** Ronde 35 — terbitkan invoice manual dari project (termin/milestone): alur Produksi → Keuangan. */
   createProjectInvoice: (payload: { projectId: string; description: string; amount: number; taxRate?: number; dueDate?: string; milestoneName?: string; actorName?: string; actorRole?: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_invoice", ...payload }) }),
+  /** Ronde 47 — terbitkan invoice manual tanpa project/quotation (sinkron brand: prefix nomor & mata uang). */
+  createStandaloneInvoice: (payload: { brandId: string; companyId: string; description?: string; amount: number; taxName?: string | null; taxRate?: number; dueDate?: string; notes?: string }) =>
+    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_standalone_invoice", ...payload }) }),
+  /** Ronde 47 — koreksi invoice DRAFT: deskripsi, nominal, pajak parametrik, jatuh tempo, catatan. */
+  updateInvoice: (payload: { invoiceId: string; description?: string; amount?: number; taxName?: string | null; taxRate?: number; dueDate?: string | null; notes?: string | null }) =>
+    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "update_invoice", ...payload }) }),
+  /** Ronde 47 — koreksi pembayaran: hapus entri payment yang salah (status dihitung ulang server). */
+  deletePayment: (payload: { paymentId: string }) =>
+    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "delete_payment", ...payload }) }),
+
+  /** Ronde 47 — matriks hak akses dinamis (RBAC tanpa hardcode). */
+  permissions: () =>
+    request<{ permissions: Record<string, Record<string, string>>; modules: string[]; levels: string[] }>("/api/permissions"),
+  savePermissions: (entries: { role: string; module: string; level: string }[]) =>
+    request<{ permissions: Record<string, Record<string, string>>; updated: number }>("/api/permissions", { method: "PUT", body: JSON.stringify({ entries }) }),
 
   // SLA escalation (Fase 3)
   escalateLead: (payload: { interactionId: string; note?: string; actorName: string; actorRole: string }) =>

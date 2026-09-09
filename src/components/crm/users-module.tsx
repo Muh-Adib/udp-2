@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, KeyRound, Pencil, RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, X } from "lucide-react";
+import { KeyRound, Loader2, Pencil, RefreshCw, RotateCcw, Save, ShieldCheck, UserPlus, Users as UsersIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,9 +21,11 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, type UserAdminRow } from "@/lib/crm/api-client";
-import { useCrmStore } from "@/lib/crm/store";
+import {
+  useCrmStore, MODULE_META, ACCESS_LEVEL_META,
+  type ModuleKey, type AccessLevel,
+} from "@/lib/crm/store";
 import { ROLES } from "@/lib/crm/constants";
-import { MODULE_META, type ModuleKey } from "@/lib/crm/store";
 import { initials } from "@/lib/crm/utils";
 
 // ============ Meta ============
@@ -42,8 +44,10 @@ const ROLE_BADGE: Record<string, string> = {
 
 const MODULE_ORDER: ModuleKey[] = [
   "dashboard", "inbox", "contacts", "pipeline", "followups",
-  "finance", "projects", "portal", "brands", "users", "audit",
+  "finance", "reports", "projects", "portal", "channels", "brands", "users", "audit",
 ];
+
+const ACCESS_LEVELS_ORDER: AccessLevel[] = ["none", "read", "write", "full"];
 
 const AVATAR_COLORS = ["#0f766e", "#b45309", "#be123c", "#7c3aed", "#0369a1", "#4d7c0f", "#525252", "#c2410c", "#0e7490", "#a21caf"];
 
@@ -223,6 +227,192 @@ function UserDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ============ Ronde 47 — Editor Matriks Hak Akses dinamis ============
+
+function PermissionMatrixSection({ editable }: { editable: boolean }) {
+  const permissionMatrix = useCrmStore((s) => s.permissionMatrix);
+  const loadPermissions = useCrmStore((s) => s.loadPermissions);
+  /** Draft editor: role→module→level (null = belum disalin dari matriks server). */
+  const [draft, setDraft] = useState<Record<string, Record<string, AccessLevel>> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void loadPermissions();
+  }, [loadPermissions]);
+
+  useEffect(() => {
+    if (permissionMatrix && draft === null) {
+      setDraft(JSON.parse(JSON.stringify(permissionMatrix)) as Record<string, Record<string, AccessLevel>>);
+    }
+  }, [permissionMatrix, draft]);
+
+  const dirty = useMemo(() => {
+    if (!draft || !permissionMatrix) return false;
+    for (const role of Object.keys(draft)) {
+      for (const [module, level] of Object.entries(draft[role])) {
+        if ((permissionMatrix[role]?.[module] ?? "none") !== level) return true;
+      }
+    }
+    return false;
+  }, [draft, permissionMatrix]);
+
+  function setCell(role: string, module: string, level: AccessLevel) {
+    setDraft((prev) => {
+      const next = JSON.parse(JSON.stringify(prev ?? {})) as Record<string, Record<string, AccessLevel>>;
+      (next[role] ??= {})[module] = level;
+      return next;
+    });
+  }
+
+  async function save() {
+    if (!draft) return;
+    const entries: { role: string; module: string; level: AccessLevel }[] = [];
+    for (const role of Object.keys(draft)) {
+      for (const [module, level] of Object.entries(draft[role])) {
+        if ((permissionMatrix?.[role]?.[module] ?? "none") !== level) entries.push({ role, module, level });
+      }
+    }
+    if (entries.length === 0) return toast.info("Tidak ada perubahan untuk disimpan");
+    setSaving(true);
+    try {
+      await api.savePermissions(entries);
+      await loadPermissions();
+      setDraft(null); // efek akan menyalin ulang dari matriks server yang baru
+      toast.success(`Matriks hak akses diperbarui (${entries.length} perubahan) — navigasi semua pengguna menyesuaikan otomatis`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan matriks hak akses");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function resetDraft() {
+    if (permissionMatrix) {
+      setDraft(JSON.parse(JSON.stringify(permissionMatrix)) as Record<string, Record<string, AccessLevel>>);
+      toast.info("Perubahan dibatalkan");
+    }
+  }
+
+  const effective = draft ?? permissionMatrix ?? {};
+
+  return (
+    <section aria-label="Matriks hak akses" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+            <ShieldCheck className="h-4 w-4 text-zinc-400" aria-hidden /> Matriks Hak Akses per Modul
+          </h2>
+          <p className="text-xs text-zinc-500">
+            {editable
+              ? "Kendalikan akses tiap role per modul — disimpan di database (bukan hardcode) dan berlaku langsung ke navigasi semua pengguna."
+              : "Ringkasan modul & level akses tiap role (sumber: konfigurasi admin di database)."}
+          </p>
+        </div>
+        {editable ? (
+          <div className="flex items-center gap-2">
+            {dirty ? <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">Ada perubahan</Badge> : null}
+            <Button variant="outline" size="sm" onClick={resetDraft} disabled={!dirty || saving} aria-label="Batalkan perubahan matriks">
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Reset
+            </Button>
+            <Button size="sm" onClick={() => void save()} disabled={!dirty || saving} aria-label="Simpan matriks hak akses">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />} Simpan
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Legenda level */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {ACCESS_LEVELS_ORDER.map((lv) => (
+          <Tooltip key={lv}>
+            <TooltipTrigger asChild>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${ACCESS_LEVEL_META[lv].cls}`}>
+                {ACCESS_LEVEL_META[lv].label}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{ACCESS_LEVEL_META[lv].description}</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[860px] border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-10 border-b bg-white px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Modul
+              </th>
+              {ROLES.map((r) => (
+                <th key={r.key} className="border-b px-2 py-2 text-center text-xs font-semibold text-zinc-600">
+                  {r.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {MODULE_ORDER.map((m) => {
+              const meta = MODULE_META[m];
+              return (
+                <tr key={m} className="hover:bg-zinc-50/60">
+                  <td className="sticky left-0 z-10 border-b bg-white px-3 py-2">
+                    <p className="text-sm font-medium text-zinc-900">{meta.label}</p>
+                    <p className="text-[11px] text-zinc-400">{meta.description}</p>
+                  </td>
+                  {ROLES.map((r) => {
+                    const level: AccessLevel = (effective[r.key]?.[m] ?? "none") as AccessLevel;
+                    if (!editable) {
+                      const lm = ACCESS_LEVEL_META[level];
+                      return (
+                        <td key={r.key} className="border-b px-2 py-2 text-center">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${lm.cls}`}>{lm.label}</span>
+                        </td>
+                      );
+                    }
+                    return (
+                      <td key={r.key} className="border-b px-1 py-1.5 text-center">
+                        <Select
+                          value={level}
+                          onValueChange={(v) => setCell(r.key, m, v as AccessLevel)}
+                          disabled={saving}
+                        >
+                          <SelectTrigger
+                            className="mx-auto h-8 w-[104px] border-0 px-2 text-xs font-medium shadow-none data-[state=open]:ring-1 data-[state=open]:ring-zinc-400"
+                            style={{ backgroundColor: undefined }}
+                            aria-label={`Akses ${meta.label} untuk ${r.label}`}
+                          >
+                            <span className={`truncate rounded-full border px-1.5 py-0.5 text-[11px] ${ACCESS_LEVEL_META[level].cls}`}>
+                              {ACCESS_LEVEL_META[level].label}
+                            </span>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ACCESS_LEVELS_ORDER.map((lv) => (
+                              <SelectItem key={lv} value={lv}>
+                                <span className="flex items-center gap-2">
+                                  <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] ${ACCESS_LEVEL_META[lv].cls}`}>
+                                    {ACCESS_LEVEL_META[lv].label}
+                                  </span>
+                                  <span className="text-[11px] text-zinc-500">{ACCESS_LEVEL_META[lv].description}</span>
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {effective && Object.keys(effective).length === 0 ? (
+        <p className="mt-3 text-xs text-zinc-400">Matriks belum termuat…</p>
+      ) : null}
+    </section>
   );
 }
 
@@ -425,57 +615,8 @@ export default function UsersModule() {
         onSaved={() => void load(true)}
       />
 
-      {/* B. Matriks permission */}
-      <section aria-label="Matriks hak akses" className="rounded-xl border bg-white p-4 shadow-sm sm:p-6">
-        <div className="mb-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
-            <ShieldCheck className="h-4 w-4 text-zinc-400" aria-hidden /> Matriks Hak Akses per Modul
-          </h2>
-          <p className="text-xs text-zinc-500">Ringkasan modul yang dapat dibuka tiap role (sumber: konfigurasi MODULE_META).</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm">
-            <thead>
-              <tr>
-                <th className="sticky left-0 z-10 border-b bg-white px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                  Modul
-                </th>
-                {ROLES.map((r) => (
-                  <th key={r.key} className="border-b px-2 py-2 text-center text-xs font-semibold text-zinc-600">
-                    {r.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {MODULE_ORDER.map((m) => {
-                const meta = MODULE_META[m];
-                return (
-                  <tr key={m} className="hover:bg-zinc-50">
-                    <td className="sticky left-0 z-10 border-b bg-white px-3 py-2">
-                      <p className="text-sm font-medium text-zinc-900">{meta.label}</p>
-                      <p className="text-[11px] text-zinc-400">{meta.description}</p>
-                    </td>
-                    {ROLES.map((r) => {
-                      const allowed = meta.roles.includes(r.key);
-                      return (
-                        <td key={r.key} className="border-b px-2 py-2 text-center">
-                          <span
-                            className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${allowed ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-400"}`}
-                            aria-label={`${allowed ? "Boleh" : "Tidak boleh"} — ${meta.label} untuk ${r.label}`}
-                          >
-                            {allowed ? <Check className="h-3.5 w-3.5" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />}
-                          </span>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {/* Ronde 47 — B. Matriks permission dinamis (DB-driven, editor utk admin) */}
+      <PermissionMatrixSection editable={isSuperAdmin} />
 
       {/* C. Kartu penjelasan per role */}
       <section aria-label="Penjelasan role" className="space-y-3">
@@ -490,13 +631,21 @@ export default function UsersModule() {
                 <span className="text-[11px] text-zinc-400">{roleCounts[r.key] ?? 0} user</span>
               </div>
               <p className="mt-2.5 text-xs leading-relaxed text-zinc-600">{r.description}</p>
-              <p className="mt-2 text-[11px] text-zinc-400">
-                {MODULE_ORDER.filter((m) => MODULE_META[m].roles.includes(r.key)).length} modul dapat diakses
-              </p>
+              <RoleModuleCount role={r.key} />
             </div>
           ))}
         </div>
       </section>
     </div>
   );
+}
+
+/** Ronde 47 — jumlah modul yang dapat diakses role, dari matriks DB (fallback statis). */
+function RoleModuleCount({ role }: { role: string }) {
+  const permissionMatrix = useCrmStore((s) => s.permissionMatrix);
+  const count = MODULE_ORDER.filter((m) => {
+    const level = permissionMatrix?.[role]?.[m] ?? (MODULE_META[m].roles.includes(role) ? "write" : "none");
+    return level !== "none";
+  }).length;
+  return <p className="mt-2 text-[11px] text-zinc-400">{count} modul dapat diakses</p>;
 }

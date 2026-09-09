@@ -741,3 +741,17 @@ model Tax {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// Ronde 47 — RBAC dinamis: matriks hak akses per (role, modul) yang dapat
+// dikonfigurasi admin dari UI (User & Access → Matriks Hak Akses), BUKAN hardcode.
+// level: none (tidak bisa dibuka) | read (lihat saja) | write (buat/ubah) | full (write + aksi kritis)
+model ModulePermission {
+  id        String   @id @default(cuid())
+  role      String // key role (lihat ROLES di lib/crm/constants.ts)
+  module    String // key modul (lihat MODULE_META di lib/crm/store.ts)
+  level     String   @default("read") // none, read, write, full
+  updatedAt DateTime @updatedAt
+
+  @@unique([role, module])
+  @@index([role])
+}
