@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody, clampNum } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 import { workflowFor, achievementFor } from "@/lib/crm/constants";
+import { sendPushToRoles } from "@/lib/crm/push";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -19,6 +20,8 @@ export async function GET(req: NextRequest) {
     include: {
       brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
       changeRequests: { orderBy: { createdAt: "desc" } },
+      // Ronde 48 — brief klien ter-link (alur Won) untuk tim produksi di detail project.
+      brief: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -124,6 +127,7 @@ export async function POST(req: NextRequest) {
     include: {
       brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
       changeRequests: { orderBy: { createdAt: "desc" } },
+      brief: true,
     },
   });
   return ok({ project: full }, 201);
@@ -173,6 +177,22 @@ export async function PATCH(req: NextRequest) {
     const done = ms.filter((m) => m.status === "done").length;
     const progress = Math.round((done / ms.length) * 100);
     await db.project.update({ where: { id }, data: { progress, status: progress === 100 ? "review" : undefined } });
+    // Ronde 48 — milestone selesai kini memberi notifikasi nyata lintas jalur:
+    // produksi & pimpinan tahu tahapan beres, klien melihat progress di portal.
+    if (String(body.milestoneStatus ?? "done") === "done") {
+      const milestone = await db.milestone.findUnique({ where: { id: String(body.milestoneId) }, select: { name: true } });
+      void sendPushToRoles(
+        ["production", "manager", "director", "super_admin"],
+        {
+          title: "Milestone selesai ✅",
+          body: `${project.code} — ${milestone?.name ?? "Milestone"} selesai (${progress}% keseluruhan)`,
+          url: `/?modul=projects`,
+          tag: `milestone:${body.milestoneId}`,
+          type: "project",
+        },
+        actor.email
+      ).catch(() => {});
+    }
   }
   return ok({ project });
 }

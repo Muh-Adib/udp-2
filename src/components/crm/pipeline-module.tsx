@@ -41,6 +41,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -63,7 +64,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import OpportunityDetail from "@/components/crm/opportunity-detail";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import { api } from "@/lib/crm/api-client";
-import { LOST_REASONS, OPEN_STAGES, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+import { LOST_REASONS, NURTURE_SEGMENTS, OPEN_STAGES, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { scoreTier } from "@/lib/crm/scoring";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
@@ -215,12 +216,27 @@ interface LostExtra {
   competitor?: string;
 }
 
+/** Ronde 48 — data wajib saat pindah ke stage Nurture (server menolak tanpa nurtureSegment). */
+interface NurtureExtra {
+  nurtureSegment: string;
+  followUpDate: string; // ISO date
+  nurtureNotes?: string;
+}
+
 // ---------- Helper ----------
 
 function startOfToday(): number {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+/** Ronde 48 — tanggal hari ini dlm format YYYY-MM-DD lokal (untuk min input date). */
+function toDateInputValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function isOverdue(opp: OpportunityDTO): boolean {
@@ -710,6 +726,97 @@ function LostReasonDialog({
   );
 }
 
+// ---------- Ronde 48 — Dialog data nurture (analog LostReasonDialog) ----------
+
+function NurtureDialog({
+  open,
+  saving,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  saving: boolean;
+  onConfirm: (extra: NurtureExtra) => void;
+  onCancel: () => void;
+}) {
+  const [segment, setSegment] = useState("");
+  const [followUpDate, setFollowUpDate] = useState("");
+  const [nurtureNotes, setNurtureNotes] = useState("");
+
+  function resetAndClose() {
+    setSegment("");
+    setFollowUpDate("");
+    setNurtureNotes("");
+    onCancel();
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && resetAndClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Pindah ke Nurture</DialogTitle>
+          <DialogDescription>
+            Opportunity belum siap membeli — pilih segmen nurturing dan jadwal follow-up berikutnya.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Select value={segment} onValueChange={setSegment}>
+            <SelectTrigger className="w-full" aria-label="Segmen nurture">
+              <SelectValue placeholder="Pilih segmen nurture" />
+            </SelectTrigger>
+            <SelectContent>
+              {NURTURE_SEGMENTS.map((s) => (
+                <SelectItem key={s.key} value={s.key}>
+                  {s.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="grid gap-1.5">
+            <Label htmlFor="nurture-followup">Tanggal follow-up berikutnya</Label>
+            <Input
+              id="nurture-followup"
+              type="date"
+              min={toDateInputValue(new Date())}
+              value={followUpDate}
+              onChange={(e) => setFollowUpDate(e.target.value)}
+              aria-label="Tanggal follow-up berikutnya"
+            />
+          </div>
+          <Textarea
+            rows={3}
+            value={nurtureNotes}
+            onChange={(e) => setNurtureNotes(e.target.value)}
+            placeholder="Catatan nurture (opsional) — konteks, kesepakatan, dsb."
+            aria-label="Catatan nurture"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={resetAndClose}>
+            Batal
+          </Button>
+          <Button
+            disabled={!segment || !followUpDate || saving}
+            onClick={() => {
+              const extra: NurtureExtra = {
+                nurtureSegment: segment,
+                followUpDate: new Date(followUpDate).toISOString(),
+                nurtureNotes: nurtureNotes.trim() || undefined,
+              };
+              setSegment("");
+              setFollowUpDate("");
+              setNurtureNotes("");
+              onConfirm(extra);
+            }}
+          >
+            Simpan Nurture
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- Dialog: Impor CSV opportunity (Task 15-a) ----------
 
 function importStatusChipClass(status: ImportOpportunityRowDTO["status"]): string {
@@ -1102,6 +1209,8 @@ export default function PipelineModule() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pendingLost, setPendingLost] = useState<OpportunityDTO | null>(null);
+  // Ronde 48 — dialog data nurture (dari drag kanan ke kolom Nurture)
+  const [pendingNurture, setPendingNurture] = useState<OpportunityDTO | null>(null);
   const [savingStage, setSavingStage] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   // Ronde 35 — tombol "Peluang Baru" dengan form opportunity bersama
@@ -1233,7 +1342,7 @@ export default function PipelineModule() {
     setScoreSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
   }
 
-  async function moveOpportunity(opp: OpportunityDTO, stage: string, extra?: LostExtra) {
+  async function moveOpportunity(opp: OpportunityDTO, stage: string, extra?: LostExtra | NurtureExtra) {
     const snapshot = oppsRef.current;
     const optimistic = snapshot.map((o) => (o.id === opp.id ? { ...o, stage } : o));
     oppsRef.current = optimistic;
@@ -1294,6 +1403,11 @@ export default function PipelineModule() {
     if (targetStage === opp.stage) return;
     if (targetStage === "lost") {
       setPendingLost(opp);
+      return;
+    }
+    // Ronde 48 — server menolak stage nurture tanpa nurtureSegment → wajib lewat dialog.
+    if (targetStage === "nurture") {
+      setPendingNurture(opp);
       return;
     }
     void moveOpportunity(opp, targetStage);
@@ -1556,6 +1670,19 @@ export default function PipelineModule() {
           const opp = pendingLost;
           setPendingLost(null);
           void moveOpportunity(opp, "lost", extra);
+        }}
+      />
+
+      {/* Ronde 48 — dialog data nurture (dari drag kanban) */}
+      <NurtureDialog
+        open={!!pendingNurture}
+        saving={savingStage}
+        onCancel={() => setPendingNurture(null)}
+        onConfirm={(extra) => {
+          if (!pendingNurture) return;
+          const opp = pendingNurture;
+          setPendingNurture(null);
+          void moveOpportunity(opp, "nurture", extra);
         }}
       />
 

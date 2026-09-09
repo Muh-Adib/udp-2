@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Save, Trash2, TriangleAlert, X,
+  Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -181,6 +181,9 @@ export default function BrandSettingsDialog({
   const [letter, setLetter] = useState<LetterTemplateDraft | null>(null);
   const [headerImg, setHeaderImg] = useState<string | null>(null);
   const [footerImg, setFooterImg] = useState<string | null>(null);
+  // Ronde 48 — dimensi natural gambar kop/footer (panduan ukuran pixel A4)
+  const [headerDims, setHeaderDims] = useState<{ w: number; h: number } | null>(null);
+  const [footerDims, setFooterDims] = useState<{ w: number; h: number } | null>(null);
   const headerInputRef = useRef<HTMLInputElement | null>(null);
   const footerInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -250,6 +253,21 @@ export default function BrandSettingsDialog({
       if (tab === "integrasi" && !channels) void loadChannels();
     }
   }, [open, brand, tab, catalog, catalogLoading, channels, loadCatalog, loadChannels]);
+
+  // Ronde 48 — ukur dimensi natural gambar kop/footer utk panduan ukuran A4.
+  // (harus di atas early return — aturan rules-of-hooks)
+  useEffect(() => {
+    if (!headerImg) { setHeaderDims(null); return; }
+    const img = new Image();
+    img.onload = () => setHeaderDims({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = headerImg;
+  }, [headerImg]);
+  useEffect(() => {
+    if (!footerImg) { setFooterDims(null); return; }
+    const img = new Image();
+    img.onload = () => setFooterDims({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = footerImg;
+  }, [footerImg]);
 
   if (!brand) return null;
   const activeBrand = brand; // snapshot utk closure (TS narrowing tidak menembus fungsi)
@@ -643,6 +661,18 @@ export default function BrandSettingsDialog({
           <TabsContent value="letter" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
             {letter ? (
               <div className="space-y-5">
+                {/* Ronde 48 — panduan ukuran pixel kop surat (A4 presisi) */}
+                <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 text-xs leading-relaxed text-orange-900">
+                  <p className="flex items-center gap-1.5 font-semibold">
+                    <Ruler className="h-4 w-4 shrink-0" aria-hidden /> Panduan ukuran kop surat — A4 presisi (pixel)
+                  </p>
+                  <ul className="mt-1.5 list-disc space-y-1 pl-5">
+                    <li>Kertas A4 = <span className="font-mono font-semibold">794 × 1123 px</span> (96 DPI). Surat dicetak persis pada ukuran ini — posisi kop &amp; footer tidak bergeser.</li>
+                    <li>Gambar header &amp; footer dibentangkan <b>full-width 794px</b> — rasio asli dipertahankan, tinggi mengikuti gambar. Gunakan gambar yang didesain lebar penuh (full), bukan potongan kecil.</li>
+                    <li>Saran ukuran: header <span className="font-mono">794 × 160–240 px</span>, footer <span className="font-mono">794 × 80–140 px</span>. Footer otomatis menancap di dasar kertas — tidak naik walau isi surat pendek.</li>
+                    <li>Sisakan margin aman ±40 px di dalam desain agar teks tidak menempel tepi kertas.</li>
+                  </ul>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   {/* Kop surat */}
                   <div className="space-y-2 rounded-xl border p-4">
@@ -656,6 +686,12 @@ export default function BrandSettingsDialog({
                         <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar kop — dipakai logo + alamat brand</p>
                       )}
                     </div>
+                    {headerImg ? (
+                      <p className="text-[10px] leading-snug text-zinc-500">
+                        Dimensi asli: <span className="font-mono font-semibold text-zinc-700">{headerDims ? `${headerDims.w} × ${headerDims.h}px` : "…"}</span>
+                        {headerDims ? ` · dicetak selebar 794px → tinggi ±${Math.round((headerDims.h / headerDims.w) * 794)}px di kertas` : null}
+                      </p>
+                    ) : null}
                     <div className="flex flex-wrap gap-2">
                       <input
                         ref={headerInputRef} type="file" accept="image/png,image/jpeg,image/webp"
@@ -683,6 +719,12 @@ export default function BrandSettingsDialog({
                         <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar footer</p>
                       )}
                     </div>
+                    {footerImg ? (
+                      <p className="text-[10px] leading-snug text-zinc-500">
+                        Dimensi asli: <span className="font-mono font-semibold text-zinc-700">{footerDims ? `${footerDims.w} × ${footerDims.h}px` : "…"}</span>
+                        {footerDims ? ` · dicetak selebar 794px → tinggi ±${Math.round((footerDims.h / footerDims.w) * 794)}px di kertas` : null}
+                      </p>
+                    ) : null}
                     <div className="flex flex-wrap gap-2">
                       <input
                         ref={footerInputRef} type="file" accept="image/png,image/jpeg,image/webp"

@@ -29,11 +29,11 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/crm/api-client";
+import { api, portalApi } from "@/lib/crm/api-client";
 import { SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
-  Brand, ChangeRequestDTO, CompanyRef, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
+  Brand, ChangeRequestDTO, CompanyRef, ClientBriefDTO, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
 } from "@/lib/crm/types";
 import { formatCurrency, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
@@ -186,6 +186,139 @@ function ProductionFlow({ project, deliverables, crs, invoices }: {
         })}
       </ol>
     </div>
+  );
+}
+
+// ============ Ronde 48 — Kartu "Brief Klien" pada sheet detail project ============
+// Alur Won kini menautkan brief klien ke project (ClientBrief.projectId). Produksi membaca
+// kembali brief yang sama langsung dari detail project — tanpa perlu membuka modul brief.
+
+const BRIEF_STATUS_BADGE: Record<string, string> = {
+  approved: "border-transparent bg-emerald-100 text-emerald-700",
+  in_review: "border-transparent bg-amber-100 text-amber-700",
+  revision: "border-transparent bg-rose-100 text-rose-700",
+  draft: "border-transparent bg-zinc-100 text-zinc-600",
+};
+
+function briefStatusLabel(s: string): string {
+  switch (s) {
+    case "approved": return "Disetujui";
+    case "in_review": return "Ditinjau";
+    case "revision": return "Revisi";
+    case "draft": return "Draft";
+    default: return s;
+  }
+}
+
+/** Deliverables brief bisa tersimpan sbg string JSON (data lama) maupun array —
+ *  parse defensif try/catch; item tanpa nama dibuang, qty tidak valid → 1. */
+function parseBriefDeliverables(raw: unknown): { name: string; qty: number; notes?: string }[] {
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((item): { name: string; qty: number; notes?: string } | null => {
+      const obj = (item ?? {}) as { name?: unknown; qty?: unknown; notes?: unknown };
+      const name = typeof obj.name === "string" ? obj.name.trim() : "";
+      if (!name) return null;
+      const qtyNum = typeof obj.qty === "number" ? obj.qty : Number(obj.qty);
+      return {
+        name,
+        qty: Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 1,
+        notes: typeof obj.notes === "string" && obj.notes.trim() ? obj.notes.trim() : undefined,
+      };
+    })
+    .filter((d): d is { name: string; qty: number; notes?: string } => d !== null);
+}
+
+function BriefKlienCard({ brief }: { brief: ClientBriefDTO }) {
+  const deliverables = parseBriefDeliverables(brief.deliverables);
+  const hasBudget = brief.budgetMin != null || brief.budgetMax != null;
+  const budgetText = brief.budgetMin != null && brief.budgetMax != null
+    ? `${formatCurrency(brief.budgetMin, brief.currency)} – ${formatCurrency(brief.budgetMax, brief.currency)}`
+    : brief.budgetMin != null
+      ? `≥ ${formatCurrency(brief.budgetMin, brief.currency)}`
+      : brief.budgetMax != null
+        ? `≤ ${formatCurrency(brief.budgetMax, brief.currency)}`
+        : null;
+  return (
+    <section
+      className="rounded-xl border border-l-4 border-zinc-200 border-l-orange-400 bg-white p-4 shadow-sm"
+      aria-label="Brief klien terkait project"
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-mono text-xs text-zinc-500">{brief.code}</span>
+        <h3 className="min-w-0 flex-1 text-sm font-semibold leading-snug text-zinc-900">{brief.title}</h3>
+        <Badge variant="outline" className={`shrink-0 border-transparent px-1.5 ${BRIEF_STATUS_BADGE[brief.status] ?? "border-transparent bg-zinc-100 text-zinc-600"}`}>
+          {briefStatusLabel(brief.status)}
+        </Badge>
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {brief.objectives ? (
+          <div className="sm:col-span-2">
+            <p className="text-xs text-zinc-500">Tujuan</p>
+            <p className="mt-0.5 whitespace-pre-line text-sm leading-snug text-zinc-800">{brief.objectives}</p>
+          </div>
+        ) : null}
+        {brief.targetAudience ? (
+          <div>
+            <p className="text-xs text-zinc-500">Audiens</p>
+            <p className="mt-0.5 whitespace-pre-line text-sm leading-snug text-zinc-800">{brief.targetAudience}</p>
+          </div>
+        ) : null}
+        {brief.keyMessages ? (
+          <div>
+            <p className="text-xs text-zinc-500">Pesan Kunci</p>
+            <p className="mt-0.5 whitespace-pre-line text-sm leading-snug text-zinc-800">{brief.keyMessages}</p>
+          </div>
+        ) : null}
+        {brief.timelineStart || brief.timelineEnd ? (
+          <div>
+            <p className="text-xs text-zinc-500">Timeline</p>
+            <p className="mt-0.5 text-sm text-zinc-800">
+              {formatDate(brief.timelineStart)} – {formatDate(brief.timelineEnd)}
+            </p>
+          </div>
+        ) : null}
+        {hasBudget ? (
+          <div>
+            <p className="text-xs text-zinc-500">Budget{brief.currency ? ` (${brief.currency})` : ""}</p>
+            <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{budgetText ?? "-"}</p>
+          </div>
+        ) : null}
+      </div>
+
+      {deliverables.length > 0 ? (
+        <div className="mt-3 border-t border-zinc-100 pt-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Deliverable</p>
+          <ul className="mt-1.5 space-y-1" aria-label="Daftar deliverable brief">
+            {deliverables.map((d, i) => (
+              <li key={`${d.name}-${i}`} className="flex items-center gap-2 text-sm text-zinc-800">
+                <Badge variant="outline" className="shrink-0 border-zinc-200 bg-zinc-50 px-1.5 text-[11px] tabular-nums text-zinc-600">
+                  {d.qty}×
+                </Badge>
+                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                {d.notes ? <span className="max-w-[45%] truncate text-xs text-zinc-400">{d.notes}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {brief.createdBy || brief.approvedBy ? (
+        <p className="mt-3 border-t border-zinc-100 pt-2 text-[11px] text-zinc-400">
+          Brief dibuat oleh {brief.createdBy ?? "-"}
+          {brief.approvedBy ? ` · disetujui oleh ${brief.approvedBy}` : ""}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -1377,6 +1510,23 @@ export default function ProjectsModule() {
     resetDf();
   }
 
+  /** Ronde 48 — salin link portal klien: cari token aktif utk perusahaan project,
+   *  salin URL secure link ke clipboard. Tanpa token → arahkan ke modul Client Portal. */
+  async function copyPortalLink(project: ProjectDTO) {
+    try {
+      const res = await portalApi.tokens();
+      const token = res.tokens.find((t) => t.active && t.companyId === project.companyId);
+      if (token) {
+        await navigator.clipboard.writeText(`${window.location.origin}/?portal=${token.token}`);
+        toast.success("Link portal klien disalin — kirim via WhatsApp/email kepada klien");
+      } else {
+        toast.info("Belum ada portal token aktif untuk klien ini — buat di modul Client Portal");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal memuat portal token");
+    }
+  }
+
   // Global search (ronde 26) — buka sheet detail project hasil pencarian (⌘K).
   // Bila daftar belum termuat (null), pendingFocus dipertahankan — effect berjalan lagi
   // saat data tiba; sudah termuat tapi id tak ketemu → cukup pindah modul (clear).
@@ -2125,8 +2275,24 @@ export default function ProjectsModule() {
                   {detail.brand ? ` · ${detail.brand.name}` : ""}
                   {detail.company?.name ? ` · ${detail.company.name}` : ""}
                 </SheetDescription>
+                {/* Ronde 48 — salin link portal klien (hanya pimpinan sistem) */}
+                {user?.role === "super_admin" || user?.role === "director" ? (
+                  <div className="mt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void copyPortalLink(detail)}
+                      aria-label="Salin link portal klien untuk project ini"
+                    >
+                      <Link2 className="h-3.5 w-3.5" aria-hidden /> Link Portal
+                    </Button>
+                  </div>
+                ) : null}
               </SheetHeader>
               <div className="mt-4 space-y-5 px-4 pb-8">
+                {/* Ronde 48 — brief klien ter-link (alur Won); hanya tampil bila ada */}
+                {detail.brief ? <BriefKlienCard brief={detail.brief} /> : null}
+
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
                     {statusMeta(detail.status).label}

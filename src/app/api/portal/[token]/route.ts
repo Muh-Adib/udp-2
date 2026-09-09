@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, ok } from "@/lib/crm/server";
-import type { ClientDocumentDTO, PortalTokenPayload, ProjectDeliverableDTO } from "@/lib/crm/types";
+import type {
+  ClientDocumentDTO, PortalInvoiceSummary, PortalMilestoneSummary, PortalTokenPayload, ProjectDeliverableDTO,
+} from "@/lib/crm/types";
 
 /**
  * Task 23-d — GET /api/portal/[token] (PUBLIK — tanpa login, kunci = token URL).
@@ -24,7 +26,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
     return fail("Tautan sudah kedaluwarsa", 403);
   }
 
-  const [documents, projects] = await Promise.all([
+  // Ronde 48 — milestone + invoice ikut diumumkan ke klien: progress proyek
+  // (timeline milestone) dan tagihan terlihat langsung dari secure link.
+  const [documents, projects, invoices] = await Promise.all([
     db.clientDocument.findMany({
       where: { companyId: portal.companyId },
       orderBy: { createdAt: "desc" },
@@ -33,9 +37,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       where: { companyId: portal.companyId },
       include: {
         deliverables: { orderBy: { createdAt: "desc" } },
+        milestones: { orderBy: { order: "asc" } },
         brand: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
+    }),
+    db.invoice.findMany({
+      where: { companyId: portal.companyId, status: { not: "cancelled" } },
+      orderBy: { issueDate: "desc" },
+      select: {
+        id: true, number: true, description: true, amount: true, taxAmount: true,
+        total: true, currency: true, status: true, issueDate: true, dueDate: true,
+      },
     }),
   ]);
 
@@ -79,6 +92,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       progress: p.progress,
       dueDate: p.dueDate ? p.dueDate.toISOString() : null,
       brandName: p.brand?.name ?? null,
+      milestones: p.milestones.map(
+        (m): PortalMilestoneSummary => ({
+          id: m.id,
+          name: m.name,
+          order: m.order,
+          status: m.status,
+          dueDate: m.dueDate ? m.dueDate.toISOString() : null,
+          achievement: m.achievement,
+        })
+      ),
       deliverables: p.deliverables.map(
         (d): ProjectDeliverableDTO => ({
           id: d.id,
@@ -99,6 +122,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
         })
       ),
     })),
+    // Ronde 48 — tagihan klien (ringkas, tanpa data internal).
+    invoices: invoices.map(
+      (i): PortalInvoiceSummary => ({
+        id: i.id,
+        number: i.number,
+        description: i.description,
+        amount: i.amount,
+        taxAmount: i.taxAmount,
+        total: i.total,
+        currency: i.currency,
+        status: i.status,
+        issueDate: i.issueDate.toISOString(),
+        dueDate: i.dueDate ? i.dueDate.toISOString() : null,
+      })
+    ),
   };
 
   return ok(payload);

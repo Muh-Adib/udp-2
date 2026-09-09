@@ -35,6 +35,8 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 interface LetterTemplate {
   fontFamily?: string;
   accentColor?: string;
+  headerStyle?: string;
+  showLogo?: boolean;
   footerNote?: string;
 }
 
@@ -72,48 +74,58 @@ export function InvoicePrintArea({ invoice: inv, brand }: { invoice: InvoicePrin
   const brandColor = brand?.color ?? "#18181b";
   const today = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
+  // Ronde 48 — showLogo & headerStyle kini benar-benar dipakai.
   const letter = parseLetterTemplate(brand?.letterTemplate);
   const fontFamily = letter.fontFamily?.trim() || "Helvetica";
   const accentColor = safeHex(letter.accentColor);
+  const showLogo = letter.showLogo !== false;
+  const centeredKop = letter.headerStyle === "logo-center";
 
   const paid = paidAmount(inv);
   const remaining = Math.max(0, inv.total - paid);
   const hasPayments = (inv.payments ?? []).length > 0;
 
   return (
-    <div id="print-area" className="mx-auto max-w-[820px] text-zinc-900" style={{ fontFamily: `"${fontFamily}", Arial, sans-serif` }}>
-      {/* Kop surat — pakai gambar kop milik brand bila ada, fallback logo identitas */}
+    /* Ronde 48 — kanvas A4 presisi 794 × 1123 px; footer ter-anchored di dasar kertas. */
+    <div
+      id="print-area"
+      className="mx-auto flex min-h-[1123px] w-[794px] max-w-full flex-col text-zinc-900"
+      style={{ fontFamily: `"${fontFamily}", Arial, sans-serif` }}
+    >
+      {/* Kop surat gambar — FULL-WIDTH, rasio asli dipertahankan */}
       {brand?.letterheadHeader ? (
-        <div className="mb-3">
-          <img src={brand.letterheadHeader} alt={`Kop surat ${brand.name}`} className="h-24 w-full object-contain object-top sm:h-28" />
-        </div>
-      ) : (
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3">
-            {brand?.logoUrl ? (
-              <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
-            ) : brand ? (
-              <span className="flex h-12 w-12 items-center justify-center rounded-lg border text-2xl font-bold leading-none" style={{ color: brandColor }} aria-hidden>
-                {brand.name.charAt(0).toUpperCase()}
-              </span>
-            ) : null}
-            <div>
-              <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
-                {brand?.name ?? "UDP"}
-              </p>
-              {brand?.tagline ? <p className="text-xs italic text-zinc-600">{brand.tagline}</p> : null}
-              {brand?.address || brand?.city ? (
-                <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand?.address || brand?.city}</p>
-              ) : brand?.description ? (
-                <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand.description}</p>
+        <img src={brand.letterheadHeader} alt={`Kop surat ${brand.name}`} className="block w-full" />
+      ) : null}
+
+      <div className="flex flex-1 flex-col px-10 pt-6">
+        {/* Kop fallback: hormati showLogo/headerStyle */}
+        {!brand?.letterheadHeader ? (
+          <div className={centeredKop ? "flex flex-col items-center gap-2 text-center" : "flex items-start justify-between gap-4"}>
+            <div className="flex items-start gap-3">
+              {showLogo && brand?.logoUrl ? (
+                <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
+              ) : showLogo && brand ? (
+                <span className="flex h-12 w-12 items-center justify-center rounded-lg border text-2xl font-bold leading-none" style={{ color: brandColor }} aria-hidden>
+                  {brand.name.charAt(0).toUpperCase()}
+                </span>
               ) : null}
-              {brand?.phone || brand?.email ? (
-                <p className="mt-0.5 text-[11px] text-zinc-500">{[brand?.phone, brand?.email, brand?.website].filter(Boolean).join(" · ")}</p>
-              ) : null}
+              <div className={centeredKop ? "flex flex-col items-center" : undefined}>
+                <p className="text-xl font-bold leading-tight" style={{ color: brandColor }}>
+                  {brand?.name ?? "UDP CRM"}
+                </p>
+                {brand?.tagline ? <p className="text-xs italic text-zinc-600">{brand.tagline}</p> : null}
+                {brand?.address || brand?.city ? (
+                  <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand?.address || brand?.city}</p>
+                ) : brand?.description ? (
+                  <p className="mt-0.5 max-w-sm text-[11px] leading-snug text-zinc-500">{brand.description}</p>
+                ) : null}
+                {brand?.phone || brand?.email ? (
+                  <p className="mt-0.5 text-[11px] text-zinc-500">{[brand?.phone, brand?.email, brand?.website].filter(Boolean).join(" · ")}</p>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        ) : null}
 
       <div className="mt-2 flex items-end justify-between gap-4">
         <div>
@@ -263,18 +275,19 @@ export function InvoicePrintArea({ invoice: inv, brand }: { invoice: InvoicePrin
           </div>
         </div>
       </div>
+      </div>
 
-      {/* Footer surat — gambar kaki surat brand / catatan footer */}
-      {brand?.letterheadFooter ? (
-        <div className="mt-8">
-          <img src={brand.letterheadFooter} alt={`Kaki surat ${brand.name}`} className="h-16 w-full object-contain object-bottom" />
-        </div>
-      ) : (
-        <p className="mt-8 border-t border-dashed border-zinc-300 pt-2 text-center text-[10px] text-zinc-500">
-          {brand?.website ? `${brand.name} · ${brand.website.replace(/^https?:\/\//, "")} · ` : ""}
-          {letter.footerNote?.trim() || "Mohon lakukan pembayaran sebelum jatuh tempo. Terima kasih."}
-        </p>
-      )}
+      {/* Footer surat — ANCHOR DASAR HALAMAN: tidak pernah naik walau isi pendek */}
+      <div className="kop-footer-anchor mt-auto">
+        {brand?.letterheadFooter ? (
+          <img src={brand.letterheadFooter} alt={`Kaki surat ${brand.name}`} className="block w-full" />
+        ) : (
+          <p className="mx-10 mb-5 border-t border-dashed border-zinc-300 pt-2 text-center text-[10px] text-zinc-500">
+            {brand?.website ? `${brand.name} · ${brand.website.replace(/^https?:\/\//, "")} · ` : ""}
+            {letter.footerNote?.trim() || "Mohon lakukan pembayaran sebelum jatuh tempo. Terima kasih."}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

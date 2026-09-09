@@ -27,7 +27,20 @@ export async function GET(req: NextRequest) {
       ...(brandId && brandId !== "all" ? { brandId } : {}),
       ...(companyId ? { companyId } : {}),
     },
-    include: { brand: true, company: true, payments: true, project: true },
+    include: {
+      brand: true, payments: true, project: true,
+      // Ronde 48 — kontak klien (WA/email) untuk aksi "Hubungi Klien" finance.
+      company: {
+        include: {
+          contacts: {
+            where: { deletedAt: null },
+            select: { id: true, fullName: true, whatsapp: true, email: true, phone: true, preferredChannel: true },
+            take: 3,
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      },
+    },
     orderBy: { issueDate: "desc" },
     take: pageLimit(sp.get("limit"), 300, 500), // FIX r26: batasi payload (sebelumnya tanpa batas)
   });
@@ -118,8 +131,8 @@ export async function POST(req: NextRequest) {
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "status", oldValue: "draft", newValue: "sent", req,
     });
-    // Ronde 46 — push: invoice dikirim ke klien → pimpinan ikut tahu.
-    void sendPushToRoles(["director", "super_admin"], {
+    // Ronde 46+48 — push: invoice dikirim ke klien → pimpinan & finance ikut tahu.
+    void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${updated.number} dikirim`,
       body: `${actor.name} mengirim tagihan ${updated.number} — ${updated.description ?? ""}`.slice(0, 140),
       url: "/?modul=finance",
@@ -291,7 +304,8 @@ export async function POST(req: NextRequest) {
       action: "create", entity: "invoice", entityId: invoice.id, entityLabel: invoice.number,
       newValue: `Invoice manual ${description} · ${amount}${taxName ? ` + ${taxName} ${taxRate}%` : ""} · brand ${brand.name}`, req,
     });
-    void sendPushToRoles(["director", "super_admin"], {
+    // Ronde 48 — finance adalah pemilik proses tagihan → wajib di-notify.
+    void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${invoice.number} diterbitkan`,
       body: `${actor.name} menerbitkan tagihan manual ${description.slice(0, 80)} · ${amount + taxAmount}`.slice(0, 140),
       url: "/?modul=finance",
@@ -365,7 +379,8 @@ export async function POST(req: NextRequest) {
       req,
     });
     // Ronde 46 — push: invoice diterbitkan → pimpinan menerima notifikasi.
-    void sendPushToRoles(["director", "super_admin"], {
+    // Ronde 48 — finance adalah pemilik proses tagihan → wajib di-notify.
+    void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${invoice.number} diterbitkan`,
       body: `${actor.name} menerbitkan tagihan ${description.slice(0, 80)} · ${amount + taxAmount}`.slice(0, 140),
       url: "/?modul=finance",

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Building2, CalendarDays, Check, ExternalLink, FileSignature, FileText, Link2, ListChecks,
-  Lock, Paperclip, ShieldAlert, Users,
+  Lock, Milestone, Paperclip, Receipt, ShieldAlert, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,7 +22,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { portalApi } from "@/lib/crm/api-client";
 import type { ClientDocumentDTO, PortalTokenPayload, ProjectDeliverableDTO } from "@/lib/crm/types";
-import { formatDate, formatDateTime } from "@/lib/crm/utils";
+import { formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
 
 const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
   planning: { label: "Perencanaan", cls: "bg-zinc-100 text-zinc-600 border-transparent" },
@@ -36,6 +36,20 @@ const DELIVERABLE_STATUS: Record<string, { label: string; cls: string }> = {
   pending: { label: "Menunggu Review", cls: "bg-zinc-100 text-zinc-600 border-transparent" },
   approved: { label: "Disetujui", cls: "bg-emerald-100 text-emerald-700 border-transparent" },
   revision: { label: "Revisi Diminta", cls: "bg-amber-100 text-amber-700 border-transparent" },
+};
+
+// Ronde 48 — status milestone & invoice untuk secure link klien
+const MILESTONE_DOT: Record<string, string> = {
+  pending: "bg-zinc-300",
+  in_progress: "bg-amber-500",
+  done: "bg-emerald-500",
+};
+const INVOICE_STATUS: Record<string, { label: string; cls: string }> = {
+  draft: { label: "Draf", cls: "bg-zinc-100 text-zinc-600 border-transparent" },
+  sent: { label: "Terkirim", cls: "bg-amber-100 text-amber-700 border-transparent" },
+  partial: { label: "Dibayar Sebagian", cls: "bg-amber-100 text-amber-700 border-transparent" },
+  paid: { label: "Lunas", cls: "bg-emerald-100 text-emerald-700 border-transparent" },
+  overdue: { label: "Jatuh Tempo", cls: "bg-rose-100 text-rose-700 border-transparent" },
 };
 
 function kb(bytes: number): number {
@@ -204,6 +218,36 @@ export default function ClientTokenPortal({ token }: { token: string }) {
                           </span>
                         </div>
 
+                        {/* Ronde 48 — timeline milestone: klien tahu tahapan proyeknya */}
+                        {p.milestones.length > 0 ? (
+                          <div className="mt-4">
+                            <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                              <Milestone className="h-3.5 w-3.5" aria-hidden /> Tahapan Proyek
+                            </p>
+                            <ol className="ml-2 space-y-2.5 border-l-2 border-zinc-100 pl-4">
+                              {p.milestones.map((m) => (
+                                <li key={m.id} className="relative">
+                                  <span
+                                    className={`absolute -left-[22px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-white ${MILESTONE_DOT[m.status] ?? "bg-zinc-300"}`}
+                                    aria-hidden="true"
+                                  />
+                                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                    <p className={`text-sm ${m.status === "done" ? "font-medium text-zinc-500 line-through decoration-zinc-300" : "font-medium text-zinc-800"}`}>
+                                      {m.name}
+                                    </p>
+                                    {m.dueDate ? (
+                                      <span className="text-[11px] text-zinc-400">target {formatDate(m.dueDate)}</span>
+                                    ) : null}
+                                  </div>
+                                  {m.achievement ? (
+                                    <p className="mt-0.5 text-xs leading-snug text-zinc-500">{m.achievement}</p>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        ) : null}
+
                         <div className="mt-3 divide-y divide-zinc-100">
                           {p.deliverables.length === 0 ? (
                             <p className="py-3 text-sm text-zinc-400">Belum ada deliverable pada proyek ini.</p>
@@ -217,6 +261,51 @@ export default function ClientTokenPortal({ token }: { token: string }) {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </section>
+
+          {/* ===== (d) Tagihan & Invoice — Ronde 48 ===== */}
+          <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-100">
+                <Receipt className="h-4 w-4 text-orange-600" aria-hidden="true" />
+              </div>
+              <h2 className="text-base font-semibold text-zinc-900">Tagihan &amp; Invoice</h2>
+              {data.invoices.length > 0 ? (
+                <span className="text-xs text-zinc-400">{data.invoices.length}</span>
+              ) : null}
+            </div>
+
+            {data.invoices.length === 0 ? (
+              <EmptyState text="Belum ada tagihan yang diterbitkan." />
+            ) : (
+              <div className="mt-4 space-y-3">
+                {data.invoices.map((inv) => {
+                  const st = INVOICE_STATUS[inv.status] ?? { label: inv.status, cls: "bg-zinc-100 text-zinc-600 border-transparent" };
+                  return (
+                    <div key={inv.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="font-mono text-sm font-semibold text-zinc-900">{inv.number}</p>
+                        <p className="truncate text-xs text-zinc-500">
+                          {[inv.description, inv.issueDate ? `Terbit ${formatDate(inv.issueDate)}` : null, inv.dueDate ? `Jatuh tempo ${formatDate(inv.dueDate)}` : null]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-sm font-bold tabular-nums text-zinc-900">{formatCurrencyFull(inv.total, inv.currency)}</p>
+                          <p className="text-[10px] text-zinc-400">termasuk pajak</p>
+                        </div>
+                        <Badge className={st.cls}>{st.label}</Badge>
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-[11px] leading-relaxed text-zinc-400">
+                  Untuk konfirmasi pembayaran atau pertanyaan tagihan, silakan hubungi tim kami melalui kanal yang sudah disepakati.
+                </p>
               </div>
             )}
           </section>

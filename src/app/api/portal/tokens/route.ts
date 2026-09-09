@@ -16,12 +16,16 @@ import { resolveActor, assertRole } from "@/lib/crm/auth";
 export async function GET(req: NextRequest) {
   // Ronde 36 (audit): daftar token portal memuat token rahasia tanpa masking —
   // kini wajib sesi + peran Super Admin/Direktur (mirror POST di bawah).
+  // Ronde 48: Finance ikut diberi akses baca (butuh link portal utk menghubungi
+  // klien soal tagihan) + filter ?companyId= untuk lookup cepat dari modul lain.
   const actor = await resolveActor(req);
   if (actor.denied) return fail(actor.reason, 401);
-  const gate = assertRole(actor, ["super_admin", "director"]);
+  const gate = assertRole(actor, ["super_admin", "director", "finance"]);
   if (!gate.ok) return fail(gate.reason, 403);
 
+  const companyId = req.nextUrl.searchParams.get("companyId");
   const tokens = await db.clientPortalToken.findMany({
+    where: companyId ? { companyId } : undefined,
     include: { company: { select: { id: true, name: true } } },
     orderBy: { createdAt: "desc" },
   });

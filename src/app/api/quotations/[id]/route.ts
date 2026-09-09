@@ -20,7 +20,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const quotation = await db.quotation.findUnique({
     where: { id },
-    include: { brand: true, opportunity: true },
+    // Ronde 48 — company di-include untuk pesan notifikasi konversi invoice.
+    include: { brand: true, opportunity: true, company: { select: { name: true } } },
   });
   if (!quotation) return fail("Quotation tidak ditemukan", 404);
 
@@ -157,6 +158,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       actorName, actorRole, action: "create", entity: "invoice", entityId: invoice.id,
       entityLabel: invoice.number, metadata: `Konversi dari quotation ${quotation.number}`, req,
     });
+    // Ronde 48 — konversi quotation → invoice kini memberi notifikasi nyata:
+    // finance (pemilik proses tagihan) + pimpinan tahu invoice DP/termin siap diproses.
+    void sendPushToRoles(
+      ["director", "super_admin", "finance"],
+      {
+        title: `Invoice ${invoice.number} diterbitkan`,
+        body: `${actorName} mengonversi ${quotation.number} jadi tagihan ${invoice.number} — ${quotation.company?.name ?? "klien"}`.slice(0, 140),
+        url: "/?modul=finance",
+        tag: `invoice:${invoice.id}`,
+        type: "invoice",
+      },
+      actor.email
+    ).catch(() => {});
     return ok({ invoice });
   }
 

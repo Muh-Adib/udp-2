@@ -94,7 +94,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/crm/api-client";
 import { BRIEF_STATUS_META } from "@/lib/crm/brief";
-import { CHANNELS, LOST_REASONS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
+import { CHANNELS, LOST_REASONS, NURTURE_SEGMENTS, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import TaskFormDialog from "@/components/crm/task-form-dialog";
@@ -2329,6 +2329,11 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
   const [lostNotes, setLostNotes] = useState("");
   const [competitor, setCompetitor] = useState("");
 
+  // Ronde 48 — dialog nurture (standar: segmen + tanggal follow-up wajib, server menegakkan)
+  const [nurtureOpen, setNurtureOpen] = useState(false);
+  const [nurtureSegmentDraft, setNurtureSegmentDraft] = useState("");
+  const [nurtureDateDraft, setNurtureDateDraft] = useState("");
+
   // Dialog cross-sell
   const [crossOpen, setCrossOpen] = useState(false);
   const [crossBrand, setCrossBrand] = useState("");
@@ -2600,6 +2605,13 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
     }
     if (stageSelect === "lost") {
       setLostOpen(true);
+      return;
+    }
+    // Ronde 48 — nurture wajib segmen + tanggal follow-up (dialog, sama seperti lost)
+    if (stageSelect === "nurture") {
+      setNurtureSegmentDraft(data.nurtureSegment ?? "");
+      setNurtureDateDraft("");
+      setNurtureOpen(true);
       return;
     }
     void commitStage(stageSelect);
@@ -3190,26 +3202,41 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
               </div>
 
               <SheetFooter className="flex-row items-center gap-2 border-t">
-                <Select value={stageSelect} onValueChange={setStageSelect}>
-                  <SelectTrigger className="flex-1" aria-label="Pindah stage">
-                    <SelectValue placeholder="Pindah stage" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PIPELINE_STAGES.map((s) => (
-                      <SelectItem key={s.key} value={s.key}>
-                        {s.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  className="bg-zinc-900 hover:bg-zinc-800"
-                  onClick={handleSaveStage}
-                  disabled={savingStage || !stageSelect || stageSelect === data.stage}
-                >
-                  {savingStage ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-                  Simpan
-                </Button>
+                {canEditOpp ? (
+                  <>
+                    <Select value={stageSelect} onValueChange={setStageSelect}>
+                      <SelectTrigger className="flex-1" aria-label="Pindah stage">
+                        <SelectValue placeholder="Pindah stage" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PIPELINE_STAGES.map((s) => (
+                          <SelectItem key={s.key} value={s.key}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      className="bg-zinc-900 hover:bg-zinc-800"
+                      onClick={handleSaveStage}
+                      disabled={savingStage || !stageSelect || stageSelect === data.stage}
+                    >
+                      {savingStage ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+                      Simpan
+                    </Button>
+                  </>
+                ) : (
+                  /* Ronde 39 — read-only utk role non-pemilik/non-pimpinan (server menolak PATCH 403). */
+                  <div className="flex w-full flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <StageBadge stage={data.stage} />
+                      <span className="text-[11px] text-zinc-400">Stage saat ini</span>
+                    </div>
+                    <p className="text-[11px] leading-snug text-zinc-400">
+                      Hanya pemilik opportunity atau pimpinan yang dapat memindahkan stage.
+                    </p>
+                  </div>
+                )}
               </SheetFooter>
             </>
           ) : null}
@@ -3267,6 +3294,63 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
             >
               {savingStage ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
               Tandai Lost
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ronde 48 — Dialog nurture (dari footer stage): segmen + jadwal follow-up wajib */}
+      <Dialog open={nurtureOpen} onOpenChange={setNurtureOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pindah ke Nurture</DialogTitle>
+            <DialogDescription>
+              Simpan kontak ini untuk dihubungi kembali — pilih segmen &amp; jadwal penawaran ulang.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Select value={nurtureSegmentDraft} onValueChange={setNurtureSegmentDraft}>
+              <SelectTrigger className="w-full" aria-label="Segmen nurture">
+                <SelectValue placeholder="Pilih segmen nurture" />
+              </SelectTrigger>
+              <SelectContent>
+                {NURTURE_SEGMENTS.map((s) => (
+                  <SelectItem key={s.key} value={s.key}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-600" htmlFor="nurture-followup-date">
+                Tanggal follow-up berikutnya
+              </label>
+              <Input
+                id="nurture-followup-date"
+                type="date"
+                value={nurtureDateDraft}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setNurtureDateDraft(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNurtureOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              className="bg-zinc-900 hover:bg-zinc-800"
+              disabled={!nurtureSegmentDraft || !nurtureDateDraft || savingStage}
+              onClick={() => {
+                setNurtureOpen(false);
+                void commitStage("nurture", {
+                  nurtureSegment: nurtureSegmentDraft,
+                  followUpDate: nurtureDateDraft ? new Date(nurtureDateDraft).toISOString() : undefined,
+                });
+              }}
+            >
+              {savingStage ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Simpan Nurture
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -271,6 +271,8 @@ export interface ProjectDTO {
   milestones?: MilestoneDTO[];
   /** Daftar change request project (ringkas) — Produksi Fase 2. */
   changeRequests?: ChangeRequestDTO[];
+  /** Ronde 48 — brief klien ter-link (alur Won) — dibaca produksi dari detail project. */
+  brief?: import("@/lib/crm/types").ClientBriefDTO | null;
 }
 
 export interface MilestoneDTO {
@@ -916,6 +918,30 @@ export interface ClientDocumentDTO {
   fileData?: string | null;
 }
 
+/** Ronde 48 — ringkasan milestone untuk secure link klien. */
+export interface PortalMilestoneSummary {
+  id: string;
+  name: string;
+  order: number;
+  status: string; // pending | in_progress | done
+  dueDate?: string | null;
+  achievement?: string | null;
+}
+
+/** Ronde 48 — ringkasan tagihan untuk secure link klien (tanpa data internal). */
+export interface PortalInvoiceSummary {
+  id: string;
+  number: string;
+  description?: string | null;
+  amount: number;
+  taxAmount: number;
+  total: number;
+  currency: string;
+  status: string; // draft | sent | partial | paid | overdue
+  issueDate: string;
+  dueDate?: string | null;
+}
+
 /** Payload GET /api/portal/[token] — isi secure link klien. */
 export interface PortalTokenPayload {
   company: { id: string; name: string; industry?: string | null; city?: string | null };
@@ -929,8 +955,11 @@ export interface PortalTokenPayload {
     progress: number;
     dueDate?: string | null;
     brandName?: string | null;
+    milestones: PortalMilestoneSummary[];
     deliverables: import("@/lib/crm/types").ProjectDeliverableDTO[];
   }[];
+  /** Ronde 48 — tagihan klien tampil di secure link (siklus: terbit → dibayar). */
+  invoices: PortalInvoiceSummary[];
 }
 
 // ============ Ronde 29-b — Katalog layanan & workflow produksi per brand ============

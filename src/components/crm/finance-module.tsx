@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarDays, CheckCheck, CircleDollarSign, Clock3, Download, FileSignature, FileText,
-  HandCoins, Layers, Loader2, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send, Trash2, Wallet, XCircle,
+  HandCoins, Layers, Link2, Loader2, Mail, MessageCircle, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send,
+  Trash2, UserRound, Wallet, XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -36,11 +37,184 @@ import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import type { Brand, InvoiceDTO, QuotationDTO, QuotationItemDTO, TaxDTO } from "@/lib/crm/types";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime } from "@/lib/crm/utils";
+import { CHANNELS } from "@/lib/crm/constants";
+import { waMeLink } from "@/lib/crm/validate";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
 import { InvoicePrintArea } from "@/components/crm/invoice-print";
 
 /** API mengirim relasi project, belum ada di tipe bersama — perluasan lokal defensif. */
 export type InvoiceWithProject = InvoiceDTO & { project?: { id: string; name: string } | null };
+
+// ============ Ronde 48 — Hubungi Klien (WA/email + salin link portal) ============
+
+/** Kontak ringkas klien dari `company.contacts` (API mengirim maks 3; belum ada di tipe bersama). */
+interface ClientContactLite {
+  id: string;
+  fullName: string;
+  whatsapp?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  preferredChannel?: string | null;
+}
+
+/** Ambil kontak klien dari relasi company (defensif — tipe bersama belum memuat `contacts`). */
+function getInvoiceContacts(inv: InvoiceDTO): ClientContactLite[] {
+  return (inv.company as unknown as { contacts?: ClientContactLite[] } | null)?.contacts ?? [];
+}
+
+/** Kontak prioritas: yang punya WhatsApp → yang punya email → kontak pertama. */
+function pickPrimaryContact(contacts: ClientContactLite[]): ClientContactLite | null {
+  return contacts.find((c) => !!c.whatsapp?.trim()) ?? contacts.find((c) => !!c.email?.trim()) ?? contacts[0] ?? null;
+}
+
+/** Label kanal preferensi — konsisten dengan modul Contacts. */
+function contactChannelLabel(key?: string | null): string {
+  return CHANNELS.find((c) => c.key === key)?.label ?? (key || "-");
+}
+
+/** Nama brand untuk pesan: relasi brand invoice → fallback lookup store brand. */
+function invoiceBrandName(inv: InvoiceDTO, brands: Brand[]): string | null {
+  return inv.brand?.name ?? brands.find((b) => b.id === inv.brandId)?.name ?? null;
+}
+
+/** Pesan pra-isi WhatsApp berisi nomor, nominal, dan jatuh tempo invoice. */
+function waTextForInvoice(inv: InvoiceDTO, contact: ClientContactLite, brandName: string | null): string {
+  return (
+    `Assalamualaikum / Halo Bapak/Ibu ${contact.fullName}, kami dari ${brandName ?? "tim kami"}. ` +
+    `Kami ingin menyampaikan invoice ${inv.number} senilai ${formatCurrencyFull(inv.total, inv.currency)} ` +
+    `dengan jatuh tempo ${formatDate(inv.dueDate)}. ` +
+    `Silakan lihat detail pada portal klien atau dokumen terlampir. Terima kasih.`
+  );
+}
+
+/** Buka WhatsApp klien dengan pesan pra-isi (nomor E.164; awalan 0 dikonversi 62 via waMeLink). */
+function openInvoiceWhatsApp(inv: InvoiceDTO, contact: ClientContactLite, brandName: string | null) {
+  const link = waMeLink(contact.whatsapp ?? "");
+  if (!link) {
+    toast.error("Nomor WhatsApp kontak tidak valid");
+    return;
+  }
+  window.open(`${link}?text=${encodeURIComponent(waTextForInvoice(inv, contact, brandName))}`, "_blank", "noopener");
+}
+
+/** Buka aplikasi email dengan draft formal (subject + body ter-encode). */
+function openInvoiceMail(inv: InvoiceDTO, contact: ClientContactLite, brandName: string | null) {
+  const email = contact.email?.trim();
+  if (!email) return;
+  const subject = `Invoice ${inv.number} — ${brandName ?? "UDP CRM"}`;
+  const body =
+    `Assalamualaikum / Halo Bapak/Ibu ${contact.fullName},\n\n` +
+    `Kami dari ${brandName ?? "tim kami"} ingin menyampaikan invoice ${inv.number} senilai ` +
+    `${formatCurrencyFull(inv.total, inv.currency)} dengan jatuh tempo ${formatDate(inv.dueDate)}.\n\n` +
+    `Silakan lihat detail pada portal klien atau dokumen terlampir. Apabila terdapat pertanyaan ` +
+    `mengenai tagihan ini, jangan ragu menghubungi kami.\n\n` +
+    `Terima kasih atas perhatian dan kerja samanya.\n\nHormat kami,\n${brandName ?? "UDP CRM"}`;
+  window.open(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_blank", "noopener");
+}
+
+/** Kartu "Hubungi Klien" pada sheet detail invoice. */
+function ClientContactCard({ inv, brandName }: { inv: InvoiceDTO; brandName: string | null }) {
+  const [copyingPortal, setCopyingPortal] = useState(false);
+  const primary = pickPrimaryContact(getInvoiceContacts(inv));
+  const wa = primary?.whatsapp?.trim() || null;
+  const email = primary?.email?.trim() || null;
+
+  /** Salin link portal aktif klien (GET /api/portal/tokens?companyId — role finance diizinkan). */
+  async function copyPortalLink() {
+    setCopyingPortal(true);
+    try {
+      const res = await fetch(`/api/portal/tokens?companyId=${encodeURIComponent(inv.companyId)}`, { credentials: "include" });
+      if (res.status === 403) {
+        toast.error("Tidak diizinkan melihat token portal");
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as { tokens?: { token: string; active: boolean; companyId: string }[] };
+      const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      const active = tokens.find((t) => t.active && t.companyId === inv.companyId);
+      if (!active) {
+        toast.info("Belum ada portal token aktif untuk klien ini — minta Direktur membuatnya di modul Client Portal");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(`${window.location.origin}/?portal=${active.token}`);
+        toast.success("Link portal klien disalin");
+      } catch {
+        toast.info("Gagal menyalin otomatis — izinkan akses clipboard pada browser lalu coba lagi");
+      }
+    } catch {
+      toast.error("Gagal mengambil link portal klien");
+    } finally {
+      setCopyingPortal(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-white p-4 shadow-sm">
+      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <UserRound className="h-3.5 w-3.5" aria-hidden /> Hubungi Klien
+      </p>
+      {primary ? (
+        <div className="mt-2.5 space-y-2.5">
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 truncate text-sm font-semibold text-zinc-900">{primary.fullName}</p>
+            {primary.preferredChannel ? (
+              <Badge variant="outline" className="shrink-0 border-transparent bg-zinc-100 px-1.5 text-zinc-600">
+                {contactChannelLabel(primary.preferredChannel)}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="space-y-0.5 text-xs text-zinc-500">
+            {wa ? (
+              <p className="flex items-center gap-1.5">
+                <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> {wa}
+              </p>
+            ) : null}
+            {email ? (
+              <p className="flex items-center gap-1.5">
+                <Mail className="h-3 w-3 shrink-0" aria-hidden /> {email}
+              </p>
+            ) : null}
+            {!wa && !email ? <p>{primary.phone?.trim() || "Tidak ada nomor/email tercatat"}</p> : null}
+          </div>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+          Belum ada kontak terhubung pada perusahaan ini — tambahkan kontak di modul Contacts.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {primary && wa ? (
+          <Button
+            variant="outline" size="sm"
+            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            onClick={() => openInvoiceWhatsApp(inv, primary, brandName)}
+            aria-label={`Hubungi ${primary.fullName} via WhatsApp`}
+          >
+            <MessageCircle className="h-3.5 w-3.5" aria-hidden /> WhatsApp
+          </Button>
+        ) : null}
+        {primary && email ? (
+          <Button
+            variant="outline" size="sm"
+            onClick={() => openInvoiceMail(inv, primary, brandName)}
+            aria-label={`Kirim email ke ${primary.fullName}`}
+          >
+            <Mail className="h-3.5 w-3.5" aria-hidden /> Email
+          </Button>
+        ) : null}
+        <Button
+          variant="outline" size="sm"
+          disabled={copyingPortal}
+          onClick={() => void copyPortalLink()}
+          aria-label="Salin link portal klien ke clipboard"
+        >
+          {copyingPortal ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Link2 className="h-3.5 w-3.5" aria-hidden />}
+          Salin Link Portal
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 // ============ Meta ============
 
@@ -459,7 +633,8 @@ export default function FinanceModule() {
       toast.success(`Invoice ${res.invoice.number} diperbarui`);
       setEditTarget(null);
       const fresh = res.invoice as InvoiceWithProject;
-      setDetail((prev) => (prev && prev.id === fresh.id ? fresh : prev));
+      // Ronde 48: respons mutasi tanpa relasi company.contacts — pertahankan kontak lama di sheet.
+      setDetail((prev) => (prev && prev.id === fresh.id ? { ...fresh, company: fresh.company ?? prev.company } : prev));
       setInvoices((prev) => (prev ?? []).map((inv) => (inv.id === fresh.id ? fresh : inv)));
       await load(true);
     } catch (err) {
@@ -476,7 +651,8 @@ export default function FinanceModule() {
       const res = await api.deletePayment({ paymentId: payDeleteTarget.paymentId });
       const fresh = res.invoice as InvoiceWithProject;
       toast.success(`Pembayaran pada ${fresh.number} dikoreksi`);
-      setDetail((prev) => (prev && prev.id === fresh.id ? fresh : prev));
+      // Ronde 48: respons mutasi tanpa relasi company.contacts — pertahankan kontak lama di sheet.
+      setDetail((prev) => (prev && prev.id === fresh.id ? { ...fresh, company: fresh.company ?? prev.company } : prev));
       setInvoices((prev) => (prev ?? []).map((inv) => (inv.id === fresh.id ? fresh : inv)));
       setPayDeleteTarget(null);
       await load(true);
@@ -538,6 +714,16 @@ export default function FinanceModule() {
   function openPayment(inv: InvoiceWithProject) {
     setPayTarget(inv);
     setPayForm({ amount: String(Math.max(0, inv.total - paidAmount(inv))), method: "transfer", reference: "" });
+  }
+
+  /** Ronde 48 — buka WhatsApp klien dari baris daftar (bila ada kontak ber-Nomor WA). */
+  function contactWhatsApp(inv: InvoiceWithProject) {
+    const primary = pickPrimaryContact(getInvoiceContacts(inv));
+    if (!primary?.whatsapp?.trim()) {
+      toast.info("Belum ada kontak WhatsApp terhubung pada perusahaan ini");
+      return;
+    }
+    openInvoiceWhatsApp(inv, primary, invoiceBrandName(inv, storeBrands));
   }
 
   async function submitPayment(e: React.FormEvent) {
@@ -833,6 +1019,17 @@ export default function FinanceModule() {
                               >
                                 <Printer className="h-3.5 w-3.5" aria-hidden /> Cetak
                               </Button>
+                              {["sent", "partial", "overdue"].includes(inv.status) ? (
+                                <Button
+                                  variant="outline" size="icon"
+                                  className="h-8 w-8 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                                  onClick={(e) => { e.stopPropagation(); contactWhatsApp(inv); }}
+                                  aria-label={`Hubungi via WhatsApp untuk invoice ${inv.number}`}
+                                  title="Hubungi via WhatsApp"
+                                >
+                                  <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+                                </Button>
+                              ) : null}
                               {canCancel ? (
                                 <Button
                                   variant="outline" size="sm"
@@ -983,6 +1180,9 @@ export default function FinanceModule() {
                     {detail.notes ? (
                       <div className="rounded-lg bg-zinc-50 p-3 text-xs text-zinc-600">{detail.notes}</div>
                     ) : null}
+
+                    {/* Ronde 48 — kartu Hubungi Klien: kontak WA/email + salin link portal klien */}
+                    <ClientContactCard inv={detail} brandName={invoiceBrandName(detail, storeBrands)} />
 
                     {/* Status pembayaran */}
                     <div className="space-y-2">

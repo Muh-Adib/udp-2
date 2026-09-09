@@ -4,6 +4,7 @@ import { ok, fail, readBody, logAudit, handleWonTransition, numOrNull, clampNum,
 import { computeLeadScore } from "@/lib/crm/scoring";
 import { resolveActor } from "@/lib/crm/auth";
 import { sendPushToRoles } from "@/lib/crm/push";
+import { PIPELINE_STAGES } from "@/lib/crm/constants";
 
 /** Hitung skor lead + sisipkan score/scoreReasons/_count ke row opportunity Prisma. */
 function enrichScore<
@@ -180,10 +181,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (body.stage && body.stage !== current.stage) {
     const newStage = String(body.stage);
+    // Ronde 48 — allowlist stage di sisi server (standar pipeline perusahaan):
+    // drag&drop/select klien tidak lagi satu-satunya penggembos; API menolak
+    // nilai tak dikenal agar laporan & automasi tidak rusak.
+    if (!PIPELINE_STAGES.some((s) => s.key === newStage)) {
+      return fail(`Stage "${newStage}" tidak dikenal — gunakan standar pipeline perusahaan`, 400);
+    }
     if (newStage === "lost") {
       const reason = String(body.lostReason ?? current.lostReason ?? "").trim();
       if (!reason) return fail("Lost reason wajib dipilih sebelum pindah ke stage Lost");
       data.lostReason = reason;
+    }
+    if (newStage === "nurture") {
+      // Ronde 48 — standar nurture: segmen + tanggal follow-up wajib
+      // (sebelumnya hanya dokumentasi, tidak ditegakkan).
+      const segment = String(body.nurtureSegment ?? current.nurtureSegment ?? "").trim();
+      if (!segment) return fail("Segmen nurture wajib dipilih sebelum pindah ke stage Nurture");
+      data.nurtureSegment = segment;
     }
     if (current.stage === "lost" || current.stage === "nurture") {
       data.reactivation = true;
@@ -223,13 +237,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       metadata: "Project otomatis dibuat dari opportunity Won beserta milestone & invoice DP",
       req,
     });
-    // Ronde 39 — push VAPID: direktur & super admin tahu deal baru Won
+    // Ronde 48 — push VAPID ke SELURUH tim yang bekerja pada deal baru Won:
+    // pimpinan (keputusan), manajer (PM default), produksi (brief & milestone),
+    // finance (invoice DP menunggu diterbitkan/terkirim).
+    const linkedBrief = createdProject
+      ? await db.clientBrief.findUnique({ where: { projectId: createdProject.id }, select: { code: true } })
+      : null;
     void sendPushToRoles(
-      ["director", "super_admin"],
+      ["director", "super_admin", "manager", "production", "finance"],
       {
         title: "Deal Won 🎉",
-        body: `${opportunity.title} — project ${createdProject?.code ?? "?"} dibuat beserta invoice DP`,
-        url: "/?modul=projects",
+        body: `${opportunity.title} — project ${createdProject?.code ?? "?"} dibuat beserta milestone & invoice DP${linkedBrief ? ` · brief ${linkedBrief.code} terlampir` : ""}`,
+        url: createdProject ? "/?modul=projects" : "/?modul=pipeline",
         tag: `won-${id}`,
         type: "opportunity",
       },

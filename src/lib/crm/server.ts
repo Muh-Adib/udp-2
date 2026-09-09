@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { achievementFor, workflowFor } from "@/lib/crm/constants";
@@ -160,7 +161,7 @@ async function resolveContractValue(oppId: string, fallback: number | null) {
 export async function handleWonTransition(oppId: string) {
   const opp = await db.opportunity.findUnique({
     where: { id: oppId },
-    include: { brand: true, contact: true },
+    include: { brand: true, contact: true, clientBrief: true },
   });
   if (!opp || !opp.companyId) return null;
   // Narrowing TypeScript tidak menembus closure transaksi — tangkap ke konstanta lokal.
@@ -221,6 +222,32 @@ export async function handleWonTransition(oppId: string) {
         achievement: achievementFor(name),
       })),
     });
+
+    // Ronde 48 — brief klien ter-link ke project (produksi membaca brief dari
+    // detail project, tanpa harus membuka pipeline yang bukan domennya).
+    if (opp.clientBrief) {
+      await tx.clientBrief.update({
+        where: { id: opp.clientBrief.id },
+        data: { projectId: project.id },
+      });
+    }
+
+    // Ronde 48 — portal token klien otomatis tersedia saat Won: klien bisa
+    // memantau progress (milestone, deliverable, tagihan) via secure link.
+    const hasActivePortal = await tx.clientPortalToken.findFirst({
+      where: { companyId, active: true },
+      select: { id: true },
+    });
+    if (!hasActivePortal) {
+      await tx.clientPortalToken.create({
+        data: {
+          token: randomBytes(24).toString("hex"),
+          companyId,
+          label: `Portal ${project.code}`,
+          createdByName: "Sistem (auto — deal Won)",
+        },
+      });
+    }
 
     // Draft invoice DP 50% — dari nilai kontrak sumber terbaik
     const invCount = await tx.invoice.count();

@@ -319,6 +319,8 @@ model Project {
   invoices      Invoice[]
   changeRequests ChangeRequest[]
   deliverables  ProjectDeliverable[]
+  // Ronde 48 — brief klien yang menghasilkan project ini (alur Won).
+  brief         ClientBrief?
 }
 
 /**
@@ -572,6 +574,10 @@ model ClientBrief {
   code            String      @unique // BRF-2026-0001
   opportunityId   String      @unique
   opportunity     Opportunity @relation(fields: [opportunityId], references: [id])
+  // Ronde 48 — brief ter-link ke project hasil Won (1:1) agar tim produksi
+  // melihat brief klien langsung dari detail project tanpa membuka pipeline.
+  projectId       String?     @unique
+  project         Project?    @relation(fields: [projectId], references: [id])
   brandId         String
   brand           Brand       @relation(fields: [brandId], references: [id])
   title           String

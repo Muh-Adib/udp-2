@@ -127,18 +127,31 @@
 .crm-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 9999px; }
 .crm-scroll::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
 
-/* ===== Print quotation (Task 9-a): area #print-area hanya tampil saat print ===== */
+/* ===== Print quotation/invoice (Task 9-a + Ronde 48): area #print-area hanya tampil saat print =====
+ * Ronde 48 — presisi ukuran kertas:
+ * - @page A4 + margin 0 → kop gambar full-bleed menempel tepi kertas.
+ * - #print-area = 794px × min 1123px (A4 @96 DPI) → apa yang terlihat = yang tercetak.
+ * - print-color-adjust: exact → warna brand tidak dicabut browser saat print. */
 #print-area { display: none; }
 @media print {
+  @page { size: A4 portrait; margin: 0; }
   body * { visibility: hidden; }
   #print-area, #print-area * { visibility: visible; }
   #print-area {
     display: block !important;
     position: absolute;
     inset: 0;
-    width: 100%;
-    padding: 24px;
+    width: 794px;
+    min-height: 1123px;
+    padding: 0;
     background: white;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Ronde 48 — footer surat tidak boleh "naik" / terpotong antar halaman. */
+  #print-area .kop-footer-anchor {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
 
