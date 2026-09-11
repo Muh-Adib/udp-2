@@ -17,8 +17,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
+  Layers, Link2, ListOrdered, Loader2, Mail, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -86,7 +87,7 @@ function fmtWhen(iso?: string | null): string {
 }
 
 export const CHANNEL_ICON: Record<string, LucideIcon> = {
-  whatsapp: MessageCircle,
+  whatsapp: WhatsAppIcon,
   instagram: Instagram,
   threads: AtSign,
   email: Mail,
@@ -578,7 +579,7 @@ export default function BrandSettingsDialog({
                       placeholder="+628…" />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="bs-wa" className="text-xs flex items-center gap-1"><MessageCircle className="h-3 w-3 text-emerald-600" aria-hidden /> WhatsApp bisnis</Label>
+                    <Label htmlFor="bs-wa" className="text-xs flex items-center gap-1"><WhatsAppIcon className="h-3 w-3 text-emerald-600" aria-hidden /> WhatsApp bisnis</Label>
                     <Input id="bs-wa" className="h-9" value={identity.whatsappNumber}
                       onChange={(e) => setIdentity({ ...identity, whatsappNumber: e.target.value })}
                       placeholder="+628…" />

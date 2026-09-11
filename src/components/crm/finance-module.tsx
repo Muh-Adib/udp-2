@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarDays, CheckCheck, CircleDollarSign, Clock3, Download, FileSignature, FileText,
-  HandCoins, Layers, Link2, Loader2, Mail, MessageCircle, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send,
+  HandCoins, Layers, Link2, Loader2, Mail, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send,
   Trash2, UserRound, Wallet, XCircle,
   type LucideIcon,
 } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { toast } from "sonner";
 
 import {
@@ -166,7 +167,7 @@ function ClientContactCard({ inv, brandName }: { inv: InvoiceDTO; brandName: str
           <div className="space-y-0.5 text-xs text-zinc-500">
             {wa ? (
               <p className="flex items-center gap-1.5">
-                <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> {wa}
+                <WhatsAppIcon className="h-3 w-3 shrink-0" aria-hidden /> {wa}
               </p>
             ) : null}
             {email ? (
@@ -190,7 +191,7 @@ function ClientContactCard({ inv, brandName }: { inv: InvoiceDTO; brandName: str
             onClick={() => openInvoiceWhatsApp(inv, primary, brandName)}
             aria-label={`Hubungi ${primary.fullName} via WhatsApp`}
           >
-            <MessageCircle className="h-3.5 w-3.5" aria-hidden /> WhatsApp
+            <WhatsAppIcon className="h-3.5 w-3.5" aria-hidden /> WhatsApp
           </Button>
         ) : null}
         {primary && email ? (
@@ -1027,7 +1028,7 @@ export default function FinanceModule() {
                                   aria-label={`Hubungi via WhatsApp untuk invoice ${inv.number}`}
                                   title="Hubungi via WhatsApp"
                                 >
-                                  <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+                                  <WhatsAppIcon className="h-3.5 w-3.5" aria-hidden />
                                 </Button>
                               ) : null}
                               {canCancel ? (

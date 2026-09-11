@@ -21,7 +21,6 @@ import {
   Instagram,
   Loader2,
   Mail,
-  MessageCircle,
   Pencil,
   Plug,
   PlugZap,
@@ -33,6 +32,7 @@ import {
   Webhook,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -71,7 +71,7 @@ import { cn } from "@/lib/utils";
 import ChannelSetupWizard from "./channel-setup-wizard";
 
 const CHANNEL_ICONS: Record<string, LucideIcon> = {
-  whatsapp: MessageCircle,
+  whatsapp: WhatsAppIcon,
   instagram: Instagram,
   threads: AtSign,
   email: Mail,

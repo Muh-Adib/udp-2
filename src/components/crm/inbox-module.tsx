@@ -5,9 +5,10 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
-  Fingerprint, File, FileArchive, FileImage, FileText, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail, MessageCircle,
+  Fingerprint, File, FileArchive, FileImage, FileText, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail,
   MessagesSquare, Paperclip, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
 } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { toast } from "sonner";
 import { api, channelsApi } from "@/lib/crm/api-client";
 import { canAccess, useCrmStore } from "@/lib/crm/store";
@@ -130,7 +131,7 @@ const EMPTY_OPP_FORM: OpportunityFormState = {
 // ============ Mapping kanal (tanpa indigo/blue) ============
 
 const CHANNEL_STYLE: Record<string, { icon: LucideIcon; circle: string; badge: string }> = {
-  whatsapp: { icon: MessageCircle, circle: "bg-emerald-100 text-emerald-600", badge: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+  whatsapp: { icon: WhatsAppIcon, circle: "bg-emerald-100 text-emerald-600", badge: "border-emerald-200 bg-emerald-50 text-emerald-700" },
   email: { icon: Mail, circle: "bg-amber-100 text-amber-600", badge: "border-amber-200 bg-amber-50 text-amber-700" },
   instagram: { icon: Instagram, circle: "bg-rose-100 text-rose-600", badge: "border-rose-200 bg-rose-50 text-rose-700" },
   website: { icon: Globe, circle: "bg-violet-100 text-violet-600", badge: "border-violet-200 bg-violet-50 text-violet-700" },
@@ -665,7 +666,7 @@ function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCand
           <p className="flex items-center gap-1.5"><Mail className="size-3 shrink-0 text-zinc-400" aria-hidden="true" /><span className="truncate">{contact.email}</span></p>
         ) : null}
         {contact?.whatsapp ? (
-          <p className="flex items-center gap-1.5"><MessageCircle className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.whatsapp}</p>
+          <p className="flex items-center gap-1.5"><WhatsAppIcon className="size-3 shrink-0 text-zinc-400" aria-hidden="true" />{contact.whatsapp}</p>
         ) : null}
       </div>
       <Button

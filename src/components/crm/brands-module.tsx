@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AtSign, BellRing, Building2, CheckCircle2, ChevronDown, Clock3, ExternalLink, FileText, Globe, Instagram, Layers, LayoutDashboard,
-  Link2, Loader2, Mail, Map as MapIcon, MapPin, MessageCircle, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
+  Link2, Loader2, Mail, Map as MapIcon, MapPin, Palette, Pencil, Phone, Plus, RefreshCw, Settings2, Tag, Trash2, Video, Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +33,7 @@ import type { Brand, CrossSellCompany, FollowUpTemplateDTO, ServiceMapData, Serv
 const CURRENCIES = ["IDR", "USD", "SGD", "EUR", "AUD"] as const;
 
 const CHANNEL_META: Record<string, { label: string; icon: LucideIcon }> = {
-  whatsapp: { label: "WhatsApp", icon: MessageCircle },
+  whatsapp: { label: "WhatsApp", icon: WhatsAppIcon },
   email: { label: "Email", icon: Mail },
   instagram: { label: "Instagram", icon: Instagram },
   website: { label: "Website", icon: Globe },
@@ -165,7 +166,7 @@ function BrandCard({ brand, onSettings }: { brand: Brand; onSettings: (brand: Br
         <div className="mt-3 flex flex-wrap gap-1.5">
           {contactChips.filter((c) => c.value).map((c) => (
             <span key={c.key} className="inline-flex max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-600" title={c.label}>
-              {c.key === "wa" ? <MessageCircle className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+              {c.key === "wa" ? <WhatsAppIcon className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
                 : c.key === "ig" ? <Instagram className="h-3 w-3 shrink-0 text-pink-600" aria-hidden />
                 : c.key === "threads" ? <AtSign className="h-3 w-3 shrink-0 text-zinc-700" aria-hidden />
                 : <Mail className="h-3 w-3 shrink-0 text-zinc-500" aria-hidden />}

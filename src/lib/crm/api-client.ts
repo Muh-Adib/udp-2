@@ -131,7 +131,11 @@ export const api = {
       `/api/approvals${status && status !== "all" ? `?status=${status}` : ""}`
     ),
   decideApproval: (payload: { id: string; decision: "approve" | "reject"; decisionNote?: string; actorName: string; actorRole: string }) =>
-    request<{ approval: import("@/lib/crm/types").ApprovalRequestDTO }>("/api/approvals", { method: "PATCH", body: JSON.stringify(payload) }),
+    request<{ approval: import("@/lib/crm/types").ApprovalRequestDTO; autoQuotation?: { number: string } | null }>("/api/approvals", { method: "PATCH", body: JSON.stringify(payload) }),
+
+  // Ronde 49 — saran autocomplete RAB estimasi (kategori/item/unit dari seluruh estimasi)
+  estimationSuggestions: () =>
+    request<{ categories: string[]; items: string[]; units: string[] }>("/api/estimations/suggestions"),
 
   // Brands & templates
   createBrand: (payload: Record<string, unknown>) =>

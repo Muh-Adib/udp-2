@@ -439,7 +439,12 @@ model Estimation {
   locationFee      Float       @default(0)
   softwareLicense  Float       @default(0)
   hostingDomain    Float       @default(0)
-  costItems        String      @default("[]") // Ronde 40: JSON [{name, qty, days?, unitPrice, subtotal}] — rincian biaya per item
+  costItems        String      @default("[]") // Ronde 40: JSON [{name, qty, days?, unitPrice, subtotal}] — rincian biaya per item (LEGACY, digantikan costCategories)
+  // Ronde 49 — RAB bertingkat: kategori → item. JSON [{name, items: [{name, qty, unit, price, subtotal}], total}]
+  costCategories   String      @default("[]")
+  currency         String      @default("IDR") // mata uang harga (IDR/USD/SGD/EUR/...)
+  fxRate           Float? // kurs currency→IDR yang dipakai saat disimpan (sinkron API free)
+  fxSource         String? // sumber & waktu kurs, mis. "open.er-api.com · 10 Sep 2026 09:15" atau "fallback"
   contingencyPct   Float       @default(5)
   managementFeePct Float       @default(5)
   discountPct      Float       @default(0)

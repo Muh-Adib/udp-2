@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BellRing, CalendarClock, CalendarDays, CheckCircle2, Clapperboard,
-  FileText, Link2, ListFilter, Mail, MessageCircle, Paperclip, Pencil, Phone, Plus, RefreshCw, RotateCcw,
+  FileText, Link2, ListFilter, Mail, Paperclip, Pencil, Phone, Plus, RefreshCw, RotateCcw,
   Send, Sparkles, Video, type LucideIcon,
 } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -288,7 +289,7 @@ function TaskCard({ task, onToggle, busy, onSend, onEdit }: {
                 onClick={goToChat}
                 aria-label={`Buka percakapan di Inbox untuk ${task.title}`}
               >
-                <MessageCircle className="h-3 w-3" aria-hidden />
+                <WhatsAppIcon className="h-3 w-3" aria-hidden />
                 {/* Ronde 34-b — label menyebut kontak bila ada: jelas chat itu DENGAN SIAPA */}
                 {opp?.contact ? `Chat ${opp.contact.fullName.split(" ")[0]}` : "Buka Percakapan"}
               </Button>
@@ -407,7 +408,7 @@ function EmptyGroup({ text }: { text: string }) {
 // ============ Outbound send (Fase 3): kirim & catat pesan follow-up ============
 
 const OUTBOUND_CHANNELS: { key: string; label: string; icon: LucideIcon }[] = [
-  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { key: "whatsapp", label: "WhatsApp", icon: WhatsAppIcon },
   { key: "email", label: "Email", icon: Mail },
   { key: "phone", label: "Telepon", icon: Phone },
 ];
@@ -609,7 +610,7 @@ function SendOutboundDialog({ task, onClose, onSent }: {
                   {ctx.contact?.fullName ?? "Kontak tidak dikenal"}
                 </span>
                 {ctx.contact?.whatsapp ? (
-                  <span className="inline-flex items-center gap-1 text-zinc-600"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden /> {ctx.contact.whatsapp}</span>
+                  <span className="inline-flex items-center gap-1 text-zinc-600"><WhatsAppIcon className="h-3.5 w-3.5 text-emerald-600" aria-hidden /> {ctx.contact.whatsapp}</span>
                 ) : null}
                 {ctx.contact?.email ? (
                   <span className="inline-flex items-center gap-1 text-zinc-600"><Mail className="h-3.5 w-3.5 text-zinc-400" aria-hidden /> {ctx.contact.email}</span>

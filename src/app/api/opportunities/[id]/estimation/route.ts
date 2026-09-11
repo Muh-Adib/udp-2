@@ -12,7 +12,7 @@ const PCT_FIELDS = [
   "contingencyPct", "managementFeePct", "discountPct", "taxPct", "targetMarginPct",
 ] as const;
 
-// Ronde 40 — rincian biaya per item: [{name, qty, days?, unitPrice, subtotal}]
+// Ronde 40 — rincian biaya per item (LEGACY): [{name, qty, days?, unitPrice, subtotal}]
 interface CostItem {
   name: string;
   qty: number;
@@ -21,7 +21,25 @@ interface CostItem {
   subtotal: number;
 }
 
-/** Array | JSON string → item biaya tervalidasi; subtotal dihitung server (IDR bulat). */
+// Ronde 49 — RAB bertingkat kategori → item
+interface RabItem {
+  name: string;
+  qty: number;
+  unit: string;
+  price: number;
+  subtotal: number;
+}
+
+interface RabCategory {
+  name: string;
+  items: RabItem[];
+  total: number;
+}
+
+/** Mata uang yang diizinkan untuk estimasi (IDR default). */
+const CURRENCIES = ["IDR", "USD", "SGD", "EUR", "AUD", "JPY", "MYR", "GBP", "CNY"] as const;
+
+/** Array | JSON string → item biaya LEGACY tervalidasi; subtotal dihitung server. */
 function parseCostItems(raw: unknown): CostItem[] {
   let list: unknown[] = [];
   if (Array.isArray(raw)) list = raw;
@@ -49,16 +67,66 @@ function parseCostItems(raw: unknown): CostItem[] {
       if (!Number.isFinite(d) || d < 0) throw new Error(`Jumlah hari item "${name}" tidak valid`);
       days = d;
     }
-    // Mata uang IDR — subtotal dibulatkan ke rupiah penuh
     items.push({ name, qty, days, unitPrice, subtotal: Math.round(qty * unitPrice) });
   }
   return items;
 }
 
-function compute(input: Record<string, number | null>, itemsTotal = 0, tanpaPajak = false) {
-  const categorySum = COST_FIELDS.reduce((s, f) => s + (input[f] ?? 0), 0);
-  // Ronde 40 — bila rincian item terisi & totalnya > 0, kategori diabaikan
-  const totalCost = itemsTotal > 0 ? itemsTotal : categorySum;
+/**
+ * Ronde 49 — RAB bertingkat: [{name, items: [{name, qty, unit, price}]}]
+ * → tervalidasi + subtotal item & total kategori dihitung server.
+ * Pembulatan mengikuti mata uang: IDR bulat penuh; lainnya 2 desimal.
+ */
+function parseCostCategories(raw: unknown, currency: string): RabCategory[] {
+  let list: unknown[] = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      throw new Error("Struktur RAB (kategori) tidak valid");
+    }
+  }
+  if (list.length > 30) throw new Error("Maksimal 30 kategori biaya");
+  const round = (n: number) => (currency === "IDR" ? Math.round(n) : Math.round(n * 100) / 100);
+  const cats: RabCategory[] = [];
+  const seenCat = new Set<string>();
+  for (const cat of list) {
+    const c = (cat ?? {}) as Record<string, unknown>;
+    const catName = String(c.name ?? "").trim();
+    if (!catName) throw new Error("Nama kategori wajib diisi");
+    const key = catName.toLowerCase();
+    if (seenCat.has(key)) throw new Error(`Kategori "${catName}" muncul dua kali — gunakan nama unik`);
+    seenCat.add(key);
+    const rawItems = Array.isArray(c.items) ? c.items : [];
+    if (rawItems.length > 50) throw new Error(`Maksimal 50 item pada kategori "${catName}"`);
+    const items: RabItem[] = [];
+    for (const item of rawItems) {
+      const it = (item ?? {}) as Record<string, unknown>;
+      const name = String(it.name ?? "").trim();
+      if (!name) throw new Error(`Nama item pada kategori "${catName}" wajib diisi`);
+      const qty = Number(it.qty ?? 0);
+      if (!Number.isFinite(qty) || qty < 0) throw new Error(`Jumlah (qty) item "${name}" tidak valid`);
+      const unit = String(it.unit ?? "").trim().slice(0, 40) || "unit";
+      const price = Number(it.price ?? 0);
+      if (!Number.isFinite(price) || price < 0) throw new Error(`Harga item "${name}" tidak valid`);
+      items.push({ name, qty, unit, price, subtotal: round(qty * price) });
+    }
+    cats.push({ name: catName.slice(0, 120), items, total: items.reduce((s, i) => s + i.subtotal, 0) });
+  }
+  return cats;
+}
+
+function compute(
+  input: Record<string, number | null>,
+  itemsTotal = 0,
+  categoriesTotal = 0,
+  tanpaPajak = false,
+) {
+  const legacyCategorySum = COST_FIELDS.reduce((s, f) => s + (input[f] ?? 0), 0);
+  // Ronde 49 — prioritas total biaya: RAB kategori → item legacy → kategori legacy
+  const totalCost = categoriesTotal > 0 ? categoriesTotal : itemsTotal > 0 ? itemsTotal : legacyCategorySum;
   const contingency = Math.round((totalCost * (input.contingencyPct ?? 0)) / 100);
   const managementFee = Math.round((totalCost * (input.managementFeePct ?? 0)) / 100);
   const costWithFees = totalCost + contingency + managementFee;
@@ -115,8 +183,31 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const taxName = body.taxName === null || body.taxName === undefined ? null : String(body.taxName).slice(0, 80);
   const tanpaPajak = taxName === null;
 
+  // Ronde 49 — mata uang estimasi (default IDR; fallback nilai tersimpan)
+  const currencyRaw = body.currency !== undefined ? String(body.currency ?? "IDR").toUpperCase() : (current?.currency ?? "IDR");
+  const currency = (CURRENCIES as readonly string[]).includes(currencyRaw) ? currencyRaw : "IDR";
+
+  // Ronde 49 — kurs currency→IDR dari klien (hasil fetch API free; null bila IDR/gagal).
+  // Disimpan agar nilai konversi stabil & teraudit; sumber dicatat sebagai teks.
+  let fxRate: number | null = null;
+  if (body.fxRate !== undefined) {
+    const r = Number(body.fxRate);
+    fxRate = currency !== "IDR" && Number.isFinite(r) && r > 0 ? r : null;
+  } else {
+    fxRate = currency !== "IDR" ? (current?.fxRate ?? null) : null;
+  }
+  let fxSource: string | null = null;
+  if (body.fxSource !== undefined) {
+    fxSource = body.fxSource ? String(body.fxSource).slice(0, 160) : null;
+  } else {
+    fxSource = currency !== "IDR" ? (current?.fxSource ?? null) : null;
+  }
+  if (currency === "IDR") {
+    fxRate = null;
+    fxSource = null;
+  }
+
   const input: Record<string, number | null> = {};
-  for (const f of COST_FIELDS) input[f] = Number(body[f] ?? current?.[f] ?? 0);
   for (const f of PCT_FIELDS) input[f] = Number(body[f] ?? current?.[f] ?? 0);
   // Ronde 41 — revenue bisa null ("belum diketahui"): body kosong/""/null → null
   input.revenue = body.revenue !== undefined
@@ -130,30 +221,60 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return fail("Harga penawaran (revenue) wajib diisi lebih dari 0 sebelum mengajukan approval.", 400);
   }
 
-  // Ronde 40 — costItems (array | JSON string); bila tak dikirim, pertahankan item tersimpan
+  // Ronde 49 — RAB kategori→item (struktur baru). Bila dikirim, legacy 9 kolom & item
+  // lama dinolkan agar tidak pernah dobel hitung; subtotal/total dihitung ulang server.
+  let costCategories: RabCategory[] | null = null;
+  let categoriesTotal = 0;
+  if (body.costCategories !== undefined) {
+    try {
+      costCategories = parseCostCategories(body.costCategories, currency);
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : "RAB tidak valid", 400);
+    }
+    categoriesTotal = costCategories.reduce((s, c) => s + c.total, 0);
+  }
+
+  // Ronde 40 — costItems LEGACY (array | JSON string); bila tak dikirim, pertahankan item tersimpan.
+  // Diabaikan sepenuhnya bila RAB kategori baru dikirim (prioritas struktur baru).
   let costItems: CostItem[];
   try {
     const rawCostItems =
-      body.costItems !== undefined && body.costItems !== null && body.costItems !== ""
-        ? body.costItems
-        : (current?.costItems ?? "[]");
+      costCategories !== null
+        ? []
+        : body.costItems !== undefined && body.costItems !== null && body.costItems !== ""
+          ? body.costItems
+          : (current?.costItems ?? "[]");
     costItems = parseCostItems(rawCostItems);
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Rincian biaya tidak valid", 400);
   }
   const itemsTotal = costItems.reduce((s, i) => s + i.subtotal, 0);
 
-  const calc = compute(input, itemsTotal, tanpaPajak);
+  // Nilai legacy 9 kolom: dari body (klien baru selalu kirim 0) atau nilai tersimpan.
+  // Ronde 49 — bila struktur RAB kategori dikirim, legacy DINOLKAN agar tidak dobel hitung.
+  for (const f of COST_FIELDS) input[f] = costCategories !== null ? 0 : Number(body[f] ?? current?.[f] ?? 0);
 
-  const data = {
+  const calc = compute(input, itemsTotal, categoriesTotal, tanpaPajak);
+
+  const data: Record<string, unknown> = {
     ...input,
     ...calc,
-    costItems: JSON.stringify(costItems),
     taxName,
+    currency,
+    fxRate,
+    fxSource,
     notes: body.notes !== undefined ? (body.notes ? String(body.notes) : null) : (current?.notes ?? null),
     createdBy: current?.createdBy ?? actorName,
     updatedAt: new Date(),
   };
+  if (costCategories !== null) {
+    data.costCategories = JSON.stringify(costCategories);
+    // Ronde 49 — struktur baru aktif: legacy dinolkan agar total tidak dobel
+    for (const f of COST_FIELDS) data[f] = 0;
+    data.costItems = JSON.stringify([]);
+  } else {
+    data.costItems = JSON.stringify(costItems);
+  }
 
   let estimation;
   if (current) {
@@ -170,7 +291,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   await logAudit({
     actorName, actorRole, action: "update", entity: "estimation", entityId: estimation.id,
     entityLabel: `Estimasi — ${opp.title}`,
-    newValue: `Revenue ${input.revenue ?? "(belum diketahui)"} · Margin ${calc.marginPct}% (${calc.margin})`,
+    newValue: `Revenue ${input.revenue ?? "(belum diketahui)"} ${currency} · Margin ${calc.marginPct}% (${calc.margin})`,
     req,
   });
 

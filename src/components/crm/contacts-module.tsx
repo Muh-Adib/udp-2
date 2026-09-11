@@ -34,7 +34,6 @@ import {
   Mail,
   MailPlus,
   MapPin,
-  MessageCircle,
   MessagesSquare,
   Music2,
   Pencil,
@@ -53,6 +52,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import {
   Command,
   CommandEmpty,
@@ -192,7 +192,7 @@ const AVATAR_PALETTE: readonly string[] = [
 ];
 
 const CHANNEL_ICONS: Record<string, LucideIcon> = {
-  whatsapp: MessageCircle,
+  whatsapp: WhatsAppIcon,
   email: Mail,
   instagram: Instagram,
   website: Globe,
@@ -511,7 +511,7 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
           <span className="truncate">{contact.email || "—"}</span>
         </p>
         <p className="flex items-center gap-1.5">
-          <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
+          <WhatsAppIcon className="size-3.5 shrink-0 text-zinc-400" />
           <span className="truncate">{contact.whatsapp || "—"}</span>
         </p>
         {typeof contact._count?.interactions === "number" && contact._count.interactions > 0 && (
@@ -954,7 +954,7 @@ function ContactDetailBody({
                 title={`Chat WhatsApp ke ${contact.whatsapp}`}
                 aria-label="Buka WhatsApp untuk kontak ini"
               >
-                <MessageCircle className="size-3.5" /> WhatsApp
+                <WhatsAppIcon className="size-3.5" /> WhatsApp
               </Button>
             ) : null}
             <Button
@@ -964,7 +964,7 @@ function ContactDetailBody({
               title="Lanjutkan percakapan dengan kontak ini di Inbox"
               aria-label="Buka Chat di Inbox"
             >
-              <MessageCircle className="size-3.5" /> Buka Chat di Inbox
+              <WhatsAppIcon className="size-3.5" /> Buka Chat di Inbox
             </Button>
             <Button
               size="sm"
@@ -1005,7 +1005,7 @@ function ContactDetailBody({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <InfoRow icon={Mail} label="Email" value={contact.email} />
               {contact.emailAlt ? <InfoRow icon={MailPlus} label="Email alternatif" value={contact.emailAlt} /> : null}
-              <InfoRow icon={MessageCircle} label="WhatsApp" value={contact.whatsapp} />
+              <InfoRow icon={WhatsAppIcon} label="WhatsApp" value={contact.whatsapp} />
               <InfoRow icon={Phone} label="Telepon" value={contact.phone} />
               <InfoRow icon={MapPin} label="Lokasi" value={locationText(contact.city, contact.country)} />
               {contact.currency ? <InfoRow icon={Wallet} label="Mata uang" value={contact.currency} /> : null}
@@ -2272,7 +2272,7 @@ function DuplicateIdentity({
         <span className="truncate">{email || "—"}</span>
       </p>
       <p className="flex items-center gap-1.5 text-xs text-zinc-500">
-        <MessageCircle className="size-3.5 shrink-0 text-zinc-400" />
+        <WhatsAppIcon className="size-3.5 shrink-0 text-zinc-400" />
         <span className="truncate">{whatsapp || "—"}</span>
       </p>
       <p className="flex items-center gap-1.5 text-xs text-zinc-500">

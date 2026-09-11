@@ -404,6 +404,21 @@ export interface EstimationCostItem {
   subtotal: number;
 }
 
+/** Ronde 49 — RAB bertingkat: kategori berisi item (JSON string di DB). */
+export interface EstimationRabItem {
+  name: string;
+  qty: number;
+  unit: string;
+  price: number;
+  subtotal: number;
+}
+
+export interface EstimationCostCategory {
+  name: string;
+  items: EstimationRabItem[];
+  total: number;
+}
+
 export interface EstimationDTO {
   id: string;
   opportunityId: string;
@@ -411,6 +426,12 @@ export interface EstimationDTO {
   accommodation: number; talent: number; locationFee: number; softwareLicense: number; hostingDomain: number;
   /** Ronde 40 — rincian biaya per item; bila totalnya > 0, totalCost mengikuti item ini. */
   costItems?: string | EstimationCostItem[];
+  /** Ronde 49 — RAB bertingkat kategori→item; bila totalnya > 0, totalCost mengikuti ini. */
+  costCategories?: string | EstimationCostCategory[];
+  currency?: string;
+  /** Ronde 49 — kurs currency→IDR saat disimpan + sumbernya (null bila IDR). */
+  fxRate?: number | null;
+  fxSource?: string | null;
   contingencyPct: number; managementFeePct: number; discountPct: number; taxPct: number; targetMarginPct: number;
   /** Ronde 40 — nama pajak bebas (PPN, PPh 21, dll); null = tanpa pajak (taxPct 0). */
   taxName?: string | null;

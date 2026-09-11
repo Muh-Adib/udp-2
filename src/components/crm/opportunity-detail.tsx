@@ -8,9 +8,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
   BadgeCheck,
-  BedDouble,
   Calculator,
-  Camera,
   Check,
   CheckCheck,
   ChevronDown,
@@ -20,7 +18,6 @@ import {
   FileText,
   FolderKanban,
   Globe,
-  Handshake,
   Hourglass,
   Instagram,
   Link2,
@@ -28,10 +25,7 @@ import {
   LayoutDashboard,
   Mail,
   MapPin,
-  MessageCircle,
   MessageSquare,
-  Mic,
-  Monitor,
   Paperclip,
   Pencil,
   Phone,
@@ -43,12 +37,11 @@ import {
   Sparkles,
   StickyNote,
   Trash2,
-  Truck,
-  Users,
   Video,
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,7 +55,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -99,7 +91,7 @@ import { computeLeadScore, scoreTier } from "@/lib/crm/scoring";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
 import TaskFormDialog from "@/components/crm/task-form-dialog";
 import { useCrmStore } from "@/lib/crm/store";
-import type { Brand, BriefStatus, EstimationCostItem, EstimationDTO, QuotationDTO, QuotationItemDTO, TaskAttachment } from "@/lib/crm/types";
+import type { Brand, BriefStatus, EstimationCostCategory, EstimationCostItem, EstimationDTO, QuotationDTO, QuotationItemDTO, TaskAttachment } from "@/lib/crm/types";
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
 import BriefPanel from "@/components/crm/brief-panel";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
@@ -135,7 +127,7 @@ export interface OpportunityDetailProps {
 // ---------- Ikon kanal ----------
 
 const CHANNEL_ICONS: Record<string, LucideIcon> = {
-  whatsapp: MessageCircle,
+  whatsapp: WhatsAppIcon,
   email: Mail,
   instagram: Instagram,
   website: Globe,
@@ -442,6 +434,24 @@ function taskAttachmentList(raw: TaskRow["attachments"]): TaskAttachment[] {
   );
 }
 
+/** Ronde 49 — EstimationDTO.costCategories (JSON string | array) → kategori RAB — parse defensif. */
+function parseEstimationCategories(est?: EstimationDTO | null): EstimationCostCategory[] {
+  if (!est?.costCategories) return [];
+  let list: unknown = est.costCategories;
+  if (typeof list === "string") {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return (list as EstimationCostCategory[]).filter(
+    (c): c is EstimationCostCategory =>
+      !!c && typeof c === "object" && typeof c.name === "string" && Array.isArray(c.items)
+  );
+}
+
 /** EstimationDTO.costItems (JSON string | array) → daftar item — parse defensif. */
 function parseEstimationCostItems(est?: EstimationDTO | null): EstimationCostItem[] {
   if (!est?.costItems) return [];
@@ -460,37 +470,210 @@ function parseEstimationCostItems(est?: EstimationDTO | null): EstimationCostIte
   );
 }
 
-type CostKey =
-  | "laborInternal"
-  | "vendorFreelance"
-  | "equipment"
-  | "transport"
-  | "accommodation"
-  | "talent"
-  | "locationFee"
-  | "softwareLicense"
-  | "hostingDomain";
+// ---------- Ronde 49: RAB bertingkat (kategori → item) + multi-mata uang ----------
 
 type PctKey = "contingencyPct" | "managementFeePct" | "discountPct" | "taxPct" | "targetMarginPct";
 
-type EstimationForm = Record<CostKey | PctKey | "revenue" | "notes", string>;
+type EstimationForm = Record<PctKey | "revenue" | "notes", string>;
 
-/** Ronde 40-E — baris rincian biaya per item pada form estimasi. */
-type CostItemRow = { name: string; qty: string; days: string; unitPrice: string };
+/** Baris item dalam kategori RAB. */
+type RabItemRow = { name: string; qty: string; unit: string; price: string };
+/** Kategori RAB beserta itemnya. */
+type RabCategoryRow = { name: string; items: RabItemRow[] };
 
-const COST_CATEGORIES: { key: CostKey; label: string; Icon: LucideIcon }[] = [
-  { key: "laborInternal", label: "Tenaga Internal", Icon: Users },
-  { key: "vendorFreelance", label: "Vendor / Freelancer", Icon: Handshake },
-  { key: "equipment", label: "Equipment", Icon: Camera },
-  { key: "transport", label: "Transportasi", Icon: Truck },
-  { key: "accommodation", label: "Akomodasi", Icon: BedDouble },
-  { key: "talent", label: "Talent", Icon: Mic },
-  { key: "locationFee", label: "Lokasi", Icon: MapPin },
-  { key: "softwareLicense", label: "Software / Lisensi", Icon: Monitor },
-  { key: "hostingDomain", label: "Hosting / Domain", Icon: Globe },
+const RAB_CURRENCY_OPTIONS = ["IDR", "USD", "SGD", "EUR", "AUD", "JPY", "MYR", "GBP", "CNY"] as const;
+
+/** Saran kategori default (digabung dgn riwayat estimasi dari server). */
+const DEFAULT_CATEGORY_SUGGESTIONS = [
+  "Produksi / Operasional", "Talent & Tim", "Peralatan & Equipment", "Lokasi", "Transportasi & Logistik",
+  "Akomodasi", "Konsumsi", "Post-Production", "Software & Lisensi", "Hosting & Domain", "Lain-lain",
 ];
+const DEFAULT_UNIT_SUGGESTIONS = ["unit", "pcs", "orang", "hari", "jam", "paket", "set", "bulan", "project", "kali", "slot"];
 
-// Ronde 40-E — taxPct kini dipilih lewat Select master pajak (bukan input bebas);
+/** Kurs fallback (indikatif) bila API kurs gagal diakses (mis. offline). */
+const FALLBACK_IDR_RATE: Record<string, number> = {
+  USD: 16250, SGD: 12200, EUR: 17650, AUD: 10650, JPY: 108, MYR: 3480, GBP: 20650, CNY: 2250,
+};
+
+type IdrFx = { rate: number | null; source: string | null };
+
+const FX_CACHE_PREFIX = "udp-fx:";
+const FX_TTL_MS = 60 * 60 * 1000; // 1 jam
+
+/** Baca cache kurs localStorage (TTL 1 jam). */
+function readFxCache(currency: string): IdrFx | null {
+  try {
+    const raw = localStorage.getItem(FX_CACHE_PREFIX + currency);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { rate?: number; source?: string; t?: number };
+    if (typeof parsed.rate !== "number" || !parsed.t || Date.now() - parsed.t > FX_TTL_MS) return null;
+    return { rate: parsed.rate, source: parsed.source ?? null };
+  } catch {
+    return null;
+  }
+}
+
+function writeFxCache(currency: string, fx: IdrFx) {
+  try {
+    localStorage.setItem(FX_CACHE_PREFIX + currency, JSON.stringify({ ...fx, t: Date.now() }));
+  } catch {
+    /* abaikan */
+  }
+}
+
+function fxStamp(): string {
+  return new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date());
+}
+
+/**
+ * Ronde 49 — kurs currency→IDR dari API gratis (sinkron, tanpa API key):
+ * 1) open.er-api.com  2) frankfurter.app (ECB)  3) fallback indikatif.
+ * Hasil di-cache localStorage 1 jam agar stabil selama sesi & hemat kuota.
+ */
+async function fetchIdrRate(currency: string): Promise<IdrFx> {
+  if (currency === "IDR") return { rate: null, source: null };
+  const cached = readFxCache(currency);
+  if (cached) return cached;
+  const stamp = fxStamp();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`https://open.er-api.com/v6/latest/${currency}`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (res.ok) {
+      const json = (await res.json()) as { rates?: Record<string, number> };
+      const rate = json.rates?.IDR;
+      if (typeof rate === "number" && rate > 0) {
+        const fx: IdrFx = { rate, source: `open.er-api.com · ${stamp}` };
+        writeFxCache(currency, fx);
+        return fx;
+      }
+    }
+  } catch {
+    /* lanjut ke fallback */
+  }
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`https://api.frankfurter.app/latest?from=${currency}&to=IDR`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (res.ok) {
+      const json = (await res.json()) as { rates?: Record<string, number> };
+      const rate = json.rates?.IDR;
+      if (typeof rate === "number" && rate > 0) {
+        const fx: IdrFx = { rate, source: `frankfurter.app (ECB) · ${stamp}` };
+        writeFxCache(currency, fx);
+        return fx;
+      }
+    }
+  } catch {
+    /* lanjut ke fallback */
+  }
+  const fb = FALLBACK_IDR_RATE[currency];
+  return fb ? { rate: fb, source: `kurs indikatif (offline) · ${stamp}` } : { rate: null, source: null };
+}
+
+/** Keterangan kecil konversi ke IDR (hanya bila mata uang non-IDR & nilai > 0). */
+function toIdrNote(value: number, fx: IdrFx): string | null {
+  if (!fx.rate || fx.rate <= 0 || value <= 0) return null;
+  return `≈ ${formatCurrencyFull(Math.round(value * fx.rate), "IDR")}`;
+}
+
+/** Input teks dgn saran autocomplete (dropdown ringan, navigasi keyboard). */
+function SuggestInput({
+  value, onChange, suggestions, placeholder, ariaLabel, disabled, className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  suggestions: string[];
+  placeholder?: string;
+  ariaLabel: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const filtered = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    const base = q ? suggestions.filter((s) => s.toLowerCase().includes(q)) : suggestions;
+    return base.filter((s) => s.toLowerCase() !== q).slice(0, 8);
+  }, [value, suggestions]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  return (
+    <div ref={boxRef} className="relative">
+      <Input
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+          setHighlight(0);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (!open || filtered.length === 0) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHighlight((h) => (h + 1) % filtered.length);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHighlight((h) => (h - 1 + filtered.length) % filtered.length);
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (filtered[highlight]) onChange(filtered[highlight]);
+            setOpen(false);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        className={className}
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={open && filtered.length > 0}
+      />
+      {open && filtered.length > 0 ? (
+        <ul
+          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-52 overflow-y-auto rounded-md border bg-popover py-1 shadow-md"
+          role="listbox"
+          aria-label={`Saran ${ariaLabel}`}
+        >
+          {filtered.map((s, i) => (
+            <li key={s}>
+              <button
+                type="button"
+                className={cn("w-full px-2.5 py-1.5 text-left text-xs outline-none hover:bg-accent", i === highlight && "bg-accent")}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(s);
+                  setOpen(false);
+                }}
+                onMouseEnter={() => setHighlight(i)}
+                role="option"
+                aria-selected={i === highlight}
+              >
+                {s}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// Ronde 40-E — taxPct dipilih lewat Select master pajak (bukan input bebas);
 // grid parameter hanya menampilkan persen non-pajak.
 const PCT_PARAMETERS: { key: PctKey; label: string }[] = [
   { key: "contingencyPct", label: "Contingency %" },
@@ -503,27 +686,8 @@ const FALLBACK_TAX_OPTIONS = [{ name: "PPN (manual)", rate: 11 }];
 
 type TaxOption = { name: string; rate: number };
 
-/** Baris item biaya dari EstimationDTO (parse JSON string dengan aman). */
-function costItemRowsFromEstimation(est?: EstimationDTO | null): CostItemRow[] {
-  return parseEstimationCostItems(est).map((it) => ({
-    name: it.name,
-    qty: String(it.qty ?? 0),
-    days: it.days === null || it.days === undefined ? "" : String(it.days),
-    unitPrice: String(it.unitPrice ?? 0),
-  }));
-}
-
 /** Nilai default sama dengan default schema (contingency 5, mgmt fee 5, tax 11, target 30). */
 const EMPTY_ESTIMATION_FORM: EstimationForm = {
-  laborInternal: "0",
-  vendorFreelance: "0",
-  equipment: "0",
-  transport: "0",
-  accommodation: "0",
-  talent: "0",
-  locationFee: "0",
-  softwareLicense: "0",
-  hostingDomain: "0",
   contingencyPct: "5",
   managementFeePct: "5",
   discountPct: "0",
@@ -533,17 +697,57 @@ const EMPTY_ESTIMATION_FORM: EstimationForm = {
   notes: "",
 };
 
+/**
+ * Ronde 49 — EstimationDTO → baris editor RAB, dgn migrasi otomatis dari struktur lama:
+ * 1) costCategories (baru)  2) costItems legacy → kategori "Biaya Umum"
+ * 3) 9 kategori tetap legacy → kategori per nilai non-nol.
+ */
+function rabRowsFromEstimation(est?: EstimationDTO | null): RabCategoryRow[] {
+  let list: unknown = est?.costCategories;
+  if (typeof list === "string" && list) {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      list = [];
+    }
+  }
+  if (Array.isArray(list) && list.length > 0) {
+    return (list as EstimationCostCategory[])
+      .filter((c) => !!c && typeof c.name === "string")
+      .map((c) => ({
+        name: c.name,
+        items: (Array.isArray(c.items) ? c.items : [])
+          .filter((it) => !!it && typeof it.name === "string")
+          .map((it) => ({ name: it.name, qty: String(it.qty ?? 0), unit: it.unit ?? "unit", price: String(it.price ?? 0) })),
+      }));
+  }
+  const legacyItems = parseEstimationCostItems(est);
+  if (legacyItems.length > 0) {
+    return [
+      {
+        name: "Biaya Umum",
+        items: legacyItems.map((it) => ({ name: it.name, qty: String(it.qty ?? 0), unit: "unit", price: String(it.unitPrice ?? 0) })),
+      },
+    ];
+  }
+  const legacyMap: [string, number][] = [
+    ["Tenaga Internal", est?.laborInternal ?? 0],
+    ["Vendor / Freelancer", est?.vendorFreelance ?? 0],
+    ["Equipment", est?.equipment ?? 0],
+    ["Transportasi", est?.transport ?? 0],
+    ["Akomodasi", est?.accommodation ?? 0],
+    ["Talent", est?.talent ?? 0],
+    ["Lokasi", est?.locationFee ?? 0],
+    ["Software / Lisensi", est?.softwareLicense ?? 0],
+    ["Hosting / Domain", est?.hostingDomain ?? 0],
+  ];
+  return legacyMap
+    .filter(([, v]) => v > 0)
+    .map(([name, v]) => ({ name, items: [{ name, qty: "1", unit: "paket", price: String(v) }] }));
+}
+
 function formFromEstimation(est: EstimationDTO): EstimationForm {
   return {
-    laborInternal: String(est.laborInternal ?? 0),
-    vendorFreelance: String(est.vendorFreelance ?? 0),
-    equipment: String(est.equipment ?? 0),
-    transport: String(est.transport ?? 0),
-    accommodation: String(est.accommodation ?? 0),
-    talent: String(est.talent ?? 0),
-    locationFee: String(est.locationFee ?? 0),
-    softwareLicense: String(est.softwareLicense ?? 0),
-    hostingDomain: String(est.hostingDomain ?? 0),
     contingencyPct: String(est.contingencyPct ?? 0),
     managementFeePct: String(est.managementFeePct ?? 0),
     discountPct: String(est.discountPct ?? 0),
@@ -569,11 +773,9 @@ type EstimationCalc = {
 };
 
 /** Rumus identik dengan server (src/app/api/opportunities/[id]/estimation):
- *  totalCost = Σ subtotal item bila > 0, selain itu Σ 9 kategori;
- *  taxPct dipaksa 0 bila tanpa pajak (taxName null). */
-function computeEstimation(form: EstimationForm, costItemsTotal: number, taxPct: number): EstimationCalc {
-  const categorySum = COST_CATEGORIES.reduce((s, c) => s + toNum(form[c.key]), 0);
-  const totalCost = costItemsTotal > 0 ? costItemsTotal : categorySum;
+ *  totalCost = Σ total kategori RAB; taxPct dipaksa 0 bila tanpa pajak (taxName null). */
+function computeEstimation(form: EstimationForm, categoriesTotal: number, taxPct: number): EstimationCalc {
+  const totalCost = categoriesTotal;
   const contingency = Math.round((totalCost * toNum(form.contingencyPct)) / 100);
   const managementFee = Math.round((totalCost * toNum(form.managementFeePct)) / 100);
   const costWithFees = totalCost + contingency + managementFee;
@@ -613,8 +815,10 @@ function CalcRow({ label, value, currency, muted }: { label: string; value: numb
   );
 }
 
-function CalcPanel({ calc, form, currency, taxName }: { calc: EstimationCalc; form: EstimationForm; currency: string; taxName: string | null }) {
+function CalcPanel({ calc, form, currency, taxName, fx }: { calc: EstimationCalc; form: EstimationForm; currency: string; taxName: string | null; fx: IdrFx }) {
   const target = toNum(form.targetMarginPct);
+  const grandNote = toIdrNote(calc.grandTotal, fx);
+  const costNote = toIdrNote(calc.totalCost, fx);
   const hasRevenue = calc.netRevenue > 0;
   const tone = hasRevenue ? marginTone(calc.marginPct, target) : null;
   const barPct = target > 0 ? Math.max(0, Math.min(100, (calc.marginPct / target) * 100)) : 0;
@@ -635,6 +839,8 @@ function CalcPanel({ calc, form, currency, taxName }: { calc: EstimationCalc; fo
           <CalcRow label={`${taxName ?? "PPN"} (${toNum(form.taxPct)}%)`} value={calc.taxAmount} currency={currency} muted />
         ) : null}
         <CalcRow label="Grand Total" value={calc.grandTotal} currency={currency} />
+        {grandNote ? <p className="text-right text-[10px] text-zinc-400">{grandNote} (kurs {currency}→IDR)</p> : null}
+        {costNote ? <p className="text-right text-[10px] text-zinc-400">Total biaya {costNote}</p> : null}
       </div>
 
       <div className="mt-3 rounded-lg border bg-white p-3">
@@ -698,8 +904,18 @@ function EstimationTab({
   const [form, setForm] = useState<EstimationForm>(() =>
     initialEstimation ? formFromEstimation(initialEstimation) : EMPTY_ESTIMATION_FORM
   );
-  // Ronde 40-E — rincian biaya per item + pajak dari master
-  const [costItems, setCostItems] = useState<CostItemRow[]>(() => costItemRowsFromEstimation(initialEstimation));
+  // Ronde 49 — RAB bertingkat (kategori → item) + mata uang & kurs
+  const [categories, setCategories] = useState<RabCategoryRow[]>(() => rabRowsFromEstimation(initialEstimation));
+  const [currencyState, setCurrencyState] = useState<string>(() => {
+    const saved = initialEstimation?.currency;
+    return saved && (RAB_CURRENCY_OPTIONS as readonly string[]).includes(saved) ? saved : "IDR";
+  });
+  const [fx, setFx] = useState<IdrFx>({ rate: null, source: null });
+  const [suggestions, setSuggestions] = useState<{ categories: string[]; items: string[]; units: string[] }>({
+    categories: DEFAULT_CATEGORY_SUGGESTIONS,
+    items: [],
+    units: DEFAULT_UNIT_SUGGESTIONS,
+  });
   const [taxName, setTaxName] = useState<string | null>(initialEstimation?.taxName ?? null);
   const [taxOptions, setTaxOptions] = useState<TaxOption[] | null>(null);
   const [loading, setLoading] = useState(!initialEstimation);
@@ -726,7 +942,8 @@ function EstimationTab({
         if (cancelled) return;
         setEst(res.estimation);
         setForm(formFromEstimation(res.estimation));
-        setCostItems(costItemRowsFromEstimation(res.estimation));
+        setCategories(rabRowsFromEstimation(res.estimation));
+        setCurrencyState(res.estimation.currency && (RAB_CURRENCY_OPTIONS as readonly string[]).includes(res.estimation.currency) ? res.estimation.currency : "IDR");
         setTaxName(res.estimation.taxName ?? null);
       })
       .catch((e) => {
@@ -755,6 +972,43 @@ function EstimationTab({
       cancelled = true;
     };
   }, []);
+
+  // Ronde 49 — saran autocomplete RAB dari seluruh estimasi (riwayat tim)
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .estimationSuggestions()
+      .then((res) => {
+        if (cancelled) return;
+        setSuggestions({
+          categories: [...new Set([...res.categories, ...DEFAULT_CATEGORY_SUGGESTIONS])],
+          items: res.items,
+          units: [...new Set([...res.units, ...DEFAULT_UNIT_SUGGESTIONS])],
+        });
+      })
+      .catch(() => {
+        /* saran default tetap terpakai */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Ronde 49 — kurs currency→IDR live (API gratis, cache 1 jam) bila non-IDR
+  useEffect(() => {
+    let cancelled = false;
+    setFx({ rate: null, source: null });
+    fetchIdrRate(currencyState)
+      .then((res) => {
+        if (!cancelled) setFx(res);
+      })
+      .catch(() => {
+        if (!cancelled) setFx({ rate: null, source: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currencyState]);
 
   // Ronde 40-E — cari approval pending utk estimasi ini: coba pendingApprovals dari
   // detail dulu; bila tidak ketemu (mis. daftar terpotong take 5), minta /api/approvals?status=pending.
@@ -824,16 +1078,23 @@ function EstimationTab({
     if (est && est.status !== "draft") return;
     setForm((f) => (f.revenue.trim() === "" ? { ...f, revenue: String(suggestion.suggestedPrice) } : f));
   }, [suggestion, est?.status]);
-  // Ronde 40-E — Σ subtotal item (hanya baris bernama, subtotal dibulatkan spt server)
-  const itemsTotal = useMemo(
+  // Ronde 49 — Σ total kategori RAB (hanya kategori & item bernama; bulatkan spt server)
+  const categoriesTotal = useMemo(
     () =>
-      costItems
-        .filter((r) => r.name.trim() !== "")
-        .reduce((s, r) => s + Math.round((toNum(r.qty) || 0) * (toNum(r.unitPrice) || 0)), 0),
-    [costItems]
+      categories
+        .filter((c) => c.name.trim() !== "")
+        .reduce(
+          (s, c) =>
+            s +
+            c.items
+              .filter((r) => r.name.trim() !== "")
+              .reduce((ss, r) => ss + Math.round((toNum(r.qty) || 0) * (toNum(r.price) || 0)), 0),
+          0,
+        ),
+    [categories]
   );
   const effectiveTaxPct = taxName ? toNum(form.taxPct) : 0;
-  const calc = useMemo(() => computeEstimation(form, itemsTotal, effectiveTaxPct), [form, itemsTotal, effectiveTaxPct]);
+  const calc = useMemo(() => computeEstimation(form, categoriesTotal, effectiveTaxPct), [form, categoriesTotal, effectiveTaxPct]);
   const revenueNum = toNum(form.revenue);
   const disabled = loading || locked || saving;
 
@@ -852,18 +1113,40 @@ function EstimationTab({
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  // ---------- Ronde 40-E: editor rincian item ----------
+  // ---------- Ronde 49: editor RAB kategori → item ----------
 
-  function addCostItem() {
-    setCostItems((rows) => [...rows, { name: "", qty: "1", days: "", unitPrice: "" }]);
+  const cur: string = currencyState;
+
+  function addCategory() {
+    setCategories((rows) => [...rows, { name: "", items: [{ name: "", qty: "1", unit: "unit", price: "" }] }]);
   }
 
-  function updateCostItem(idx: number, patch: Partial<CostItemRow>) {
-    setCostItems((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  function removeCategory(idx: number) {
+    setCategories((rows) => rows.filter((_, i) => i !== idx));
   }
 
-  function removeCostItem(idx: number) {
-    setCostItems((rows) => rows.filter((_, i) => i !== idx));
+  function updateCategory(idx: number, patch: Partial<Pick<RabCategoryRow, "name">>) {
+    setCategories((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+
+  function addItem(catIdx: number) {
+    setCategories((rows) =>
+      rows.map((r, i) => (i === catIdx ? { ...r, items: [...r.items, { name: "", qty: "1", unit: "unit", price: "" }] } : r)),
+    );
+  }
+
+  function updateItem(catIdx: number, itemIdx: number, patch: Partial<RabItemRow>) {
+    setCategories((rows) =>
+      rows.map((r, i) =>
+        i === catIdx ? { ...r, items: r.items.map((it, j) => (j === itemIdx ? { ...it, ...patch } : it)) } : r,
+      ),
+    );
+  }
+
+  function removeItem(catIdx: number, itemIdx: number) {
+    setCategories((rows) =>
+      rows.map((r, i) => (i === catIdx ? { ...r, items: r.items.filter((_, j) => j !== itemIdx) } : r)),
+    );
   }
 
   function selectTax(value: string) {
@@ -893,27 +1176,25 @@ function EstimationTab({
         taxName,
         taxPct: effectiveTaxPct,
       };
-      for (const c of COST_CATEGORIES) payload[c.key] = toNum(form[c.key]);
       for (const p of PCT_PARAMETERS) payload[p.key] = toNum(form[p.key]);
       payload.targetMarginPct = toNum(form.targetMarginPct);
-      // Ronde 40-E — kirim rincian item hanya bila ada minimal satu baris bernama;
-      // tanpa itu, server mempertahankan item tersimpan (subtotal dihitung ulang di server).
-      const namedItems = costItems.filter((r) => r.name.trim() !== "");
-      if (namedItems.length > 0) {
-        payload.costItems = namedItems.map((r) => {
-          const daysNum = Number(r.days);
-          return {
-            name: r.name.trim(),
-            qty: Number(r.qty) || 0,
-            days: r.days.trim() === "" || !Number.isFinite(daysNum) ? null : daysNum,
-            unitPrice: Number(r.unitPrice) || 0,
-          };
-        });
-      }
+      // Ronde 49 — kirim RAB kategori→item (selalu, agar server menol-kan legacy);
+      // subtotal & total kategori dihitung ulang di server dgn pembulatan mata uang.
+      payload.currency = cur;
+      payload.fxRate = cur === "IDR" ? null : fx.rate;
+      payload.fxSource = cur === "IDR" ? null : fx.source;
+      payload.costCategories = categories
+        .filter((c) => c.name.trim() !== "")
+        .map((c) => ({
+          name: c.name.trim(),
+          items: c.items
+            .filter((r) => r.name.trim() !== "")
+            .map((r) => ({ name: r.name.trim(), qty: Number(r.qty) || 0, unit: r.unit.trim() || "unit", price: Number(r.price) || 0 })),
+        }));
 
       const res = await api.saveEstimation(opportunityId, payload);
       setEst(res.estimation);
-      setCostItems(costItemRowsFromEstimation(res.estimation));
+      setCategories(rabRowsFromEstimation(res.estimation));
       setTaxName(res.estimation.taxName ?? null);
       if (submit) {
         toast.success("Estimasi diajukan untuk approval");
@@ -934,7 +1215,7 @@ function EstimationTab({
     if (!pendingApprovalId) return;
     setDeciding(true);
     try {
-      await api.decideApproval({
+      const res = await api.decideApproval({
         id: pendingApprovalId,
         decision,
         decisionNote: decisionNote?.trim() || undefined,
@@ -942,7 +1223,12 @@ function EstimationTab({
         actorRole,
       });
       if (decision === "approve") {
-        toast.success("Estimasi disetujui — peluang otomatis pindah ke Negotiation");
+        // Ronde 49 — approval memicu konversi otomatis estimasi → penawaran (server)
+        toast.success(
+          res.autoQuotation
+            ? `Estimasi disetujui — penawaran ${res.autoQuotation.number} dibuat otomatis (total = grand total estimasi)`
+            : "Estimasi disetujui — peluang otomatis pindah ke Negotiation",
+        );
       } else {
         toast.success("Estimasi ditolak — tim dapat merevisi lalu mengajukan ulang");
       }
@@ -1002,37 +1288,6 @@ function EstimationTab({
           ? { cls: "border-rose-200 bg-rose-50 text-rose-800", Icon: CircleAlert, text: "Ditolak — silakan revisi & ajukan ulang", sub: undefined }
           : null;
 
-  // Ronde 40-E — grid 9 kategori (diekstrak agar bisa dipakai di dalam Collapsible)
-  const categoryInputs = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {COST_CATEGORIES.map((c) => (
-        <div key={c.key} className="space-y-1">
-          <label htmlFor={`est-cost-${c.key}`} className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
-            <c.Icon className="size-3.5 text-zinc-400" aria-hidden="true" />
-            {c.label}
-          </label>
-          <div className="relative">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-              {currency}
-            </span>
-            <Input
-              id={`est-cost-${c.key}`}
-              type="number"
-              min={0}
-              inputMode="numeric"
-              className="pl-10"
-              value={form[c.key]}
-              onChange={(e) => setField(c.key, e.target.value)}
-              disabled={disabled}
-              placeholder="0"
-              aria-label={`${c.label} (${currency})`}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <div className="space-y-4">
       {banner ? (
@@ -1073,139 +1328,214 @@ function EstimationTab({
         </div>
       ) : null}
 
-      {/* Cost breakdown */}
+      {/* Ronde 49 — RAB: kategori → item + mata uang & konversi IDR live */}
       <div className="rounded-xl border bg-white p-4 shadow-sm">
-        <p className="mb-3 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Cost Breakdown</p>
-
-        {/* Ronde 40-E — rincian biaya per item */}
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-zinc-700">
-              Rincian Biaya per Item{" "}
-              <span className="font-normal text-zinc-400">(opsional tapi disarankan)</span>
-            </p>
-            <Button type="button" size="sm" variant="outline" onClick={addCostItem} disabled={disabled}>
-              <Plus className="size-3.5" aria-hidden="true" />
-              Tambah Item
-            </Button>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Rincian Anggaran (RAB)</p>
+            <p className="text-xs text-zinc-500">Kategori berisi item — total biaya = jumlah total kategori.</p>
           </div>
-
-          {costItems.length > 0 ? (
-            <div className="space-y-2">
-              <div className="hidden gap-2 px-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400 sm:grid sm:grid-cols-[minmax(0,1fr)_64px_64px_130px_110px_36px]">
-                <span>Nama Item</span>
-                <span>Qty</span>
-                <span>Hari</span>
-                <span>Harga Satuan</span>
-                <span className="text-right">Subtotal</span>
-                <span />
-              </div>
-              {costItems.map((row, idx) => {
-                const subtotal = Math.round((toNum(row.qty) || 0) * (toNum(row.unitPrice) || 0));
-                return (
-                  <div
-                    key={idx}
-                    className="grid grid-cols-2 gap-2 rounded-lg border bg-white p-2 sm:grid-cols-[minmax(0,1fr)_64px_64px_130px_110px_36px] sm:items-center sm:gap-2 sm:rounded-md sm:border-0 sm:bg-transparent sm:p-0"
-                  >
-                    <div className="col-span-2 sm:col-span-1">
-                      <Input
-                        value={row.name}
-                        onChange={(e) => updateCostItem(idx, { name: e.target.value })}
-                        placeholder={`Nama item ${idx + 1}, mis. Sewa kamera`}
-                        aria-label={`Nama item biaya ${idx + 1}`}
-                        disabled={disabled}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      step="1"
-                      value={row.qty}
-                      onChange={(e) => updateCostItem(idx, { qty: e.target.value })}
-                      placeholder="1"
-                      aria-label={`Jumlah (qty) item ${idx + 1}`}
-                      disabled={disabled}
-                      className="h-8 text-sm"
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      step="1"
-                      value={row.days}
-                      onChange={(e) => updateCostItem(idx, { days: e.target.value })}
-                      placeholder="—"
-                      aria-label={`Jumlah hari item ${idx + 1} (opsional)`}
-                      disabled={disabled}
-                      className="h-8 text-sm"
-                    />
-                    <div className="relative">
-                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-                        {currency}
-                      </span>
-                      <Input
-                        type="number"
-                        min={0}
-                        inputMode="numeric"
-                        value={row.unitPrice}
-                        onChange={(e) => updateCostItem(idx, { unitPrice: e.target.value })}
-                        placeholder="0"
-                        aria-label={`Harga satuan item ${idx + 1} (${currency})`}
-                        disabled={disabled}
-                        className="h-8 pl-9 text-sm"
-                      />
-                    </div>
-                    <span className="self-center text-right text-xs tabular-nums text-zinc-600 sm:text-sm" aria-label={`Subtotal item ${idx + 1}`}>
-                      {formatCurrency(subtotal, currency)}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 justify-self-end text-zinc-400 hover:text-rose-600"
-                      onClick={() => removeCostItem(idx)}
-                      disabled={disabled}
-                      aria-label={`Hapus item ${idx + 1}`}
-                    >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                    </Button>
-                  </div>
-                );
-              })}
-              <div className="flex justify-between border-t border-dashed border-zinc-200 pt-1.5 text-sm">
-                <span className="text-zinc-500">Σ Subtotal Item</span>
-                <span className="font-semibold tabular-nums text-zinc-800">
-                  {formatCurrencyFull(itemsTotal, currency)}
-                </span>
-              </div>
-              {itemsTotal > 0 ? (
-                <p className="text-[11px] text-zinc-400">
-                  Total biaya dihitung dari item rincian — biaya per kategori di bawah otomatis diabaikan.
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <p className="rounded-lg border border-dashed p-3 text-xs text-zinc-400">
-              Belum ada item. Tambahkan rincian biaya (mis. Sewa kamera · 2 hari) agar total biaya dihitung per item.
-            </p>
-          )}
+          <div className="flex items-center gap-2">
+            <label htmlFor="est-currency" className="text-xs font-medium text-zinc-600">
+              Mata Uang
+            </label>
+            <Select value={cur} onValueChange={(v) => setCurrencyState(v)} disabled={disabled}>
+              <SelectTrigger id="est-currency" size="sm" className="w-28 text-sm" aria-label="Pilih mata uang estimasi">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RAB_CURRENCY_OPTIONS.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        {/* Ronde 40-E — kategori lipat bila total dihitung dari item */}
-        {itemsTotal > 0 ? (
-          <Collapsible className="mt-4 border-t pt-3">
-            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20">
-              <span className="text-xs font-semibold text-zinc-600">
-                Biaya per kategori{" "}
-                <span className="font-normal text-zinc-400">(otomatis diabaikan bila ada item)</span>
-              </span>
-              <ChevronDown className="size-4 shrink-0 text-zinc-400 transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3">{categoryInputs}</CollapsibleContent>
-          </Collapsible>
-        ) : (
-          <div className="mt-4 border-t pt-3">{categoryInputs}</div>
-        )}
+        {cur !== "IDR" ? (
+          <p className="mb-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] text-zinc-500" role="note">
+            {fx.rate
+              ? `Kurs 1 ${cur} = ${formatCurrencyFull(Math.round(fx.rate), "IDR")} · sumber ${fx.source ?? "—"} — keterangan konversi bersifat indikasi; harga penawaran tetap dalam ${cur}.`
+              : `Mengambil kurs ${cur} → IDR dari API gratis…`}
+          </p>
+        ) : null}
+
+        {categories.length === 0 ? (
+          <p className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+            Belum ada kategori. Klik <strong>Tambah Kategori</strong> lalu isi item di dalamnya (mis. kategori
+            &ldquo;Peralatan&rdquo; berisi item &ldquo;Sewa kamera&rdquo; · 2 hari).
+          </p>
+        ) : null}
+
+        <div className="space-y-3">
+          {categories.map((cat, ci) => {
+            const catTotal = cat.items
+              .filter((r) => r.name.trim() !== "")
+              .reduce((s, r) => s + Math.round((toNum(r.qty) || 0) * (toNum(r.price) || 0)), 0);
+            const catNote = toIdrNote(catTotal, fx);
+            return (
+              <div key={ci} className="rounded-lg border bg-zinc-50/40 p-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-semibold text-white"
+                    aria-hidden="true"
+                  >
+                    {ci + 1}
+                  </span>
+                  <SuggestInput
+                    value={cat.name}
+                    onChange={(v) => updateCategory(ci, { name: v })}
+                    suggestions={suggestions.categories}
+                    placeholder={`Kategori ${ci + 1}, mis. Peralatan`}
+                    ariaLabel={`Nama kategori ${ci + 1}`}
+                    disabled={disabled}
+                    className="h-8 text-sm font-medium"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0 text-zinc-400 hover:text-rose-600"
+                    onClick={() => removeCategory(ci)}
+                    disabled={disabled}
+                    aria-label={`Hapus kategori ${ci + 1}`}
+                  >
+                    <Trash2 className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
+
+                {cat.items.length > 0 ? (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="hidden gap-2 px-1 text-[10px] font-medium uppercase tracking-wide text-zinc-400 sm:grid sm:grid-cols-[minmax(0,1fr)_56px_76px_120px_110px_32px]">
+                      <span>Nama Item</span>
+                      <span>Qty</span>
+                      <span>Satuan</span>
+                      <span>Harga</span>
+                      <span className="text-right">Total</span>
+                      <span />
+                    </div>
+                    {cat.items.map((it, ii) => {
+                      const lineTotal = Math.round((toNum(it.qty) || 0) * (toNum(it.price) || 0));
+                      const lineNote = toIdrNote(lineTotal, fx);
+                      return (
+                        <div
+                          key={ii}
+                          className="grid grid-cols-2 gap-1.5 rounded-md border bg-white p-2 sm:grid-cols-[minmax(0,1fr)_56px_76px_120px_110px_32px] sm:items-center sm:gap-2 sm:rounded-md sm:border-0 sm:bg-transparent sm:p-0"
+                        >
+                          <div className="col-span-2 sm:col-span-1">
+                            <SuggestInput
+                              value={it.name}
+                              onChange={(v) => updateItem(ci, ii, { name: v })}
+                              suggestions={suggestions.items}
+                              placeholder={`Item ${ii + 1}, mis. Sewa kamera`}
+                              ariaLabel={`Nama item ${ii + 1} pada kategori ${ci + 1}`}
+                              disabled={disabled}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <Input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={it.qty}
+                            onChange={(e) => updateItem(ci, ii, { qty: e.target.value })}
+                            placeholder="1"
+                            aria-label={`Qty item ${ii + 1} pada kategori ${ci + 1}`}
+                            disabled={disabled}
+                            className="h-8 text-sm"
+                          />
+                          <SuggestInput
+                            value={it.unit}
+                            onChange={(v) => updateItem(ci, ii, { unit: v })}
+                            suggestions={suggestions.units}
+                            placeholder="unit"
+                            ariaLabel={`Satuan item ${ii + 1} pada kategori ${ci + 1}`}
+                            disabled={disabled}
+                            className="h-8 text-sm"
+                          />
+                          <div className="relative">
+                            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-400" aria-hidden="true">
+                              {cur}
+                            </span>
+                            <Input
+                              type="number"
+                              min={0}
+                              inputMode="numeric"
+                              value={it.price}
+                              onChange={(e) => updateItem(ci, ii, { price: e.target.value })}
+                              placeholder="0"
+                              aria-label={`Harga satuan item ${ii + 1} pada kategori ${ci + 1} (${cur})`}
+                              disabled={disabled}
+                              className="h-8 pl-9 text-sm"
+                            />
+                          </div>
+                          <div className="text-right">
+                            <span
+                              className="block text-xs tabular-nums text-zinc-700 sm:text-sm"
+                              aria-label={`Total item ${ii + 1} pada kategori ${ci + 1}`}
+                            >
+                              {formatCurrency(lineTotal, cur)}
+                            </span>
+                            {lineNote ? <span className="block text-[10px] text-zinc-400">{lineNote}</span> : null}
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 justify-self-end text-zinc-300 hover:text-rose-600"
+                            onClick={() => removeItem(ci, ii)}
+                            disabled={disabled}
+                            aria-label={`Hapus item ${ii + 1} pada kategori ${ci + 1}`}
+                          >
+                            <Trash2 className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-2 rounded-md border border-dashed px-3 py-2 text-[11px] text-zinc-400">
+                    Belum ada item pada kategori ini.
+                  </p>
+                )}
+
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-dashed border-zinc-200 pt-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-zinc-500 hover:text-zinc-800"
+                    onClick={() => addItem(ci)}
+                    disabled={disabled}
+                  >
+                    <Plus className="size-3.5" aria-hidden="true" />
+                    Tambah Item
+                  </Button>
+                  <div className="text-right">
+                    <p className="text-xs text-zinc-500">
+                      Total <span className="font-medium text-zinc-700">{cat.name.trim() || `Kategori ${ci + 1}`}</span>
+                    </p>
+                    <p className="text-sm font-semibold tabular-nums text-zinc-900">{formatCurrencyFull(catTotal, cur)}</p>
+                    {catNote ? <p className="text-[10px] text-zinc-400">{catNote}</p> : null}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={addCategory} disabled={disabled}>
+            <Plus className="size-3.5" aria-hidden="true" />
+            Tambah Kategori
+          </Button>
+          <div className="text-right">
+            <p className="text-xs text-zinc-500">Σ Total Biaya (semua kategori)</p>
+            <p className="text-base font-bold tabular-nums text-zinc-900">{formatCurrencyFull(categoriesTotal, cur)}</p>
+          </div>
+        </div>
 
         {/* Parameter */}
         <div className="mt-4 border-t pt-3">
@@ -1261,7 +1591,7 @@ function EstimationTab({
             </label>
             <div className="relative max-w-xs">
               <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-400" aria-hidden="true">
-                {currency}
+                {cur}
               </span>
               <Input
                 id="est-revenue"
@@ -1273,14 +1603,14 @@ function EstimationTab({
                 onChange={(e) => setField("revenue", e.target.value)}
                 disabled={disabled}
                 placeholder="Belum diketahui"
-                aria-label={`Harga penawaran (${currency})`}
+                aria-label={`Harga penawaran (${cur})`}
               />
             </div>
             {/* Ronde 42 — saran harga dari katalog layanan brand */}
             {suggestion ? (
               <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs">
                 <span className="text-emerald-800">
-                  Saran harga katalog <strong>{suggestion.name}</strong>: {currency}{" "}
+                  Saran harga katalog <strong>{suggestion.name}</strong>: {cur}{" "}
                   {new Intl.NumberFormat("id-ID").format(suggestion.suggestedPrice)}
                 </span>
                 <Button
@@ -1300,7 +1630,7 @@ function EstimationTab({
         </div>
       </div>
 
-      <CalcPanel calc={calc} form={form} currency={currency} taxName={taxName} />
+      <CalcPanel calc={calc} form={form} currency={cur} taxName={taxName} fx={fx} />
 
       {/* Catatan + aksi */}
       <div className="space-y-3 rounded-xl border bg-white p-4 shadow-sm">
@@ -1351,7 +1681,7 @@ function EstimationTab({
           <AlertDialogHeader>
             <AlertDialogTitle>Ajukan approval estimasi?</AlertDialogTitle>
             <AlertDialogDescription>
-              Estimasi dengan revenue {formatCurrencyFull(revenueNum, currency)} akan dikirim ke Direktur untuk
+              Estimasi dengan revenue {formatCurrencyFull(revenueNum, cur)} akan dikirim ke Direktur untuk
               diputuskan. Selama menunggu approval, field estimasi terkunci.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1596,13 +1926,27 @@ function QuotationFormDialog({
       setNotes(revNote);
       setValidUntil(defaultValidUntil());
     } else {
-      // Ronde 35/40-E — estimasi detail (approved/pending) sebagai sumber prefill item:
-      // bila estimasi punya rincian costItems → satu baris quotation per item biaya;
-      // selain itu fallback single-line senilai revenue estimasi.
+      // Ronde 49 — estimasi detail (approved/pending) sebagai sumber prefill item:
+      // RAB kategori→item → SATU baris per KATEGORI (harga kategori saja — rincian
+      // item tidak diekspos ke klien); legacy costItems per item; terakhir fallback
+      // single-line senilai revenue estimasi.
+      const estCats = parseEstimationCategories(estimation);
       const estItems = parseEstimationCostItems(estimation);
       const estRevenue = Number(estimation?.revenue ?? 0);
       setDiscountPct(String(estimation?.discountPct ?? 0));
-      if (estItems.length > 0) {
+      if (estCats.length > 0) {
+        prefilledFromEstimation.current = false;
+        prefilledFromCostItems.current = true;
+        setRows(
+          estCats.map((cat) => ({
+            description: cat.name,
+            qty: "1",
+            unitPrice: String(cat.total),
+          }))
+        );
+        setTaxPct(String(estimation?.taxName ? estimation?.taxPct ?? 0 : 0));
+        setTaxName(estimation?.taxName ?? "");
+      } else if (estItems.length > 0) {
         prefilledFromEstimation.current = false;
         prefilledFromCostItems.current = true;
         setRows(
