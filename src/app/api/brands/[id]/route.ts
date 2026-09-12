@@ -131,6 +131,69 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
 
+  // ==== Ronde 50 — identitas dokumen resmi: kode brand, NPWP, rekening, TTD, kop per jenis surat ====
+  if (body.shortCode !== undefined) {
+    const val = String(body.shortCode).trim().toUpperCase();
+    if (val && !/^[A-Z0-9-]{1,10}$/.test(val)) {
+      return fail("Kode brand hanya boleh huruf/angka/dash, maks 10 karakter (mis. UDP)");
+    }
+    data.shortCode = val || null;
+  }
+  if (body.npwp !== undefined) data.npwp = String(body.npwp).trim() || null;
+  if (body.signerName !== undefined) data.signerName = String(body.signerName).trim() || null;
+  if (body.signerClosing !== undefined) data.signerClosing = String(body.signerClosing).trim() || null;
+  if (body.bankAccounts !== undefined) {
+    // JSON array [{bank, number, holder, branch}] — string bebas, number wajib ada.
+    if (body.bankAccounts === null || body.bankAccounts === "") {
+      data.bankAccounts = "[]";
+    } else {
+      try {
+        const parsed = typeof body.bankAccounts === "string" ? JSON.parse(body.bankAccounts) : body.bankAccounts;
+        if (!Array.isArray(parsed) || parsed.length > 6) return fail("Rekening maksimal 6 entri");
+        const accounts = parsed
+          .map((acc: Record<string, unknown>) => ({
+            bank: String(acc.bank ?? "").trim().slice(0, 60),
+            number: String(acc.number ?? "").trim().slice(0, 40),
+            holder: String(acc.holder ?? "").trim().slice(0, 80),
+            branch: String(acc.branch ?? "").trim().slice(0, 80),
+          }))
+          .filter((acc: { bank: string; number: string }) => acc.bank || acc.number);
+        data.bankAccounts = JSON.stringify(accounts);
+      } catch {
+        return fail("Data rekening bukan JSON yang valid");
+      }
+    }
+  }
+  if (body.docAssets !== undefined) {
+    // JSON { quotation:{header,footer}, invoice:{header,footer} } — kop per jenis surat.
+    if (body.docAssets === null || body.docAssets === "") {
+      data.docAssets = "{}";
+    } else {
+      try {
+        const parsed = typeof body.docAssets === "string" ? JSON.parse(body.docAssets) : body.docAssets;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return fail("Aset dokumen harus berupa objek JSON");
+        }
+        const clean: Record<string, { header: string | null; footer: string | null }> = {};
+        for (const key of ["quotation", "invoice"] as const) {
+          const entry = (parsed as Record<string, Record<string, unknown>>)[key];
+          if (!entry) continue;
+          const pick = (v: unknown): string | null => {
+            const s = typeof v === "string" ? v.trim() : "";
+            if (!s) return null;
+            if (!s.startsWith("data:image/") && !s.startsWith("/")) return null;
+            if (s.startsWith("data:image/") && s.length > 1_600_000) return null; // diam-diam buang gambar oversize
+            return s;
+          };
+          clean[key] = { header: pick(entry.header), footer: pick(entry.footer) };
+        }
+        data.docAssets = JSON.stringify(clean);
+      } catch {
+        return fail("Aset dokumen bukan JSON yang valid");
+      }
+    }
+  }
+
   if (Object.keys(data).length === 0) {
     return fail("Tidak ada field yang diubah");
   }

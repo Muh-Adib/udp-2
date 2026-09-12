@@ -4,6 +4,91 @@ import { ok, readBody, logAudit, numOrNull, pageLimit, fail, dateOrNull, isUniqu
 import { resolveActor, assertRole } from "@/lib/crm/auth";
 import { assertModuleLevel } from "@/lib/crm/permissions";
 import { sendPushToRoles } from "@/lib/crm/push";
+import { nextDocumentNumber, revisionDocumentNumber } from "@/lib/crm/numbering";
+
+// ============ Ronde 50 — helper faktur gaya Unicam (item baris, DP, pajak potong) ============
+
+export interface InvoiceItemRow {
+  description: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  total: number;
+}
+
+/** Parse item faktur dari body: [{description, qty, unit, unitPrice}] → total per baris. */
+export function parseInvoiceItems(raw: unknown): InvoiceItemRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((it) => it && String((it as InvoiceItemRow).description ?? "").trim())
+    .map((it) => {
+      const qty = Math.max(0, Number((it as InvoiceItemRow).qty ?? 1) || 1);
+      const unitPrice = Math.max(0, Number((it as InvoiceItemRow).unitPrice ?? 0) || 0);
+      return {
+        description: String((it as InvoiceItemRow).description).trim().slice(0, 300),
+        qty,
+        unit: String((it as InvoiceItemRow).unit ?? "").trim().slice(0, 30),
+        unitPrice,
+        total: Math.round(qty * unitPrice),
+      };
+    });
+}
+
+/**
+ * Kalkulasi total faktur Ronde 50:
+ * - downPaymentPct > 0 → dasar tagihan = amount × DP% (invoice DP/termin dari kontrak),
+ *   pajak dihitung dari dasar tagihan (contoh Unicam: PPh 23 2% × DP 15.750.000 = 315.000).
+ * - taxMode "withhold" → pajak MENGURANGI (PPh 23/21 dipotong penyelenggara);
+ *   taxMode "add" (default) → pajak menambah (PPN).
+ * - total (payable) = dasar tagihan ± pajak.
+ */
+function computeInvoiceTotals(input: {
+  amount: number;
+  taxName: string | null;
+  taxRate: number;
+  taxMode: string;
+  downPaymentPct: number;
+}) {
+  const dpPct = Math.min(100, Math.max(0, input.downPaymentPct || 0));
+  const dpAmount = dpPct > 0 ? Math.round((input.amount * dpPct) / 100) : input.amount;
+  const taxAmount = input.taxName ? Math.round((dpAmount * Math.min(100, Math.max(0, input.taxRate))) / 100) : 0;
+  const total = input.taxMode === "withhold" ? dpAmount - taxAmount : dpAmount + taxAmount;
+  return { dpAmount, taxAmount, total };
+}
+
+function shortText(v: unknown, max: number): string | null {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+/** Nomor invoice via rule brand (fallback legacy) — retry 3x utk tabrakan paralel. */
+async function nextInvoiceNumber(brandId: string): Promise<{ number: string; baseNumber: string; seq: number } | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await nextDocumentNumber(brandId, "invoice");
+    } catch {
+      // coba lagi
+    }
+  }
+  return null;
+}
+
+/** Field faktur gaya Unicam dari body (null = tidak dikirim → tidak diubah). */
+function unicamFields(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const items = parseInvoiceItems(body.items);
+  if (items.length > 0) out.items = JSON.stringify(items);
+  if ("downPaymentPct" in body) {
+    const n = Number(body.downPaymentPct);
+    out.downPaymentPct = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+  }
+  if ("taxMode" in body) out.taxMode = body.taxMode === "withhold" ? "withhold" : "add";
+  if ("purchaseNumber" in body) out.purchaseNumber = shortText(body.purchaseNumber, 80);
+  if ("projectName" in body) out.projectName = shortText(body.projectName, 160);
+  if ("attn" in body) out.attn = shortText(body.attn, 120);
+  if ("clientAddress" in body) out.clientAddress = shortText(body.clientAddress, 400);
+  return out;
+}
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -180,7 +265,13 @@ export async function POST(req: NextRequest) {
     const taxNameRaw = body.taxName === undefined ? invoice.taxName : body.taxName;
     const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
     const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? invoice.taxRate)) : 0;
-    const taxAmount = Math.round((amount * taxRate) / 100);
+    // Ronde 50 — DP & mode pajak bisa diedit saat draft; total dihitung ulang konsisten.
+    const taxMode = body.taxMode === "withhold" ? "withhold" : body.taxMode === "add" ? "add" : invoice.taxMode;
+    const downPaymentPct = body.downPaymentPct !== undefined
+      ? Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0))
+      : invoice.downPaymentPct;
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const unicam = unicamFields(body);
     const updated = await db.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -190,8 +281,11 @@ export async function POST(req: NextRequest) {
         amount,
         taxName,
         taxRate,
-        taxAmount,
-        total: amount + taxAmount,
+        taxAmount: totals.taxAmount,
+        total: totals.total,
+        taxMode,
+        downPaymentPct,
+        ...unicam,
         dueDate: body.dueDate !== undefined ? dateOrNull(body.dueDate) : invoice.dueDate,
         notes: body.notes !== undefined
           ? (String(body.notes ?? "").trim() || null)
@@ -261,32 +355,37 @@ export async function POST(req: NextRequest) {
     const taxNameRaw = body.taxName;
     const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
     const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? 11)) : 0;
-    const taxAmount = Math.round((amount * taxRate) / 100);
+    // Ronde 50 — mode pajak (add=PPN ditambah, withhold=PPh dipotong) + DP + item baris.
+    const taxMode = body.taxMode === "withhold" ? "withhold" : "add";
+    const downPaymentPct = Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0));
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const items = parseInvoiceItems(body.items);
     const dueDate = dateOrNull(body.dueDate) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
-    const year = new Date().getFullYear();
-    let number = "";
-    for (let attempt = 0; attempt < 5 && !number; attempt++) {
-      const invCount = await db.invoice.count();
-      const candidate = `${brand.invoicePrefix}-${year}-INV-${String(invCount + attempt + 1).padStart(3, "0")}`;
-      const exists = await db.invoice.findUnique({ where: { number: candidate } });
-      if (!exists) number = candidate;
-    }
-    if (!number) return ok({ error: "Gagal menyusun nomor invoice unik — coba sekali lagi" }, 409);
+    // Ronde 50 — penomoran via rule brand (builder) dgn fallback pola legacy.
+    const numbered = await nextInvoiceNumber(brandId);
+    if (!numbered) return ok({ error: "Gagal menyusun nomor invoice unik — coba sekali lagi" }, 409);
+    const { number, baseNumber, seq: seqNo } = numbered;
 
     let invoice;
     try {
       invoice = await db.invoice.create({
         data: {
           number,
+          baseNumber,
+          seqNo,
           brandId,
           companyId,
           description,
           amount,
           taxName,
           taxRate,
-          taxAmount,
-          total: amount + taxAmount,
+          taxAmount: totals.taxAmount,
+          total: totals.total,
+          taxMode,
+          downPaymentPct,
+          items: JSON.stringify(items),
+          ...unicamFields(body),
           // Sinkron brand: mata uang mengikuti konfigurasi brand (bukan hardcode IDR)
           currency: brand.primaryCurrency || "IDR",
           status: "draft",
@@ -307,7 +406,7 @@ export async function POST(req: NextRequest) {
     // Ronde 48 — finance adalah pemilik proses tagihan → wajib di-notify.
     void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${invoice.number} diterbitkan`,
-      body: `${actor.name} menerbitkan tagihan manual ${description.slice(0, 80)} · ${amount + taxAmount}`.slice(0, 140),
+      body: `${actor.name} menerbitkan tagihan manual ${description.slice(0, 80)} · ${invoice.total}`.slice(0, 140),
       url: "/?modul=finance",
       tag: `invoice:${invoice.id}`,
       type: "activity",
@@ -335,23 +434,19 @@ export async function POST(req: NextRequest) {
     const taxAmount = Math.round((amount * taxRate) / 100);
     const dueDate = dateOrNull(body.dueDate) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
-    // Ronde 36 (audit): nomor invoice dicek keunikan (loop 5x, pola yg sama dgn
-    // change-request & projects) — dua klik bersamaan tidak lagi 500 P2002.
-    const year = new Date().getFullYear();
-    let number = "";
-    for (let attempt = 0; attempt < 5 && !number; attempt++) {
-      const invCount = await db.invoice.count();
-      const candidate = `${project.brand.invoicePrefix}-${year}-INV-${String(invCount + attempt + 1).padStart(3, "0")}`;
-      const exists = await db.invoice.findUnique({ where: { number: candidate } });
-      if (!exists) number = candidate;
-    }
-    if (!number) return ok({ error: "Gagal menyusun nomor invoice unik — coba sekali lagi" }, 409);
+    // Ronde 50 — penomoran via rule brand (builder) dgn fallback pola legacy;
+    // dua klik bersamaan tidak lagi menghasilkan nomor dobel (retry + P2002 → 409).
+    const numbered = await nextInvoiceNumber(project.brandId);
+    if (!numbered) return ok({ error: "Gagal menyusun nomor invoice unik — coba sekali lagi" }, 409);
+    const { number, baseNumber, seq: seqNo } = numbered;
 
     let invoice;
     try {
       invoice = await db.invoice.create({
         data: {
           number,
+          baseNumber,
+          seqNo,
           brandId: project.brandId,
           companyId: project.companyId,
           projectId: project.id,
@@ -389,5 +484,103 @@ export async function POST(req: NextRequest) {
     }, actor.name);
     return ok({ invoice }, 201);
   }
+  // Ronde 50 — REVISI FAKTUR: invoice baru menyalin isi invoice sumber dengan nomor
+  // berimbuhan: 004/INV-UDP/I/26 → 004-1/INV-UDP/I/26 → 004-2/...
+  // Semua field editable boleh dikirim (deskripsi/amount/item/DP/pajak/PO/due date);
+  // field yang tidak dikirim disalin dari sumber. Status invoice sumber tidak berubah.
+  if (body.action === "revise_invoice") {
+    const sourceId = String(body.invoiceId ?? "");
+    const source = await db.invoice.findUnique({ where: { id: sourceId }, include: { payments: true } });
+    if (!source) return ok({ error: "Invoice sumber revisi tidak ditemukan" }, 404);
+    if (source.status === "cancelled") {
+      return ok({ error: "Invoice yang dibatalkan tidak bisa direvisi — terbitkan invoice baru saja" }, 400);
+    }
+    const amount = numOrNull(body.amount) ?? source.amount;
+    if (amount <= 0) return ok({ error: "Nominal invoice harus lebih besar dari 0" }, 400);
+    const taxNameRaw = body.taxName === undefined ? source.taxName : body.taxName;
+    const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
+    const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? source.taxRate)) : 0;
+    const taxMode = body.taxMode === "add" ? "add" : body.taxMode === "withhold" ? "withhold" : source.taxMode;
+    const downPaymentPct = body.downPaymentPct !== undefined
+      ? Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0))
+      : source.downPaymentPct;
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const description = body.description !== undefined
+      ? (String(body.description ?? "").trim() || source.description)
+      : source.description;
+    const dueDate = body.dueDate !== undefined
+      ? (dateOrNull(body.dueDate) ?? source.dueDate)
+      : source.dueDate;
+    const revisionReason = shortText(body.revisionReason, 400);
+
+    const rev = await revisionDocumentNumber(
+      source.brandId,
+      "invoice",
+      source.number,
+      source.revisionNo,
+      source.seqNo,
+      source.issueDate ?? source.createdAt,
+    );
+    let invoice;
+    try {
+      invoice = await db.invoice.create({
+        data: {
+          number: rev.number,
+          baseNumber: rev.baseNumber,
+          seqNo: rev.seq,
+          brandId: source.brandId,
+          companyId: source.companyId,
+          projectId: source.projectId,
+          opportunityId: source.opportunityId,
+          description,
+          amount,
+          taxName,
+          taxRate,
+          taxAmount: totals.taxAmount,
+          total: totals.total,
+          taxMode,
+          downPaymentPct,
+          ...unicamFields({ ...bodyToSourceItems(source), ...body }),
+          currency: source.currency,
+          status: "draft",
+          dueDate,
+          notes: body.notes !== undefined ? (String(body.notes ?? "").trim() || null) : source.notes,
+          revisionOfId: source.id,
+          revisionNo: source.revisionNo + 1,
+          revisionReason,
+        },
+        include: { payments: true, brand: true, company: true, project: true },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return ok({ error: `Nomor revisi ${rev.number} baru saja dipakai proses lain — muat ulang lalu coba lagi` }, 409);
+      }
+      throw err;
+    }
+    await logAudit({
+      actorName: actor.name, actorRole: actor.role,
+      action: "create", entity: "invoice", entityId: invoice.id, entityLabel: invoice.number,
+      metadata: `Revisi ke-${invoice.revisionNo} dari ${source.number}${revisionReason ? ` — ${revisionReason}` : ""}`,
+      req,
+    });
+    void sendPushToRoles(["director", "super_admin", "finance"], {
+      title: `Invoice ${invoice.number} diterbitkan (revisi)`,
+      body: `${actor.name} merevisi ${source.number} → ${invoice.number} · total ${invoice.total}`.slice(0, 140),
+      url: "/?modul=finance",
+      tag: `invoice:${invoice.id}`,
+      type: "invoice",
+    }, actor.name);
+    return ok({ invoice }, 201);
+  }
   return ok({ error: "Unknown action" }, 400);
+}
+
+/** Helper: item sumber utk revisi (body tak mengirim items → salin dari sumber). */
+function bodyToSourceItems(source: { items: string }): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(source.items);
+    return { items: Array.isArray(parsed) ? parsed : [] };
+  } catch {
+    return { items: [] };
+  }
 }

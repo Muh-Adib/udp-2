@@ -39,6 +39,14 @@ model Brand {
   letterheadFooter String? // gambar kaki surat bawah (data URL)
   letterTemplate   String? // JSON style template surat {fontFamily, accentColor, headerStyle, showLogo, footerNote}
 
+  // ==== Ronde 50 — dokumen resmi: kode brand, faktur, penanda tangan, aset per jenis surat ====
+  shortCode     String? // kode singkat utk penomoran (mis. "UDP" → 002/QT-UDP/I/26)
+  npwp          String? // NPWP perusahaan (tampil di faktur)
+  bankAccounts  String  @default("[]") // JSON [{bank, number, holder, branch}] — blok "Payment to" faktur
+  signerName    String? // nama penanda tangan dokumen (mis. "Andri Saputro")
+  signerClosing String? // salam penutup dokumen (mis. "Best regards and enjoy the process,")
+  docAssets     String  @default("{}") // JSON { quotation:{header,footer}, invoice:{header,footer} } — kop per jenis surat
+
   opportunities     Opportunity[]
   projects          Project[]
   invoices          Invoice[]
@@ -48,6 +56,29 @@ model Brand {
   channels          ChannelConfig[]
   serviceCategories ServiceCategory[]
   services          Service[]
+  numberingRules    NumberingRule[]
+}
+
+/**
+ * Ronde 50 — SISTEM PENOMORAN DOKUMEN per brand per jenis surat.
+ * Template dgn token: {SEQ:n} {DOC} {BRAND} {ROMAN} {roman} {MM} {YY} {YYYY}
+ * Contoh hasil: 002/QT-UDP/I/26 (template "{SEQ:3}/{DOC}-{BRAND}/{ROMAN}/{YY}").
+ * Revisi dokumen → sufiks pada SEQ: 012 → 012-1 → 012-2.
+ */
+model NumberingRule {
+  id          String   @id @default(cuid())
+  brandId     String
+  brand       Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  docType     String // quotation | invoice
+  template    String   @default("{SEQ:3}/{DOC}-{BRAND}/{ROMAN}/{YY}")
+  docCode     String   @default("QT") // token {DOC} — mis. QT / INV
+  resetPeriod String   @default("yearly") // never | yearly | monthly
+  resetKey    String   @default("") // "2026" / "2026-01" — penanda periode counter terakhir
+  seq         Int      @default(0) // counter terakhir terpakai (nomor berikutnya = seq+1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([brandId, docType])
 }
 
 model User {
@@ -267,6 +298,21 @@ model Invoice {
   total           Float          @default(0)
   currency        String         @default("IDR")
   status          String         @default("draft") // draft, sent, partial, paid, overdue, cancelled
+  // ==== Ronde 50 — format faktur (gaya Unicam): item baris, DP, pajak potong, revisi ====
+  items           String         @default("[]") // JSON [{description, qty, unit, unitPrice, total}]
+  downPaymentPct  Float          @default(0) // >0 → baris "Down Payment (N%)", total dibayar = DP − pajak potong
+  taxMode         String         @default("add") // add (PPN ditambahkan) | withhold (PPh dipotong)
+  purchaseNumber  String? // nomor PO klien ("Purchase Number")
+  projectName     String? // label project di faktur (mis. "AI Video")
+  attn            String? // personel klien di faktur
+  clientAddress   String? // alamat klien di faktur (override alamat perusahaan)
+  baseNumber      String? // nomor dasar tanpa sufiks revisi (mis. 004/INV-UDP/I/26)
+  seqNo           Int     @default(0) // nilai SEQ terpakai saat nomor dibuat
+  revisionOfId    String?
+  revisionOf      Invoice?       @relation("InvoiceRevision", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions       Invoice[]      @relation("InvoiceRevision")
+  revisionNo      Int            @default(0) // 0 = bukan revisi; N = revisi ke-N
+  revisionReason  String?
   issueDate       DateTime       @default(now())
   dueDate         DateTime?
   notes           String?
@@ -279,6 +325,7 @@ model Invoice {
   @@index([projectId])
   @@index([dueDate])
   @@index([status])
+  @@index([revisionOfId])
 }
 
 model Payment {
@@ -354,7 +401,8 @@ model ProjectDeliverable {
 model Milestone {
   id          String    @id @default(cuid())
   projectId   String
-  project     Project   @relation(fields: [projectId], references: [id])
+  // Ronde 50 — cascade: hapus project ikut menghapus milestone (dulu bisa yatim → /api/dashboard 500).
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name        String
   order       Int       @default(0)
   status      String    @default("pending") // pending, in_progress, done
@@ -495,6 +543,18 @@ model Quotation {
   revisionOf     Quotation?  @relation("QuotationRevision", fields: [revisionOfId], references: [id], onDelete: SetNull)
   revisions      Quotation[] @relation("QuotationRevision")
   revisionNo     Int         @default(0) // 0 = bukan revisi; N = revisi ke-N dari quotation sumber
+  // ==== Ronde 50 — format surat penawaran (gaya Unicam) + nomor revisi 012 → 012-1 ====
+  baseNumber     String? // nomor dasar tanpa sufiks revisi (mis. 012/QT-UDP/I/26)
+  seqNo          Int     @default(0) // nilai SEQ terpakai saat nomor dibuat (utk render sufiks revisi di posisi SEQ)
+  attachment     Int     @default(1) // "Attachment: 1"
+  regarding      String? // perihal surat (mis. "Quotation of Short Film")
+  attn           String? // personel klien yang dituju (Attn.)
+  clientAddress  String? // alamat klien di surat (override alamat perusahaan)
+  letterBody     String? // isi surat custom (paragraf, newline dgn \n); null = default otomatis
+  letterClosing  String? // paragraf penutup custom; null = default otomatis dari brand
+  timeline       String? // kolom Timeline (mis. "1 Month after down payment")
+  revisionNotes  String? // kolom Revision — periode revisi hasil (mis. "Result Video: x2 per Video")
+  termOfPayment  String? // kolom Term of Payment (mis. "1. Down Payment: 50%…")
   validUntil     DateTime?
   notes          String?
   sentAt         DateTime?

@@ -26,6 +26,15 @@ export interface Brand {
   letterheadHeader?: string | null;
   letterheadFooter?: string | null;
   letterTemplate?: string | null;
+  // Ronde 50 — dokumen resmi: kode brand, faktur, penanda tangan, kop per jenis surat
+  shortCode?: string | null;
+  npwp?: string | null;
+  /** JSON [{bank, number, holder, branch}] — blok "Payment to" faktur. */
+  bankAccounts?: string | null;
+  signerName?: string | null;
+  signerClosing?: string | null;
+  /** JSON { quotation:{header,footer}, invoice:{header,footer} } — kop per jenis surat. */
+  docAssets?: string | null;
 }
 
 export interface SessionUser {
@@ -49,6 +58,8 @@ export interface CompanyRef {
   defaultCurrency: string;
   lifetimeValue?: number;
   tags?: string | null;
+  /** Ronde 50 — alamat lengkap untuk blok alamat klien di surat/faktur. */
+  address?: string | null;
 }
 
 export interface ContactRef {
@@ -367,6 +378,39 @@ export interface InvoiceDTO {
   dueDate?: string | null;
   notes?: string | null;
   payments?: PaymentDTO[];
+  // Ronde 50 — format faktur Unicam: item baris, DP, pajak potong, revisi
+  /** JSON [{description, qty, unit, unitPrice, total}] — baris rincian faktur. */
+  items?: string;
+  downPaymentPct?: number;
+  /** add (PPN ditambah) | withhold (PPh dipotong). */
+  taxMode?: string;
+  purchaseNumber?: string | null;
+  projectName?: string | null;
+  attn?: string | null;
+  clientAddress?: string | null;
+  baseNumber?: string | null;
+  revisionOfId?: string | null;
+  revisionNo?: number;
+  revisionReason?: string | null;
+}
+
+/** Ronde 50 — rule penomoran dokumen per brand per jenis (builder UI brand). */
+export interface NumberingRuleDTO {
+  id?: string;
+  docType: string;
+  template: string;
+  docCode: string;
+  resetPeriod: string; // never | yearly | monthly
+  seq: number;
+}
+
+/** Ronde 50 — baris item faktur (setelah diparse dari JSON string). */
+export interface InvoiceItemDTO {
+  description: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  total: number;
 }
 
 export interface PaymentDTO {
@@ -473,6 +517,17 @@ export interface QuotationDTO {
   /** Ronde 39 — riwayat revisi: quotation ini revisi ke-N dari quotation sumber. */
   revisionOfId?: string | null;
   revisionNo?: number;
+  // Ronde 50 — format surat penawaran (gaya Unicam)
+  baseNumber?: string | null;
+  attachment?: number;
+  regarding?: string | null;
+  attn?: string | null;
+  clientAddress?: string | null;
+  letterBody?: string | null;
+  letterClosing?: string | null;
+  timeline?: string | null;
+  revisionNotes?: string | null;
+  termOfPayment?: string | null;
   validUntil?: string | null;
   notes?: string | null;
   sentAt?: string | null;

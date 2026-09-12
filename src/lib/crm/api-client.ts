@@ -3,7 +3,7 @@
 import type {
   OpportunityDTO, InteractionDTO, TaskDTO, ContactRef, CompanyRef,
   DashboardData, MatchCandidateDTO, ProjectDTO, InvoiceDTO, AuditLogDTO, Brand,
-  InboxLeadDTO,
+  InboxLeadDTO, NumberingRuleDTO,
 } from "@/lib/crm/types";
 
 /** Satu entri hasil global search (ronde 26) — module = modul tujuan navigasi. */
@@ -334,11 +334,60 @@ export const api = {
   createProjectInvoice: (payload: { projectId: string; description: string; amount: number; taxRate?: number; dueDate?: string; milestoneName?: string; actorName?: string; actorRole?: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_invoice", ...payload }) }),
   /** Ronde 47 — terbitkan invoice manual tanpa project/quotation (sinkron brand: prefix nomor & mata uang). */
-  createStandaloneInvoice: (payload: { brandId: string; companyId: string; description?: string; amount: number; taxName?: string | null; taxRate?: number; dueDate?: string; notes?: string }) =>
+  createStandaloneInvoice: (payload: {
+    brandId: string;
+    companyId: string;
+    description?: string;
+    amount: number;
+    taxName?: string | null;
+    taxRate?: number;
+    /** Ronde 50 — add (PPN ditambah) | withhold (PPh dipotong). */
+    taxMode?: "add" | "withhold";
+    /** Ronde 50 — >0 → baris "Down Payment (N%)" di faktur. */
+    downPaymentPct?: number;
+    /** Ronde 50 — baris item faktur [{description, qty, unit, unitPrice}]. */
+    items?: Array<{ description: string; qty: number; unit?: string; unitPrice: number }>;
+    purchaseNumber?: string | null;
+    projectName?: string | null;
+    attn?: string | null;
+    clientAddress?: string | null;
+    dueDate?: string;
+    notes?: string;
+  }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_standalone_invoice", ...payload }) }),
   /** Ronde 47 — koreksi invoice DRAFT: deskripsi, nominal, pajak parametrik, jatuh tempo, catatan. */
   updateInvoice: (payload: { invoiceId: string; description?: string; amount?: number; taxName?: string | null; taxRate?: number; dueDate?: string | null; notes?: string | null }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "update_invoice", ...payload }) }),
+  /** Ronde 50 — REVISI faktur: invoice baru bernomor imbuhan (004 → 004-1), salin isi + edit field. */
+  reviseInvoice: (payload: {
+    invoiceId: string;
+    description?: string;
+    amount?: number;
+    taxName?: string | null;
+    taxRate?: number;
+    taxMode?: "add" | "withhold";
+    downPaymentPct?: number;
+    items?: Array<{ description: string; qty: number; unit?: string; unitPrice: number }>;
+    purchaseNumber?: string | null;
+    projectName?: string | null;
+    attn?: string | null;
+    clientAddress?: string | null;
+    dueDate?: string | null;
+    notes?: string | null;
+    revisionReason?: string;
+  }) =>
+    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "revise_invoice", ...payload }) }),
+  /** Ronde 50 — builder penomoran surat: baca rule per brand. */
+  numbering: (brandId: string) =>
+    request<{ rules: NumberingRuleDTO[]; brand: { id: string; name: string; shortCode: string | null; quotePrefix: string; invoicePrefix: string } }>(
+      `/api/brands/${brandId}/numbering`,
+    ),
+  /** Ronde 50 — simpan rule penomoran per brand (upsert per docType). */
+  saveNumbering: (brandId: string, rules: NumberingRuleDTO[]) =>
+    request<{
+      rules: NumberingRuleDTO[];
+      preview: Array<{ docType: string; nextNumber: string; revisionExample: string }>;
+    }>(`/api/brands/${brandId}/numbering`, { method: "PUT", body: JSON.stringify({ rules }) }),
   /** Ronde 47 — koreksi pembayaran: hapus entri payment yang salah (status dihitung ulang server). */
   deletePayment: (payload: { paymentId: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "delete_payment", ...payload }) }),

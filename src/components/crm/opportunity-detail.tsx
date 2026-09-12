@@ -1844,6 +1844,8 @@ function QuotationFormDialog({
   actorRole,
   estimation,
   serviceName,
+  attnPrefill,
+  addressPrefill,
   onSaved,
 }: {
   open: boolean;
@@ -1858,6 +1860,10 @@ function QuotationFormDialog({
   /** Ronde 35 — estimasi detail sebagai sumber prefill item quotation. */
   estimation?: EstimationDTO | null;
   serviceName?: string | null;
+  /** Ronde 50 — prefill surat: nama kontak (Attn) dari detail opportunity. */
+  attnPrefill?: string | null;
+  /** Ronde 50 — prefill surat: alamat perusahaan (Address) dari detail opportunity. */
+  addressPrefill?: string | null;
   onSaved: () => void;
 }) {
   const currency = editing?.currency ?? defaultCurrency;
@@ -1870,6 +1876,18 @@ function QuotationFormDialog({
   const [notes, setNotes] = useState("");
   const [validUntil, setValidUntil] = useState(defaultValidUntil());
   const [saving, setSaving] = useState(false);
+  // Ronde 50 — field surat penawaran (gaya Unicam): kop, tujuan & blok bawah surat.
+  const [attachment, setAttachment] = useState("1");
+  const [regarding, setRegarding] = useState("");
+  const [attn, setAttn] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
+  const [timeline, setTimeline] = useState("");
+  const [revisionNotes, setRevisionNotes] = useState("");
+  const [termOfPayment, setTermOfPayment] = useState("");
+  const [letterBody, setLetterBody] = useState("");
+  const [letterClosing, setLetterClosing] = useState("");
+  /** Ronde 50 — isi & penutup surat custom opsional: bagian dilipat secara default. */
+  const [letterCustomOpen, setLetterCustomOpen] = useState(false);
   /** Ronde 35 — true bila item terisi otomatis dari estimasi detail (single-line revenue). */
   const prefilledFromEstimation = useRef(false);
   /** Ronde 40-E — true bila item terisi dari rincian costItems estimasi. */
@@ -1909,6 +1927,18 @@ function QuotationFormDialog({
       setTaxName(editing.taxName ?? "none");
       setNotes(editing.notes ?? "");
       setValidUntil(editing.validUntil ? editing.validUntil.slice(0, 10) : defaultValidUntil());
+      // Ronde 50 — field surat tersimpan ikut dimuat saat edit draft
+      setAttachment(String(editing.attachment ?? 1));
+      setRegarding(editing.regarding ?? "");
+      setAttn(editing.attn ?? "");
+      setClientAddress(editing.clientAddress ?? "");
+      setLetterBody(editing.letterBody ?? "");
+      setLetterClosing(editing.letterClosing ?? "");
+      setTimeline(editing.timeline ?? "");
+      setRevisionNotes(editing.revisionNotes ?? "");
+      setTermOfPayment(editing.termOfPayment ?? "");
+      // Ronde 50 — buka lipatan otomatis bila isi/penutup custom sudah tersimpan (agar terlihat)
+      setLetterCustomOpen(Boolean((editing.letterBody ?? "").trim() || (editing.letterClosing ?? "").trim()));
     } else if (reviseOf) {
       // Ronde 39 — revisi: salin isi quotation sumber + catatan revisi otomatis.
       prefilledFromEstimation.current = false;
@@ -1925,6 +1955,17 @@ function QuotationFormDialog({
       const revNote = `Revisi ke-${reviseOf.revisionNo ? reviseOf.revisionNo + 1 : 1} dari ${reviseOf.number}${reviseOf.notes ? ` — ${reviseOf.notes}` : ""}`;
       setNotes(revNote);
       setValidUntil(defaultValidUntil());
+      // Ronde 50 — salin isi surat dari quotation sumber agar revisi tetap konsisten
+      setAttachment(String(reviseOf.attachment ?? 1));
+      setRegarding(reviseOf.regarding ?? "");
+      setAttn(reviseOf.attn ?? "");
+      setClientAddress(reviseOf.clientAddress ?? "");
+      setLetterBody(reviseOf.letterBody ?? "");
+      setLetterClosing(reviseOf.letterClosing ?? "");
+      setTimeline(reviseOf.timeline ?? "");
+      setRevisionNotes(reviseOf.revisionNotes ?? "");
+      setTermOfPayment(reviseOf.termOfPayment ?? "");
+      setLetterCustomOpen(Boolean((reviseOf.letterBody ?? "").trim() || (reviseOf.letterClosing ?? "").trim()));
     } else {
       // Ronde 49 — estimasi detail (approved/pending) sebagai sumber prefill item:
       // RAB kategori→item → SATU baris per KATEGORI (harga kategori saja — rincian
@@ -1977,8 +2018,19 @@ function QuotationFormDialog({
       }
       setNotes("");
       setValidUntil(defaultValidUntil());
+      // Ronde 50 — surat baru: Lampiran 1, Perihal dari layanan, Attn/Alamat dari data peluang.
+      setAttachment("1");
+      setRegarding(serviceName?.trim() ? `Quotation of ${serviceName.trim()}` : "");
+      setAttn(attnPrefill ?? "");
+      setClientAddress(addressPrefill ?? "");
+      setLetterBody("");
+      setLetterClosing("");
+      setTimeline("");
+      setRevisionNotes("");
+      setTermOfPayment("");
+      setLetterCustomOpen(false);
     }
-  }, [open, editing, reviseOf, estimation, serviceName]);
+  }, [open, editing, reviseOf, estimation, serviceName, attnPrefill, addressPrefill]);
 
   // Ronde 40-E — default pajak saat membuat baru tanpa taxName tersimpan:
   // pajak pertama yang namanya diawali "PPN", bila tidak ada pakai pajak pertama.
@@ -2047,6 +2099,16 @@ function QuotationFormDialog({
           taxPct: taxPctNum,
           notes: notes.trim() || null,
           validUntil: validUntil || null,
+          // Ronde 50 — field surat penawaran (gaya Unicam) ikut tersimpan saat update
+          attachment: Number(attachment) || 0,
+          regarding: regarding.trim() || null,
+          attn: attn.trim() || null,
+          clientAddress: clientAddress.trim() || null,
+          letterBody: letterBody.trim() || null,
+          letterClosing: letterClosing.trim() || null,
+          timeline: timeline.trim() || null,
+          revisionNotes: revisionNotes.trim() || null,
+          termOfPayment: termOfPayment.trim() || null,
           actorName,
           actorRole,
         });
@@ -2062,6 +2124,16 @@ function QuotationFormDialog({
           validUntil: validUntil || undefined,
           // Ronde 39 — kaitkan quotation baru sebagai revisi dari quotation sumber
           ...(reviseOf ? { revisionOfId: reviseOf.id } : {}),
+          // Ronde 50 — field surat penawaran (gaya Unicam) ikut tersimpan saat create
+          attachment: Number(attachment) || 0,
+          regarding: regarding.trim() || null,
+          attn: attn.trim() || null,
+          clientAddress: clientAddress.trim() || null,
+          letterBody: letterBody.trim() || null,
+          letterClosing: letterClosing.trim() || null,
+          timeline: timeline.trim() || null,
+          revisionNotes: revisionNotes.trim() || null,
+          termOfPayment: termOfPayment.trim() || null,
           actorName,
           actorRole,
         });
@@ -2220,6 +2292,162 @@ function QuotationFormDialog({
               placeholder="Catatan untuk klien (opsional)"
               aria-label="Catatan quotation"
             />
+          </div>
+
+          {/* Ronde 50 — field surat penawaran (gaya Unicam) untuk cetakan */}
+          <div className="rounded-xl border bg-white p-3">
+            <div className="flex items-center gap-1.5">
+              <FileText className="size-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
+              <p className="text-xs font-semibold text-zinc-700">Detail Surat Penawaran</p>
+            </div>
+            <p className="mt-0.5 text-[11px] text-zinc-400">
+              Kop &amp; blok surat pada cetakan quotation — kosongkan yang tidak perlu.
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label htmlFor="q-attachment" className="text-xs font-medium text-zinc-600">
+                  Lampiran (Attachment)
+                </label>
+                <Input
+                  id="q-attachment"
+                  type="number"
+                  min={0}
+                  max={99}
+                  step="1"
+                  className="h-8"
+                  value={attachment}
+                  onChange={(e) => setAttachment(e.target.value)}
+                  disabled={saving}
+                  aria-label="Nomor lampiran surat (0–99)"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="q-regarding" className="text-xs font-medium text-zinc-600">
+                  Perihal (Regarding)
+                </label>
+                <Input
+                  id="q-regarding"
+                  className="h-8"
+                  value={regarding}
+                  onChange={(e) => setRegarding(e.target.value)}
+                  disabled={saving}
+                  placeholder="mis. Quotation of Videography"
+                  aria-label="Perihal surat penawaran"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="q-attn" className="text-xs font-medium text-zinc-600">
+                  Attn (u.p.)
+                </label>
+                <Input
+                  id="q-attn"
+                  className="h-8"
+                  value={attn}
+                  onChange={(e) => setAttn(e.target.value)}
+                  disabled={saving}
+                  placeholder="mis. Mr. Rischo Kurniawan"
+                  aria-label="Nama penerima perhatian surat"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="q-address" className="text-xs font-medium text-zinc-600">
+                  Alamat Klien (Address)
+                </label>
+                <Input
+                  id="q-address"
+                  className="h-8"
+                  value={clientAddress}
+                  onChange={(e) => setClientAddress(e.target.value)}
+                  disabled={saving}
+                  placeholder="Kosongkan untuk memakai alamat perusahaan"
+                  aria-label="Alamat klien pada surat penawaran"
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <label htmlFor="q-timeline" className="text-xs font-medium text-zinc-600">
+                  Timeline
+                </label>
+                <Input
+                  id="q-timeline"
+                  className="h-8"
+                  value={timeline}
+                  onChange={(e) => setTimeline(e.target.value)}
+                  disabled={saving}
+                  placeholder="1 Month after down payment"
+                  aria-label="Timeline pengerjaan pada surat penawaran"
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <label htmlFor="q-revision" className="text-xs font-medium text-zinc-600">
+                  Revisi (Revision)
+                </label>
+                <Input
+                  id="q-revision"
+                  className="h-8"
+                  value={revisionNotes}
+                  onChange={(e) => setRevisionNotes(e.target.value)}
+                  disabled={saving}
+                  placeholder="Result Video : x2 per Video — *Revision period: 3 weeks after delivery"
+                  aria-label="Ketentuan revisi pada surat penawaran"
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <label htmlFor="q-top" className="text-xs font-medium text-zinc-600">
+                  Term of Payment
+                </label>
+                <Textarea
+                  id="q-top"
+                  rows={3}
+                  value={termOfPayment}
+                  onChange={(e) => setTermOfPayment(e.target.value)}
+                  disabled={saving}
+                  placeholder={"1. Down Payment: 50% (Before project started)\n2. Second Payment: 30% ..."}
+                  aria-label="Term of payment pada surat penawaran"
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLetterCustomOpen((v) => !v)}
+              aria-expanded={letterCustomOpen}
+              aria-controls="q-letter-custom"
+              className="mt-2 inline-flex items-center gap-1 rounded text-xs font-medium text-zinc-600 transition-colors hover:text-zinc-900"
+            >
+              <ChevronDown className={cn("size-3.5 transition-transform", letterCustomOpen && "rotate-180")} aria-hidden="true" />
+              Isi &amp; penutup surat custom — kosongkan untuk otomatis
+            </button>
+            {letterCustomOpen ? (
+              <div id="q-letter-custom" className="mt-2 grid grid-cols-1 gap-3 border-t border-dashed border-zinc-200 pt-2">
+                <div className="space-y-1">
+                  <label htmlFor="q-letter-body" className="text-xs font-medium text-zinc-600">
+                    Isi surat (Letter body)
+                  </label>
+                  <Textarea
+                    id="q-letter-body"
+                    rows={4}
+                    value={letterBody}
+                    onChange={(e) => setLetterBody(e.target.value)}
+                    disabled={saving}
+                    placeholder="Paragraf pembuka surat — kosongkan untuk dibuat otomatis"
+                    aria-label="Isi surat custom quotation"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="q-letter-closing" className="text-xs font-medium text-zinc-600">
+                    Penutup surat (Letter closing)
+                  </label>
+                  <Textarea
+                    id="q-letter-closing"
+                    rows={4}
+                    value={letterClosing}
+                    onChange={(e) => setLetterClosing(e.target.value)}
+                    disabled={saving}
+                    placeholder="Penutup & tanda tangan — kosongkan untuk dibuat otomatis dari kontak brand"
+                    aria-label="Penutup surat custom quotation"
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-1 rounded-xl border bg-zinc-50 p-3 text-sm">
@@ -2443,6 +2671,8 @@ function QuotationTab({
   estimation,
   serviceName,
   defaultSendChannel,
+  attnPrefill,
+  addressPrefill,
   onPrint,
   onChanged,
 }: {
@@ -2457,6 +2687,9 @@ function QuotationTab({
   serviceName?: string | null;
   /** Ronde 40-E — kanal default dialog kirim (dari preferredChannel kontak). */
   defaultSendChannel?: string | null;
+  /** Ronde 50 — prefill surat: nama kontak (Attn) & alamat perusahaan (Address). */
+  attnPrefill?: string | null;
+  addressPrefill?: string | null;
   onPrint: (q: QuotationDTO) => void;
   onChanged: () => void;
 }) {
@@ -2567,6 +2800,8 @@ function QuotationTab({
         actorRole={actorRole}
         estimation={estimation}
         serviceName={serviceName}
+        attnPrefill={attnPrefill}
+        addressPrefill={addressPrefill}
         onSaved={onChanged}
       />
 
@@ -3443,6 +3678,8 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                       estimation={data.estimation ?? null}
                       serviceName={data.serviceName}
                       defaultSendChannel={data.contact?.preferredChannel ?? "email"}
+                      attnPrefill={data.contact?.fullName ?? null}
+                      addressPrefill={data.company?.address ?? null}
                       onPrint={setPrintTarget}
                       onChanged={handleQuotationChanged}
                     />

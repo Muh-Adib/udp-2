@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { achievementFor, workflowFor } from "@/lib/crm/constants";
 import { normalizeEmail, normalizePhone, extractDomain } from "@/lib/crm/utils";
+import { nextDocumentNumber } from "@/lib/crm/numbering";
 
 export function ok(data: unknown, init?: number) {
   return NextResponse.json(data, { status: init ?? 200 });
@@ -167,6 +168,20 @@ export async function handleWonTransition(oppId: string) {
   // Narrowing TypeScript tidak menembus closure transaksi — tangkap ke konstanta lokal.
   const companyId: string = opp.companyId;
 
+  // Ronde 50 — nomor invoice DP dibuat SEBELUM transaksi (nextDocumentNumber menulis
+  // counter rule di koneksi sendiri — jangan di dalam tx SQLite yang sama).
+  let dpNumber = "";
+  let dpBaseNumber = "";
+  let dpSeqNo = 0;
+  try {
+    const res = await nextDocumentNumber(opp.brandId, "invoice");
+    dpNumber = res.number;
+    dpBaseNumber = res.baseNumber;
+    dpSeqNo = res.seq;
+  } catch {
+    dpNumber = "";
+  }
+
   return db.$transaction(async (tx) => {
     // Cek ulang DI DALAM transaksi (tutup race dua konversi Won bersamaan).
     const existing = await tx.project.findUnique({ where: { opportunityId: opp.id } });
@@ -249,23 +264,32 @@ export async function handleWonTransition(oppId: string) {
       });
     }
 
-    // Draft invoice DP 50% — dari nilai kontrak sumber terbaik
-    const invCount = await tx.invoice.count();
-    const number = `${opp.brand.invoicePrefix}-${year}-INV-${String(invCount + 1).padStart(3, "0")}`;
+    // Draft invoice DP 50% — dari nilai kontrak sumber terbaik.
+    // Ronde 50 — representasi Unicam: amount = nilai kontrak PENUH, downPaymentPct = 50,
+    // pajak dihitung dari dasar DP (total tetap = DP + PPN — kompatibel dgn matematika lama).
     const amount = Math.round(contractValue * 0.5);
     if (amount > 0) {
+      const dpTax = Math.round(amount * 0.11);
       await tx.invoice.create({
         data: {
-          number,
+          number: dpNumber || `${opp.brand.invoicePrefix}-${year}-INV-${String(await tx.invoice.count() + 1).padStart(3, "0")}`,
+          baseNumber: dpBaseNumber || undefined,
+          seqNo: dpSeqNo,
           brandId: opp.brandId,
           companyId,
           projectId: project.id,
           opportunityId: opp.id,
           description: `DP 50% - ${opp.title}${valueSource !== "Belum ada nilai" ? ` (nilai: ${valueSource})` : ""}`,
-          amount,
+          amount: amount * 2,
+          downPaymentPct: 50,
+          taxMode: "add",
           taxRate: 11,
-          taxAmount: Math.round(amount * 0.11),
-          total: Math.round(amount * 1.11),
+          taxAmount: dpTax,
+          total: amount + dpTax,
+          projectName: opp.title,
+          items: JSON.stringify([
+            { description: opp.title || "Jasa produksi", qty: 1, unit: "", unitPrice: amount * 2, total: amount * 2 },
+          ]),
           currency: opp.currency,
           status: "draft",
           dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),

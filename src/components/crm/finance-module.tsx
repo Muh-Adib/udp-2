@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, CalendarDays, CheckCheck, CircleDollarSign, Clock3, Download, FileSignature, FileText,
+  AlertTriangle, CalendarDays, CheckCheck, ChevronDown, ChevronUp, CircleDollarSign, Clock3, Download, FileSignature, FileText,
   HandCoins, Layers, Link2, Loader2, Mail, Pencil, Plus, Printer, ReceiptText, RefreshCw, Send,
   Trash2, UserRound, Wallet, XCircle,
   type LucideIcon,
@@ -275,6 +275,91 @@ function parseQuotationItems(items: string | QuotationItemDTO[]): QuotationItemD
   }
 }
 
+// ============ Ronde 50 — item baris, DP, mode pajak (faktur gaya Unicam) ============
+
+type TaxMode = "add" | "withhold";
+
+const TAX_MODE_LABEL: Record<TaxMode, string> = {
+  add: "Ditambahkan (PPN)",
+  withhold: "Dipotong (PPh 23/21)",
+};
+
+/** Baris item pada editor faktur — state string agar input bebas diketik. */
+interface ItemRow {
+  description: string;
+  qty: string;
+  unit: string;
+  unitPrice: string;
+}
+
+function emptyItemRow(): ItemRow {
+  return { description: "", qty: "1", unit: "", unitPrice: "" };
+}
+
+/** String JSON `items` invoice → baris editor; fallback satu baris dari deskripsi+nominal. */
+function parseInvoiceItemRows(items: string | undefined | null, fallbackDescription: string, fallbackAmount: number): ItemRow[] {
+  if (items) {
+    try {
+      const parsed: unknown = JSON.parse(items);
+      if (Array.isArray(parsed)) {
+        const rows: ItemRow[] = [];
+        for (const raw of parsed) {
+          if (!raw || typeof raw !== "object") continue;
+          const o = raw as Record<string, unknown>;
+          const desc = typeof o.description === "string" ? o.description : "";
+          if (!desc) continue;
+          const qtyNum = typeof o.qty === "number" ? o.qty : Number(o.qty);
+          const priceNum = typeof o.unitPrice === "number" ? o.unitPrice : Number(o.unitPrice);
+          rows.push({
+            description: desc,
+            qty: String(Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 1),
+            unit: typeof o.unit === "string" ? o.unit : "",
+            unitPrice: String(Number.isFinite(priceNum) ? priceNum : 0),
+          });
+        }
+        if (rows.length > 0) return rows;
+      }
+    } catch {
+      // JSON tidak valid → jatuh ke fallback di bawah
+    }
+  }
+  return [{ description: fallbackDescription, qty: "1", unit: "", unitPrice: fallbackAmount > 0 ? String(fallbackAmount) : "" }];
+}
+
+/** Baris editor → payload items: buang baris tanpa deskripsi, qty default 1. */
+function buildItemsPayload(rows: ItemRow[]): Array<{ description: string; qty: number; unit?: string; unitPrice: number }> {
+  return rows
+    .map((r) => ({
+      description: r.description.trim(),
+      qty: Number(r.qty) > 0 ? Number(r.qty) : 1,
+      unit: r.unit.trim() || undefined,
+      unitPrice: Number(r.unitPrice) || 0,
+    }))
+    .filter((r) => r.description !== "");
+}
+
+/**
+ * Matematika Ronde 50 (paritas dengan server):
+ * dp = round(amount×dpPct/100) saat dpPct>0 selain itu amount;
+ * tax = taxName ? round(dp×taxRate/100) : 0;
+ * total = withhold ? dp−tax : dp+tax.
+ */
+function computeInvoiceTotals(amount: number, taxName: string | null, taxRate: number, dpPct: number, taxMode: TaxMode) {
+  const dp = dpPct > 0 ? Math.round((amount * dpPct) / 100) : amount;
+  const taxAmount = taxName ? Math.round((dp * taxRate) / 100) : 0;
+  const total = taxMode === "withhold" ? dp - taxAmount : dp + taxAmount;
+  return { dp, taxAmount, total };
+}
+
+/** Ronde 50 — badge kecil "Revisi N" utk invoice hasil revisi. */
+function RevisionBadge({ no }: { no: number }) {
+  return (
+    <Badge variant="outline" className="shrink-0 border-transparent bg-amber-100 px-1.5 font-mono text-[10px] text-amber-700">
+      Revisi {no}
+    </Badge>
+  );
+}
+
 // ============ Sub-komponen kecil ============
 
 /** Ronde 47 — opsi pajak: "none" = tanpa pajak; selain itu `taxName|taxRate`. */
@@ -406,6 +491,137 @@ function QuotationSkeleton() {
   );
 }
 
+// ============ Ronde 50 — komponen bersama dialog buat & revisi invoice ============
+
+/** Select "Mode Pajak": add (PPN ditambah) / withhold (PPh dipotong). Hanya tampil saat ada pajak. */
+function TaxModeField({ id, value, onChange }: { id: string; value: TaxMode; onChange: (v: TaxMode) => void }) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>Mode Pajak</Label>
+      <Select value={value} onValueChange={(v) => onChange(v === "withhold" ? "withhold" : "add")}>
+        <SelectTrigger id={id}><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="add">{TAX_MODE_LABEL.add}</SelectItem>
+          <SelectItem value="withhold">{TAX_MODE_LABEL.withhold}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Editor baris item: deskripsi + qty/satuan/harga satuan, tambah & hapus per baris. */
+function ItemRowsEditor({ rows, onChange, idPrefix, disabled }: {
+  rows: ItemRow[];
+  onChange: (rows: ItemRow[]) => void;
+  idPrefix: string;
+  disabled?: boolean;
+}) {
+  function updateRow(idx: number, patch: Partial<ItemRow>) {
+    onChange(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+  return (
+    <div className="space-y-2">
+      {rows.map((row, idx) => (
+        <div key={idx} className="rounded-lg border bg-zinc-50/50 p-2.5">
+          <div className="flex items-center gap-2">
+            <Input
+              id={`${idPrefix}-item-desc-${idx}`}
+              value={row.description}
+              onChange={(e) => updateRow(idx, { description: e.target.value })}
+              placeholder={`Deskripsi item ${idx + 1}`}
+              aria-label={`Deskripsi item baris ${idx + 1}`}
+              className="h-8 text-sm"
+              disabled={disabled}
+            />
+            <Button
+              type="button" variant="ghost" size="icon"
+              className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
+              onClick={() => onChange(rows.filter((_, i) => i !== idx))}
+              disabled={disabled || rows.length <= 1}
+              aria-label={`Hapus item baris ${idx + 1}`}
+              title="Hapus baris ini"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <Input
+              id={`${idPrefix}-item-qty-${idx}`} type="number" min={1} step="any"
+              value={row.qty}
+              onChange={(e) => updateRow(idx, { qty: e.target.value })}
+              placeholder="Qty" aria-label={`Jumlah (qty) item baris ${idx + 1}`}
+              className="h-8 text-sm" disabled={disabled}
+            />
+            <Input
+              id={`${idPrefix}-item-unit-${idx}`}
+              value={row.unit}
+              onChange={(e) => updateRow(idx, { unit: e.target.value })}
+              placeholder="Satuan" aria-label={`Satuan item baris ${idx + 1}`}
+              className="h-8 text-sm" disabled={disabled}
+            />
+            <Input
+              id={`${idPrefix}-item-price-${idx}`} type="number" min={0} step="any"
+              value={row.unitPrice}
+              onChange={(e) => updateRow(idx, { unitPrice: e.target.value })}
+              placeholder="Harga satuan" aria-label={`Harga satuan item baris ${idx + 1}`}
+              className="h-8 text-sm" disabled={disabled}
+            />
+          </div>
+        </div>
+      ))}
+      <Button
+        type="button" variant="outline" size="sm"
+        onClick={() => onChange([...rows, emptyItemRow()])}
+        disabled={disabled}
+        aria-label="Tambah baris item"
+      >
+        <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Baris
+      </Button>
+    </div>
+  );
+}
+
+/** Bagian "Rincian Item (opsional)" yang bisa dilipat — dipakai dialog buat & revisi invoice. */
+function InvoiceItemsSection({ open, onToggle, rows, onRowsChange, idPrefix, disabled }: {
+  open: boolean;
+  onToggle: () => void;
+  rows: ItemRow[];
+  onRowsChange: (rows: ItemRow[]) => void;
+  idPrefix: string;
+  disabled?: boolean;
+}) {
+  const filledCount = rows.filter((r) => r.description.trim()).length;
+  return (
+    <div className="rounded-lg border bg-white">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+      >
+        <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-700">
+          <ReceiptText className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+          Rincian Item (opsional)
+          {filledCount > 0 ? (
+            <Badge variant="outline" className="border-transparent bg-zinc-100 px-1.5 text-[10px] text-zinc-600">
+              {filledCount} baris
+            </Badge>
+          ) : null}
+        </span>
+        {open ? <ChevronUp className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden /> : <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />}
+      </button>
+      {open ? (
+        <div className="border-t px-3 py-3">
+          <p className="mb-2 text-[11px] leading-relaxed text-zinc-500">
+            Baris tanpa deskripsi diabaikan saat disimpan. Qty default 1; satuan opsional (mis. Package, Pcs).
+          </p>
+          <ItemRowsEditor rows={rows} onChange={onRowsChange} idPrefix={idPrefix} disabled={disabled} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ============ Module utama ============
 
 type QuotationAction = "send" | "accept" | "reject" | "convert_invoice";
@@ -448,9 +664,27 @@ export default function FinanceModule() {
   const [taxes, setTaxes] = useState<TaxDTO[] | null>(null);
   const [creating, setCreating] = useState(false);
 
+  // --- Ronde 50: faktur gaya Unicam — mode pajak, DP%, PO/project, rincian item ---
+  const [createTaxMode, setCreateTaxMode] = useState<TaxMode>("add");
+  const [createDp, setCreateDp] = useState("0");
+  const [createPoNumber, setCreatePoNumber] = useState("");
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [createItems, setCreateItems] = useState<ItemRow[]>([]);
+  const [createItemsOpen, setCreateItemsOpen] = useState(false);
+
   const [editTarget, setEditTarget] = useState<InvoiceWithProject | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", tax: TAX_NONE, due: "", notes: "" });
   const [editing, setEditing] = useState(false);
+
+  // --- Ronde 50: dialog Buat Revisi (invoice baru bernomor imbuhan, salin isi sumber) ---
+  const [reviseTarget, setReviseTarget] = useState<InvoiceWithProject | null>(null);
+  const [reviseForm, setReviseForm] = useState({
+    description: "", amount: "", tax: TAX_NONE, taxMode: "add" as TaxMode, dp: "0",
+    poNumber: "", projectName: "", due: "", notes: "", reason: "",
+  });
+  const [reviseItems, setReviseItems] = useState<ItemRow[]>([]);
+  const [reviseItemsOpen, setReviseItemsOpen] = useState(false);
+  const [revising, setRevising] = useState(false);
 
   const [printInvoice, setPrintInvoice] = useState<InvoiceWithProject | null>(null);
   const [payDeleteTarget, setPayDeleteTarget] = useState<{ paymentId: string; label: string; invoice: InvoiceWithProject } | null>(null);
@@ -559,9 +793,17 @@ export default function FinanceModule() {
   const createTotals = useMemo(() => {
     const amount = Number(createAmount) || 0;
     const { name, rate } = parseTaxOption(createTax);
-    const taxAmount = name ? Math.round((amount * rate) / 100) : 0;
-    return { amount, taxAmount, total: amount + taxAmount, taxName: name, taxRate: rate };
-  }, [createAmount, createTax]);
+    // Ronde 50 — DP 0-100%; dp = round(amount×dpPct/100) saat dpPct>0 selain itu amount penuh.
+    const dpPct = Math.min(100, Math.max(0, Number(createDp) || 0));
+    const { dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, createTaxMode);
+    return { amount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
+  }, [createAmount, createTax, createDp, createTaxMode]);
+
+  /** Ronde 50 — buka editor item di dialog buat; seed satu baris kosong saat pertama dibuka. */
+  function toggleCreateItems() {
+    if (!createItemsOpen && createItems.length === 0) setCreateItems([emptyItemRow()]);
+    setCreateItemsOpen(!createItemsOpen);
+  }
 
   async function submitCreateInvoice(e: React.FormEvent) {
     e.preventDefault();
@@ -571,6 +813,7 @@ export default function FinanceModule() {
     if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
     setCreating(true);
     try {
+      const items = buildItemsPayload(createItems);
       const res = await api.createStandaloneInvoice({
         brandId: createBrandId,
         companyId: createCompanyId,
@@ -578,6 +821,11 @@ export default function FinanceModule() {
         amount,
         taxName: createTotals.taxName,
         taxRate: createTotals.taxName ? createTotals.taxRate : undefined,
+        taxMode: createTotals.taxName ? createTaxMode : undefined,
+        downPaymentPct: createTotals.dpPct,
+        items: items.length > 0 ? items : undefined,
+        purchaseNumber: createPoNumber.trim() || undefined,
+        projectName: createProjectName.trim() || undefined,
         dueDate: createDue || undefined,
         notes: createNotes.trim() || undefined,
       });
@@ -588,6 +836,12 @@ export default function FinanceModule() {
       setCreateNotes("");
       setCreateTax(TAX_NONE);
       setCreateDue("");
+      setCreateTaxMode("add");
+      setCreateDp("0");
+      setCreatePoNumber("");
+      setCreateProjectName("");
+      setCreateItems([]);
+      setCreateItemsOpen(false);
       await load(true);
       setDetail(res.invoice as InvoiceWithProject);
     } catch (err) {
@@ -642,6 +896,70 @@ export default function FinanceModule() {
       toast.error(err instanceof Error ? err.message : "Gagal mengubah invoice");
     } finally {
       setEditing(false);
+    }
+  }
+
+  // ============ Ronde 50 — Buat Revisi Invoice ============
+
+  /** Buka dialog revisi: prefill dari invoice sumber (items di-parse; fallback deskripsi+nominal). */
+  function openReviseDialog(inv: InvoiceWithProject) {
+    setReviseTarget(inv);
+    setReviseForm({
+      description: inv.description ?? "",
+      amount: String(inv.amount),
+      tax: inv.taxName ? taxOptionValue({ name: inv.taxName, rate: inv.taxRate }) : TAX_NONE,
+      taxMode: inv.taxMode === "withhold" ? "withhold" : "add",
+      dp: inv.downPaymentPct && inv.downPaymentPct > 0 ? String(inv.downPaymentPct) : "0",
+      poNumber: inv.purchaseNumber ?? "",
+      projectName: inv.projectName ?? "",
+      due: inv.dueDate ? inv.dueDate.slice(0, 10) : "",
+      notes: inv.notes ?? "",
+      reason: "",
+    });
+    setReviseItems(parseInvoiceItemRows(inv.items, inv.description ?? "", inv.amount));
+    setReviseItemsOpen(false);
+  }
+
+  const reviseTotals = useMemo(() => {
+    const amount = Number(reviseForm.amount) || 0;
+    const { name, rate } = parseTaxOption(reviseForm.tax);
+    const dpPct = Math.min(100, Math.max(0, Number(reviseForm.dp) || 0));
+    const { dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, reviseForm.taxMode);
+    return { amount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
+  }, [reviseForm.amount, reviseForm.tax, reviseForm.dp, reviseForm.taxMode]);
+
+  async function submitReviseInvoice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reviseTarget) return;
+    const amount = Number(reviseForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
+    const reason = reviseForm.reason.trim();
+    if (!reason) return toast.error("Alasan revisi wajib diisi");
+    setRevising(true);
+    try {
+      const items = buildItemsPayload(reviseItems);
+      const res = await api.reviseInvoice({
+        invoiceId: reviseTarget.id,
+        description: reviseForm.description.trim() || undefined,
+        amount,
+        taxName: reviseTotals.taxName,
+        taxRate: reviseTotals.taxName ? reviseTotals.taxRate : 0,
+        taxMode: reviseTotals.taxName ? reviseForm.taxMode : undefined,
+        downPaymentPct: reviseTotals.dpPct,
+        items: items.length > 0 ? items : undefined,
+        purchaseNumber: reviseForm.poNumber.trim() || null,
+        projectName: reviseForm.projectName.trim() || null,
+        dueDate: reviseForm.due || null,
+        notes: reviseForm.notes.trim() || null,
+        revisionReason: reason,
+      });
+      toast.success(`Revisi ${res.invoice.number} dibuat`);
+      setReviseTarget(null);
+      await load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membuat revisi invoice");
+    } finally {
+      setRevising(false);
     }
   }
 
@@ -967,6 +1285,7 @@ export default function FinanceModule() {
                       const invPct = inv.total > 0 ? Math.min(100, Math.round((paidAmount(inv) / inv.total) * 100)) : 0;
                       const canSend = inv.status === "draft";
                       const canCancel = inv.status === "draft" || inv.status === "sent" || inv.status === "overdue";
+                      const revisionNo = inv.revisionNo ?? 0;
                       return (
                         <TableRow
                           key={inv.id}
@@ -974,7 +1293,12 @@ export default function FinanceModule() {
                           className={`cursor-pointer ${inv.status === "overdue" ? "bg-rose-50/40" : ""}`}
                           aria-label={`Lihat detail invoice ${inv.number}`}
                         >
-                          <TableCell className="font-mono text-sm font-semibold text-zinc-900">{inv.number}</TableCell>
+                          <TableCell className="font-mono text-sm font-semibold text-zinc-900">
+                            <div className="flex items-center gap-1.5">
+                              <span>{inv.number}</span>
+                              {revisionNo > 0 ? <RevisionBadge no={revisionNo} /> : null}
+                            </div>
+                          </TableCell>
                           <TableCell className="max-w-[160px] truncate text-sm">{inv.company?.name ?? "-"}</TableCell>
                           <TableCell><BrandDot name={inv.brand?.name} color={inv.brand?.color} /></TableCell>
                           <TableCell className="max-w-[220px]">
@@ -1020,6 +1344,17 @@ export default function FinanceModule() {
                               >
                                 <Printer className="h-3.5 w-3.5" aria-hidden /> Cetak
                               </Button>
+                              {inv.status !== "cancelled" ? (
+                                <Button
+                                  variant="outline" size="icon"
+                                  className="h-8 w-8"
+                                  onClick={(e) => { e.stopPropagation(); openReviseDialog(inv); }}
+                                  aria-label={`Buat revisi invoice ${inv.number}`}
+                                  title="Buat Revisi"
+                                >
+                                  <FileSignature className="h-3.5 w-3.5" aria-hidden />
+                                </Button>
+                              ) : null}
                               {["sent", "partial", "overdue"].includes(inv.status) ? (
                                 <Button
                                   variant="outline" size="icon"
@@ -1123,10 +1458,13 @@ export default function FinanceModule() {
                     ) : null}
 
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
-                        {statusMeta(detail.status).label}
-                      </Badge>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className={`border-transparent px-1.5 ${statusMeta(detail.status).cls}`}>
+                          {statusMeta(detail.status).label}
+                        </Badge>
+                        {(detail.revisionNo ?? 0) > 0 ? <RevisionBadge no={detail.revisionNo ?? 0} /> : null}
+                      </div>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
                         <Button
                           variant="outline" size="sm"
                           onClick={() => setPrintInvoice(detail)}
@@ -1141,6 +1479,15 @@ export default function FinanceModule() {
                             aria-label={`Edit draft invoice ${detail.number}`}
                           >
                             <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
+                          </Button>
+                        ) : null}
+                        {detail.status !== "cancelled" ? (
+                          <Button
+                            variant="outline" size="sm"
+                            onClick={() => openReviseDialog(detail)}
+                            aria-label={`Buat revisi invoice ${detail.number}`}
+                          >
+                            <FileSignature className="h-3.5 w-3.5" aria-hidden /> Buat Revisi
                           </Button>
                         ) : null}
                         <span className="text-sm font-bold tabular-nums text-zinc-900">
@@ -1177,6 +1524,13 @@ export default function FinanceModule() {
                         <p className="mt-0.5 tabular-nums text-zinc-800">{formatCurrencyFull(detail.taxAmount, detail.currency)}</p>
                       </div>
                     </div>
+
+                    {detail.revisionReason ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                        <p className="font-semibold text-amber-800">Alasan Revisi</p>
+                        <p className="mt-0.5 leading-relaxed text-amber-800">{detail.revisionReason}</p>
+                      </div>
+                    ) : null}
 
                     {detail.notes ? (
                       <div className="rounded-lg bg-zinc-50 p-3 text-xs text-zinc-600">{detail.notes}</div>
@@ -1340,7 +1694,7 @@ export default function FinanceModule() {
           </AlertDialog>
           {/* Ronde 47 — Dialog buat invoice manual (sinkron brand: currency & prefix nomor di server) */}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Buat Invoice Manual</DialogTitle>
                 <DialogDescription>
@@ -1421,6 +1775,51 @@ export default function FinanceModule() {
                     />
                   </div>
                 </div>
+                {/* Ronde 50 — mode pajak (PPN ditambah / PPh dipotong) + Down Payment % */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {createTotals.taxName ? (
+                    <TaxModeField id="inv-taxmode" value={createTaxMode} onChange={setCreateTaxMode} />
+                  ) : null}
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-dp">Down Payment (%)</Label>
+                    <Input
+                      id="inv-dp" type="number" min={0} max={100} step="any"
+                      value={createDp}
+                      onChange={(e) => setCreateDp(e.target.value)}
+                      placeholder="0"
+                    />
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      0 = tagihan penuh. Contoh: 50 → baris Down Payment (50%).
+                    </p>
+                  </div>
+                </div>
+                {/* Ronde 50 — referensi PO & nama project pada faktur */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-po">Nomor PO Klien</Label>
+                    <Input
+                      id="inv-po" value={createPoNumber}
+                      onChange={(e) => setCreatePoNumber(e.target.value)}
+                      placeholder="mis. PO-2026-0142"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-project">Nama Project</Label>
+                    <Input
+                      id="inv-project" value={createProjectName}
+                      onChange={(e) => setCreateProjectName(e.target.value)}
+                      placeholder="mis. AI Video"
+                    />
+                  </div>
+                </div>
+                <InvoiceItemsSection
+                  open={createItemsOpen}
+                  onToggle={toggleCreateItems}
+                  rows={createItems}
+                  onRowsChange={setCreateItems}
+                  idPrefix="inv-create"
+                  disabled={creating}
+                />
                 <div className="grid gap-2">
                   <Label htmlFor="inv-notes">Catatan</Label>
                   <Textarea
@@ -1435,14 +1834,29 @@ export default function FinanceModule() {
                     <span>Subtotal</span>
                     <span className="tabular-nums">{formatCurrencyFull(createTotals.amount, createBrand?.primaryCurrency ?? "IDR")}</span>
                   </div>
+                  {createTotals.dpPct > 0 ? (
+                    <div className="flex items-center justify-between text-zinc-600">
+                      <span>Down Payment ({createTotals.dpPct}%)</span>
+                      <span className="tabular-nums">{formatCurrencyFull(createTotals.dp, createBrand?.primaryCurrency ?? "IDR")}</span>
+                    </div>
+                  ) : null}
                   <div className="flex items-center justify-between text-zinc-600">
                     <span>{createTotals.taxName ? `${createTotals.taxName} ${createTotals.taxRate}%` : "Pajak"}</span>
-                    <span className="tabular-nums">{formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}</span>
+                    <span className="tabular-nums">
+                      {formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}
+                      {createTotals.taxName ? (createTaxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""}
+                    </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between border-t pt-1 font-semibold text-zinc-900">
                     <span>Total</span>
                     <span className="tabular-nums">{formatCurrencyFull(createTotals.total, createBrand?.primaryCurrency ?? "IDR")}</span>
                   </div>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">
+                    Dasar tagihan: {formatCurrencyFull(createTotals.dp, createBrand?.primaryCurrency ?? "IDR")} ·{" "}
+                    Pajak: {formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}
+                    {createTotals.taxName ? (createTaxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""} ·{" "}
+                    Total: {formatCurrencyFull(createTotals.total, createBrand?.primaryCurrency ?? "IDR")}
+                  </p>
                 </div>
                 <DialogFooter className="mt-1">
                   <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
@@ -1523,6 +1937,159 @@ export default function FinanceModule() {
                   <Button type="submit" disabled={editing} aria-label="Simpan perubahan invoice">
                     {editing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Pencil className="h-4 w-4" aria-hidden />}
                     Simpan Perubahan
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          {/* Ronde 50 — Dialog Buat Revisi: invoice DRAFT baru bernomor imbuhan (004 → 004-1) */}
+          <Dialog open={reviseTarget !== null} onOpenChange={(open) => { if (!open) setReviseTarget(null); }}>
+            <DialogContent className="max-h-[90vh] overflow-y-auto crm-scroll sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Buat Revisi Invoice {reviseTarget?.number}</DialogTitle>
+                <DialogDescription>
+                  Revisi membuat invoice draft baru bernomor imbuhan (mis. 004 → 004-1). Isi faktur sumber disalin otomatis — ubah hanya bagian yang perlu.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={submitReviseInvoice} className="grid gap-4 py-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-rev-desc">Deskripsi</Label>
+                  <Input
+                    id="inv-rev-desc" value={reviseForm.description}
+                    onChange={(e) => setReviseForm((f) => ({ ...f, description: e.target.value }))}
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-amount">Nominal *</Label>
+                    <Input
+                      id="inv-rev-amount" type="number" min={1} step="any" required
+                      value={reviseForm.amount}
+                      onChange={(e) => setReviseForm((f) => ({ ...f, amount: e.target.value }))}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-tax">Pajak</Label>
+                    <Select value={reviseForm.tax} onValueChange={(v) => setReviseForm((f) => ({ ...f, tax: v }))}>
+                      <SelectTrigger id="inv-rev-tax"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={TAX_NONE}>Tanpa Pajak</SelectItem>
+                        {(taxes ?? []).map((t) => (
+                          <SelectItem key={t.id} value={taxOptionValue(t)}>{t.name} ({t.rate}%)</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-due">Jatuh Tempo</Label>
+                    <Input
+                      id="inv-rev-due" type="date"
+                      value={reviseForm.due}
+                      onChange={(e) => setReviseForm((f) => ({ ...f, due: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                {/* Ronde 50 — mode pajak + DP prefill dari invoice sumber */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {reviseTotals.taxName ? (
+                    <TaxModeField
+                      id="inv-rev-taxmode"
+                      value={reviseForm.taxMode}
+                      onChange={(v) => setReviseForm((f) => ({ ...f, taxMode: v }))}
+                    />
+                  ) : null}
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-dp">Down Payment (%)</Label>
+                    <Input
+                      id="inv-rev-dp" type="number" min={0} max={100} step="any"
+                      value={reviseForm.dp}
+                      onChange={(e) => setReviseForm((f) => ({ ...f, dp: e.target.value }))}
+                      placeholder="0"
+                    />
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      0 = tagihan penuh. Contoh: 50 → baris Down Payment (50%).
+                    </p>
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-po">Nomor PO Klien</Label>
+                    <Input
+                      id="inv-rev-po" value={reviseForm.poNumber}
+                      onChange={(e) => setReviseForm((f) => ({ ...f, poNumber: e.target.value }))}
+                      placeholder="mis. PO-2026-0142"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-project">Nama Project</Label>
+                    <Input
+                      id="inv-rev-project" value={reviseForm.projectName}
+                      onChange={(e) => setReviseForm((f) => ({ ...f, projectName: e.target.value }))}
+                      placeholder="mis. AI Video"
+                    />
+                  </div>
+                </div>
+                <InvoiceItemsSection
+                  open={reviseItemsOpen}
+                  onToggle={() => setReviseItemsOpen(!reviseItemsOpen)}
+                  rows={reviseItems}
+                  onRowsChange={setReviseItems}
+                  idPrefix="inv-revise"
+                  disabled={revising}
+                />
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-rev-notes">Catatan</Label>
+                  <Textarea
+                    id="inv-rev-notes" rows={2}
+                    value={reviseForm.notes}
+                    onChange={(e) => setReviseForm((f) => ({ ...f, notes: e.target.value }))}
+                    placeholder="Instruksi pembayaran, rekening, dll."
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-rev-reason">Alasan Revisi *</Label>
+                  <Textarea
+                    id="inv-rev-reason" rows={2}
+                    value={reviseForm.reason}
+                    onChange={(e) => setReviseForm((f) => ({ ...f, reason: e.target.value }))}
+                    placeholder="Wajib diisi — mis. koreksi nominal & tambah baris item sesuai PO"
+                  />
+                </div>
+                <div className="rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>Subtotal</span>
+                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.amount, reviseTarget?.currency ?? "IDR")}</span>
+                  </div>
+                  {reviseTotals.dpPct > 0 ? (
+                    <div className="flex items-center justify-between text-zinc-600">
+                      <span>Down Payment ({reviseTotals.dpPct}%)</span>
+                      <span className="tabular-nums">{formatCurrencyFull(reviseTotals.dp, reviseTarget?.currency ?? "IDR")}</span>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>{reviseTotals.taxName ? `${reviseTotals.taxName} ${reviseTotals.taxRate}%` : "Pajak"}</span>
+                    <span className="tabular-nums">
+                      {formatCurrencyFull(reviseTotals.taxAmount, reviseTarget?.currency ?? "IDR")}
+                      {reviseTotals.taxName ? (reviseForm.taxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between border-t pt-1 font-semibold text-zinc-900">
+                    <span>Total</span>
+                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.total, reviseTarget?.currency ?? "IDR")}</span>
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">
+                    Dasar tagihan: {formatCurrencyFull(reviseTotals.dp, reviseTarget?.currency ?? "IDR")} ·{" "}
+                    Pajak: {formatCurrencyFull(reviseTotals.taxAmount, reviseTarget?.currency ?? "IDR")}
+                    {reviseTotals.taxName ? (reviseForm.taxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""} ·{" "}
+                    Total: {formatCurrencyFull(reviseTotals.total, reviseTarget?.currency ?? "IDR")}
+                  </p>
+                </div>
+                <DialogFooter className="mt-1">
+                  <Button type="button" variant="outline" onClick={() => setReviseTarget(null)}>Batal</Button>
+                  <Button type="submit" disabled={revising} aria-label="Buat revisi invoice">
+                    {revising ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <FileSignature className="h-4 w-4" aria-hidden />}
+                    Buat Revisi (Draft)
                   </Button>
                 </DialogFooter>
               </form>

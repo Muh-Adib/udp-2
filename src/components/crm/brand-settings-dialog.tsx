@@ -3,21 +3,26 @@
 /**
  * Ronde 29-b — Dialog Pengaturan Brand (Kelola per brand).
  *
- * 4 tab:
+ * 5 tab:
  *  1. Identitas     — logo asli (preview/upload) + tagline + alamat + kontak resmi
+ *                     + Ronde 50: identitas dokumen resmi (kode brand, NPWP,
+ *                     penanda tangan, salam penutup, rekening bank)
  *  2. Layanan       — kategori & layanan khas brand + workflow produksi custom
  *                     (fase → langkah) + RINCIAN BIAYA per layanan (template harga
  *                     marketing: butir biaya → total, margin target, saran harga)
- *  3. Surat         — kop/kaki surat (upload gambar) + gaya template surat
- *  4. Integrasi     — SEMUA tipe kanal (WhatsApp/IG/Threads/Email) + status koneksi
+ *  3. Surat         — kop/kaki surat umum + Ronde 50: kop per jenis surat
+ *                     (quotation/invoice via brand.docAssets) + gaya template surat
+ *  4. Penomoran     — Ronde 50: builder rule penomoran per jenis dokumen
+ *                     (template token + kode doc + reset counter + pratinjau live)
+ *  5. Integrasi     — SEMUA tipe kanal (WhatsApp/IG/Threads/Email) + status koneksi
  *                     per kanal (Terhubung/Error/Terputus/Belum terhubung),
  *                     hubungkan demo 1-klik atau buka modul Kanal untuk setup nyata
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Image as ImageIcon, Instagram,
-  Layers, Link2, ListOrdered, Loader2, Mail, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
+  AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Hash, Image as ImageIcon, Info, Instagram,
+  Landmark, Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import type { LucideIcon } from "lucide-react";
@@ -38,8 +43,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api, channelsApi } from "@/lib/crm/api-client";
 import { CHANNEL_TYPES, CHANNEL_TYPE_KEYS } from "@/lib/crm/channels";
+import {
+  DOC_TYPE_DEFAULT_CODE, DOC_TYPE_LABELS, NUMBERING_DOC_TYPES, RESET_PERIOD_LABELS,
+  renderNumberTemplate, validateNumberingTemplate,
+  type NumberingDocType,
+} from "@/lib/crm/numbering-core";
 import type {
-  Brand, BrandServiceCatalog, ChannelConfigDTO, ServiceCategoryDTO, ServiceCostItem, ServiceDTO,
+  Brand, BrandServiceCatalog, ChannelConfigDTO, NumberingRuleDTO, ServiceCategoryDTO, ServiceCostItem, ServiceDTO,
 } from "@/lib/crm/types";
 
 // ============ Util ============
@@ -104,6 +114,97 @@ const CHANNEL_COLOR: Record<string, string> = {
   threads: "#0a0a0a",
   email: "#6366f1",
 };
+
+// ============ Ronde 50 — penomoran, kop per jenis surat, rekening bank ============
+
+const DEFAULT_NUMBERING_TEMPLATE = "{SEQ:3}/{DOC}-{BRAND}/{ROMAN}/{YY}";
+
+/** Chip token builder — klik untuk menyisipkan token ke template di posisi kursor/akhir. */
+const NUMBERING_CHIP_TOKENS = ["{SEQ:3}", "{SEQ}", "{DOC}", "{BRAND}", "{ROMAN}", "{MM}", "{YY}", "{YYYY}"] as const;
+
+/** Draf lokal satu rule penomoran (seq string agar input number nyaman diketik). */
+interface NumberingDraft {
+  template: string;
+  docCode: string;
+  resetPeriod: string;
+  seq: string;
+}
+
+function numberingDefaults(docType: NumberingDocType): NumberingDraft {
+  return { template: DEFAULT_NUMBERING_TEMPLATE, docCode: DOC_TYPE_DEFAULT_CODE[docType], resetPeriod: "yearly", seq: "0" };
+}
+
+function rulesToDrafts(rules: NumberingRuleDTO[]): Record<NumberingDocType, NumberingDraft> {
+  const next = {} as Record<NumberingDocType, NumberingDraft>;
+  for (const dt of NUMBERING_DOC_TYPES) {
+    const saved = rules.find((r) => r.docType === dt);
+    next[dt] = saved
+      ? { template: saved.template, docCode: saved.docCode, resetPeriod: saved.resetPeriod, seq: String(saved.seq) }
+      : numberingDefaults(dt);
+  }
+  return next;
+}
+
+function parseSeq(raw: string): number {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? Math.min(999_999, n) : 0;
+}
+
+/** Kop per jenis surat — brand.docAssets JSON { quotation:{header,footer}, invoice:{header,footer} }. */
+interface DocAssetSlotDraft {
+  header: string;
+  footer: string;
+}
+interface DocAssetsDraft {
+  quotation: DocAssetSlotDraft;
+  invoice: DocAssetSlotDraft;
+}
+
+function parseDocAssets(raw: string | null | undefined): DocAssetsDraft {
+  const empty: DocAssetsDraft = {
+    quotation: { header: "", footer: "" },
+    invoice: { header: "", footer: "" },
+  };
+  if (!raw) return empty;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
+    const obj = parsed as Record<string, unknown>;
+    const str = (v: unknown): string => (typeof v === "string" ? v : "");
+    const slot = (key: "quotation" | "invoice"): DocAssetSlotDraft => {
+      const entry = obj[key];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return { header: "", footer: "" };
+      const e = entry as Record<string, unknown>;
+      return { header: str(e.header), footer: str(e.footer) };
+    };
+    return { quotation: slot("quotation"), invoice: slot("invoice") };
+  } catch {
+    return empty;
+  }
+}
+
+/** Baris rekening bank — brand.bankAccounts JSON [{bank, number, holder, branch}]. */
+interface BankAccountRow {
+  bank: string;
+  number: string;
+  branch: string;
+  holder: string;
+}
+
+function parseBankAccounts(raw: string | null | undefined): BankAccountRow[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, 6).map((item): BankAccountRow => {
+      const acc = (item ?? {}) as Record<string, unknown>;
+      const str = (v: unknown): string => (typeof v === "string" ? v : "");
+      return { bank: str(acc.bank), number: str(acc.number), branch: str(acc.branch), holder: str(acc.holder) };
+    });
+  } catch {
+    return [];
+  }
+}
 
 interface IdentityDraft {
   tagline: string;
@@ -188,6 +289,27 @@ export default function BrandSettingsDialog({
   const headerInputRef = useRef<HTMLInputElement | null>(null);
   const footerInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Ronde 50 — Penomoran (tab Penomoran)
+  const [numbering, setNumbering] = useState<Record<NumberingDocType, NumberingDraft> | null>(null);
+  const [numberingLoading, setNumberingLoading] = useState(false);
+  const [numberingLoaded, setNumberingLoaded] = useState(false);
+  const [savingNumbering, setSavingNumbering] = useState(false);
+
+  // Ronde 50 — identitas dokumen resmi (tab Identitas)
+  const [official, setOfficial] = useState<{
+    shortCode: string;
+    npwp: string;
+    signerName: string;
+    signerClosing: string;
+  } | null>(null);
+  const [bankRows, setBankRows] = useState<BankAccountRow[]>([]);
+  const initialBankJsonRef = useRef<string>("[]");
+
+  // Ronde 50 — kop per jenis surat (tab Surat)
+  const [letterDocMode, setLetterDocMode] = useState<"umum" | "quotation" | "invoice">("umum");
+  const [docAssetsDraft, setDocAssetsDraft] = useState<DocAssetsDraft | null>(null);
+  const [docAssetsDirty, setDocAssetsDirty] = useState(false);
+
   // Integrasi
   const [channels, setChannels] = useState<ChannelConfigDTO[] | null>(null);
   const [connectingKey, setConnectingKey] = useState<string | null>(null);
@@ -219,6 +341,23 @@ export default function BrandSettingsDialog({
       setLetter(parsedLetter);
       setHeaderImg(brand.letterheadHeader ?? "");
       setFooterImg(brand.letterheadFooter ?? "");
+      // Ronde 50 — identitas dokumen resmi + rekening + kop per jenis surat
+      setOfficial({
+        shortCode: brand.shortCode ?? "",
+        npwp: brand.npwp ?? "",
+        signerName: brand.signerName ?? "",
+        signerClosing: brand.signerClosing ?? "",
+      });
+      const bankParsed = parseBankAccounts(brand.bankAccounts);
+      setBankRows(bankParsed);
+      initialBankJsonRef.current = JSON.stringify(bankParsed);
+      setDocAssetsDraft(parseDocAssets(brand.docAssets));
+      setDocAssetsDirty(false);
+      setLetterDocMode("umum");
+      // Ronde 50 — rule penomoran dimuat ulang per brand (lazy saat tab dibuka)
+      setNumbering(null);
+      setNumberingLoaded(false);
+      setNumberingLoading(false);
     }
   }, [open, brand]);
 
@@ -247,13 +386,30 @@ export default function BrandSettingsDialog({
     }
   }, []);
 
+  // Ronde 50 — muat rule penomoran (lazy: saat tab Penomoran pertama kali dibuka)
+  const loadNumbering = useCallback(async () => {
+    if (!brand) return;
+    setNumberingLoading(true);
+    try {
+      const res = await api.numbering(brand.id);
+      setNumbering(rulesToDrafts(res.rules));
+      setNumberingLoaded(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memuat aturan penomoran");
+    } finally {
+      setNumberingLoading(false);
+    }
+  }, [brand]);
+
   useEffect(() => {
     if (open && brand) {
       if (tab === "services" && !catalog && !catalogLoading) void loadCatalog();
       if (tab === "letter" && !catalog && !catalogLoading) void loadCatalog();
       if (tab === "integrasi" && !channels) void loadChannels();
+      // Ronde 50 — muat rule penomoran saat tab Penomoran pertama kali dibuka
+      if (tab === "penomoran" && !numberingLoaded && !numberingLoading) void loadNumbering();
     }
-  }, [open, brand, tab, catalog, catalogLoading, channels, loadCatalog, loadChannels]);
+  }, [open, brand, tab, catalog, catalogLoading, channels, numberingLoaded, numberingLoading, loadCatalog, loadChannels, loadNumbering]);
 
   // Ronde 48 — ukur dimensi natural gambar kop/footer utk panduan ukuran A4.
   // (harus di atas early return — aturan rules-of-hooks)
@@ -274,6 +430,8 @@ export default function BrandSettingsDialog({
   const activeBrand = brand; // snapshot utk closure (TS narrowing tidak menembus fungsi)
 
   const effectiveLogo = logoData !== null ? logoData : (brand.logoUrl ?? "");
+  // Ronde 50 — kode brand utk pratinjau penomoran (sama dgn server: shortCode || 4 huruf pertama nama)
+  const effectiveBrandCode = (brand.shortCode ?? "").trim() || brand.name.slice(0, 4).toUpperCase();
 
   // ---------- Aksi: identitas ----------
   async function saveIdentity() {
@@ -282,9 +440,25 @@ export default function BrandSettingsDialog({
     try {
       const payload: Record<string, unknown> = { ...identity };
       if (logoData !== null) payload.logoUrl = logoData === "" ? null : logoData;
+      // Ronde 50 — identitas dokumen resmi + rekening bank (satu PATCH /api/brands/:id)
+      if (official) {
+        const shortCode = official.shortCode.trim().toUpperCase();
+        if (shortCode && !/^[A-Z0-9-]{1,10}$/.test(shortCode)) {
+          toast.error("Kode brand hanya boleh huruf/angka/dash, maksimal 10 karakter (mis. UDP)");
+          setSavingIdentity(false);
+          return;
+        }
+        payload.shortCode = shortCode;
+        payload.npwp = official.npwp.trim();
+        payload.signerName = official.signerName.trim();
+        payload.signerClosing = official.signerClosing.trim();
+        const bankJson = JSON.stringify(bankRows);
+        if (bankJson !== initialBankJsonRef.current) payload.bankAccounts = bankJson;
+      }
       const res = await api.updateBrand(activeBrand.id, payload);
       onSaved(res.brand);
       setLogoData(null);
+      if (official) initialBankJsonRef.current = JSON.stringify(bankRows);
       toast.success(`Identitas ${activeBrand.name} tersimpan`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menyimpan identitas");
@@ -319,17 +493,92 @@ export default function BrandSettingsDialog({
     if (!letter) return;
     setSavingLetter(true);
     try {
-      const res = await api.updateBrand(activeBrand.id, {
+      const payload: Record<string, unknown> = {
         letterheadHeader: headerImg === "" ? null : headerImg || null,
         letterheadFooter: footerImg === "" ? null : footerImg || null,
         letterTemplate: letter,
-      });
+      };
+      // Ronde 50 — kop per jenis surat hanya dikirim bila user mengubahnya (jangan sentuh kop umum)
+      if (docAssetsDirty && docAssetsDraft) {
+        payload.docAssets = JSON.stringify({
+          quotation: { header: docAssetsDraft.quotation.header, footer: docAssetsDraft.quotation.footer },
+          invoice: { header: docAssetsDraft.invoice.header, footer: docAssetsDraft.invoice.footer },
+        });
+      }
+      const res = await api.updateBrand(activeBrand.id, payload);
       onSaved(res.brand);
+      setDocAssetsDirty(false);
       toast.success(`Template surat ${activeBrand.name} tersimpan`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menyimpan template surat");
     } finally {
       setSavingLetter(false);
+    }
+  }
+
+  // ---------- Aksi: kop per jenis surat (Ronde 50) ----------
+  async function pickDocAsset(docType: "quotation" | "invoice", side: "header" | "footer", file: File | undefined) {
+    if (!file) return;
+    try {
+      const dataUrl = await readImageFile(file);
+      setDocAssetsDraft((prev) => {
+        const base: DocAssetsDraft = prev ?? parseDocAssets(brand?.docAssets);
+        const slot: DocAssetSlotDraft = { ...base[docType] };
+        if (side === "header") slot.header = dataUrl;
+        else slot.footer = dataUrl;
+        const next: DocAssetsDraft = { ...base };
+        next[docType] = slot;
+        return next;
+      });
+      setDocAssetsDirty(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memuat gambar");
+    }
+  }
+
+  function clearDocAsset(docType: "quotation" | "invoice", side: "header" | "footer") {
+    setDocAssetsDraft((prev) => {
+      const base: DocAssetsDraft = prev ?? parseDocAssets(brand?.docAssets);
+      const slot: DocAssetSlotDraft = { ...base[docType] };
+      if (side === "header") slot.header = "";
+      else slot.footer = "";
+      const next: DocAssetsDraft = { ...base };
+      next[docType] = slot;
+      return next;
+    });
+    setDocAssetsDirty(true);
+  }
+
+  // ---------- Aksi: penomoran (Ronde 50 — PUT /api/brands/:id/numbering) ----------
+  async function saveNumbering() {
+    if (!numbering) return;
+    const rules: NumberingRuleDTO[] = [];
+    for (const docType of NUMBERING_DOC_TYPES) {
+      const draft = numbering[docType];
+      const template = draft.template.trim();
+      const check = validateNumberingTemplate(template);
+      if (!check.valid) {
+        toast.error(`Template ${DOC_TYPE_LABELS[docType]}: ${check.error ?? "tidak valid"}`);
+        return;
+      }
+      rules.push({
+        docType,
+        template,
+        docCode: draft.docCode.trim().toUpperCase().slice(0, 12) || DOC_TYPE_DEFAULT_CODE[docType],
+        resetPeriod: draft.resetPeriod,
+        seq: parseSeq(draft.seq),
+      });
+    }
+    setSavingNumbering(true);
+    try {
+      const res = await api.saveNumbering(activeBrand.id, rules);
+      setNumbering(rulesToDrafts(res.rules));
+      setNumberingLoaded(true);
+      toast.success(`Aturan penomoran tersimpan — nomor berikutnya: ${res.preview.map((p) => p.nextNumber).join(" · ")}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menyimpan aturan penomoran");
+    } finally {
+      setSavingNumbering(false);
     }
   }
 
@@ -499,7 +748,7 @@ export default function BrandSettingsDialog({
             <div className="min-w-0 flex-1">
               <DialogTitle className="truncate text-base">Pengaturan Brand — {brand.name}</DialogTitle>
               <DialogDescription className="truncate text-xs">
-                Identitas asli, katalog layanan + workflow produksi, surat, dan integrasi kanal milik brand ini.
+                Identitas asli, katalog layanan + workflow produksi, surat & penomoran, dan integrasi kanal milik brand ini.
               </DialogDescription>
             </div>
           </div>
@@ -511,6 +760,7 @@ export default function BrandSettingsDialog({
               <TabsTrigger value="identity" className="gap-1.5 px-2.5 text-xs"><Building2 className="h-3.5 w-3.5" aria-hidden /> Identitas</TabsTrigger>
               <TabsTrigger value="services" className="gap-1.5 px-2.5 text-xs"><Layers className="h-3.5 w-3.5" aria-hidden /> Layanan & Workflow</TabsTrigger>
               <TabsTrigger value="letter" className="gap-1.5 px-2.5 text-xs"><FileText className="h-3.5 w-3.5" aria-hidden /> Surat</TabsTrigger>
+              <TabsTrigger value="penomoran" className="gap-1.5 px-2.5 text-xs"><Hash className="h-3.5 w-3.5" aria-hidden /> Penomoran</TabsTrigger>
               <TabsTrigger value="integrasi" className="gap-1.5 px-2.5 text-xs"><Link2 className="h-3.5 w-3.5" aria-hidden /> Integrasi</TabsTrigger>
             </TabsList>
           </div>
@@ -624,6 +874,90 @@ export default function BrandSettingsDialog({
                     </p>
                   </div>
                 </div>
+                {/* Ronde 50 — Identitas Dokumen Resmi */}
+                {official ? (
+                  <div className="space-y-4 rounded-xl border p-4">
+                    <div>
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+                        <Landmark className="h-4 w-4 text-zinc-500" aria-hidden /> Identitas Dokumen Resmi
+                      </p>
+                      <p className="mt-0.5 text-xs text-zinc-500">Dipakai pada kop surat, faktur, dan blok tanda tangan dokumen resmi brand ini.</p>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bs-shortcode" className="text-xs">Kode Brand</Label>
+                        <Input id="bs-shortcode" className="h-9 font-mono uppercase" maxLength={10} value={official.shortCode}
+                          onChange={(e) => setOfficial({ ...official, shortCode: e.target.value.toUpperCase().slice(0, 10) })}
+                          placeholder="mis. UDP" />
+                        <p className="text-[11px] text-zinc-500">Kode singkat untuk penomoran, mis. UDP.</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bs-npwp" className="text-xs">NPWP</Label>
+                        <Input id="bs-npwp" className="h-9" value={official.npwp}
+                          onChange={(e) => setOfficial({ ...official, npwp: e.target.value })}
+                          placeholder="mis. 01.234.567.8-901.000" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bs-signer" className="text-xs">Nama Penanda Tangan</Label>
+                        <Input id="bs-signer" className="h-9" value={official.signerName}
+                          onChange={(e) => setOfficial({ ...official, signerName: e.target.value })}
+                          placeholder="mis. Andri Saputro" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bs-closing" className="text-xs">Salam Penutup Dokumen</Label>
+                        <Input id="bs-closing" className="h-9" value={official.signerClosing}
+                          onChange={(e) => setOfficial({ ...official, signerClosing: e.target.value })}
+                          placeholder="mis. Best regards and enjoy the process," />
+                      </div>
+                    </div>
+                    <div className="space-y-2 border-t pt-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Rekening Bank — blok &quot;Payment to&quot; faktur</p>
+                      {bankRows.length === 0 ? (
+                        <p className="text-xs italic text-zinc-400">Belum ada rekening — tambahkan minimal satu rekening brand.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {bankRows.map((row, idx) => (
+                            <div key={idx} className="grid gap-2 rounded-lg border bg-zinc-50/60 p-2.5 sm:grid-cols-[1fr_1.2fr_1fr_1.2fr_36px] sm:items-end">
+                              <div className="space-y-1">
+                                <Label htmlFor={`bs-bank-${idx}`} className="text-[11px]">Bank</Label>
+                                <Input id={`bs-bank-${idx}`} className="h-8 text-xs" value={row.bank} placeholder="mis. BCA"
+                                  onChange={(e) => setBankRows((m) => m.map((r, i) => (i === idx ? { ...r, bank: e.target.value } : r)))} />
+                              </div>
+                              <div className="space-y-1">
+                                <Label htmlFor={`bs-bank-no-${idx}`} className="text-[11px]">Nomor Rekening</Label>
+                                <Input id={`bs-bank-no-${idx}`} className="h-8 font-mono text-xs" value={row.number} placeholder="mis. 1234567890"
+                                  onChange={(e) => setBankRows((m) => m.map((r, i) => (i === idx ? { ...r, number: e.target.value } : r)))} />
+                              </div>
+                              <div className="space-y-1">
+                                <Label htmlFor={`bs-bank-branch-${idx}`} className="text-[11px]">Cabang</Label>
+                                <Input id={`bs-bank-branch-${idx}`} className="h-8 text-xs" value={row.branch} placeholder="mis. Yogyakarta"
+                                  onChange={(e) => setBankRows((m) => m.map((r, i) => (i === idx ? { ...r, branch: e.target.value } : r)))} />
+                              </div>
+                              <div className="space-y-1">
+                                <Label htmlFor={`bs-bank-holder-${idx}`} className="text-[11px]">Nama Pemilik</Label>
+                                <Input id={`bs-bank-holder-${idx}`} className="h-8 text-xs" value={row.holder} placeholder="mis. PT Unimasi Karya"
+                                  onChange={(e) => setBankRows((m) => m.map((r, i) => (i === idx ? { ...r, holder: e.target.value } : r)))} />
+                              </div>
+                              <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-rose-600"
+                                aria-label={`Hapus rekening ${row.bank || idx + 1}`}
+                                onClick={() => setBankRows((m) => m.filter((_, i) => i !== idx))}>
+                                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button type="button" size="sm" variant="outline" className="h-8"
+                          disabled={bankRows.length >= 6}
+                          onClick={() => setBankRows((m) => [...m, { bank: "", number: "", branch: "", holder: "" }])}>
+                          <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Rekening
+                        </Button>
+                        <span className="text-[11px] text-zinc-400">Maksimal 6 rekening · baris kosong dibuang saat disimpan</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex justify-end border-t pt-4">
                   <Button type="button" className="h-9" onClick={() => void saveIdentity()} disabled={savingIdentity}>
                     {savingIdentity ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />}
@@ -674,6 +1008,33 @@ export default function BrandSettingsDialog({
                     <li>Sisakan margin aman ±40 px di dalam desain agar teks tidak menempel tepi kertas.</li>
                   </ul>
                 </div>
+
+                {/* Ronde 50 — pilih jenis surat: kop umum atau kop khusus quotation/invoice */}
+                <div className="rounded-xl border p-4">
+                  <p className="text-sm font-semibold text-zinc-900">Jenis surat</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">
+                    Kop &amp; kaki dapat dibedakan per jenis dokumen — quotation dan invoice boleh punya kop sendiri.
+                  </p>
+                  <div className="mt-2.5 inline-flex w-full gap-1 rounded-lg bg-zinc-100 p-1 sm:w-auto">
+                    {([
+                      { key: "umum", label: "Umum (semua surat)" },
+                      { key: "quotation", label: "Quotation" },
+                      { key: "invoice", label: "Invoice" },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.key} type="button" onClick={() => setLetterDocMode(opt.key)}
+                        aria-pressed={letterDocMode === opt.key}
+                        className={`flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:flex-none ${
+                          letterDocMode === opt.key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {letterDocMode === "umum" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   {/* Kop surat */}
                   <div className="space-y-2 rounded-xl border p-4">
@@ -742,6 +1103,29 @@ export default function BrandSettingsDialog({
                     </div>
                   </div>
                 </div>
+                ) : (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <DocKopSlot
+                      docType={letterDocMode} side="header"
+                      value={docAssetsDraft?.[letterDocMode]?.header ?? ""}
+                      brandName={brand.name}
+                      onPick={(file) => void pickDocAsset(letterDocMode, "header", file)}
+                      onClear={() => clearDocAsset(letterDocMode, "header")}
+                    />
+                    <DocKopSlot
+                      docType={letterDocMode} side="footer"
+                      value={docAssetsDraft?.[letterDocMode]?.footer ?? ""}
+                      brandName={brand.name}
+                      onPick={(file) => void pickDocAsset(letterDocMode, "footer", file)}
+                      onClear={() => clearDocAsset(letterDocMode, "footer")}
+                    />
+                  </div>
+                  <p className="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <Info className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden /> Jika kosong, memakai kop Umum brand.
+                  </p>
+                </>
+                )}
 
                 {/* Gaya template */}
                 <div className="grid gap-4 rounded-xl border p-4 sm:grid-cols-2">
@@ -826,7 +1210,45 @@ export default function BrandSettingsDialog({
             ) : null}
           </TabsContent>
 
-          {/* ===== TAB 4: INTEGRASI ===== */}
+          {/* ===== TAB 4: PENOMORAN (Ronde 50) ===== */}
+          <TabsContent value="penomoran" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
+            {numberingLoading && !numbering ? (
+              <div className="flex h-40 items-center justify-center gap-2 text-sm text-zinc-500">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memuat aturan penomoran…
+              </div>
+            ) : numbering ? (
+              <div className="space-y-4">
+                <p className="text-xs leading-relaxed text-zinc-500">
+                  Aturan ini dipakai otomatis saat quotation/invoice baru terbit untuk brand ini.
+                  Counter adalah nomor terakhir yang terpakai — nomor berikutnya selalu counter + 1.
+                </p>
+                {NUMBERING_DOC_TYPES.map((docType) => (
+                  <NumberingRuleCard
+                    key={docType}
+                    docType={docType}
+                    brandCode={effectiveBrandCode}
+                    draft={numbering[docType]}
+                    onChange={(next) => setNumbering((m) => {
+                      if (!m) return m;
+                      const copy: Record<NumberingDocType, NumberingDraft> = { ...m };
+                      copy[docType] = next;
+                      return copy;
+                    })}
+                  />
+                ))}
+                <div className="flex justify-end border-t pt-4">
+                  <Button type="button" className="h-9" onClick={() => void saveNumbering()} disabled={savingNumbering}>
+                    {savingNumbering ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />}
+                    Simpan aturan penomoran
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-500">Aturan penomoran belum termuat.</p>
+            )}
+          </TabsContent>
+
+          {/* ===== TAB 5: INTEGRASI ===== */}
           <TabsContent value="integrasi" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
             <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5 text-xs leading-relaxed text-emerald-900">
               <p className="font-semibold">Integrasi milik {brand.name} sendiri</p>
@@ -973,6 +1395,207 @@ export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | 
         <span className="font-bold" style={{ color: brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
       )}
     </span>
+  );
+}
+
+// ============ Ronde 50 — kartu builder rule penomoran per jenis dokumen ============
+
+function NumberingRuleCard({
+  docType, draft, brandCode, onChange,
+}: {
+  docType: NumberingDocType;
+  draft: NumberingDraft;
+  brandCode: string;
+  onChange: (next: NumberingDraft) => void;
+}) {
+  const templateRef = useRef<HTMLInputElement | null>(null);
+  const validation = validateNumberingTemplate(draft.template);
+
+  const seqNext = parseSeq(draft.seq) + 1;
+  const previewCtx = {
+    date: new Date(),
+    docCode: draft.docCode.trim() || DOC_TYPE_DEFAULT_CODE[docType],
+    brandCode,
+  };
+  const previewNext = validation.valid
+    ? renderNumberTemplate(draft.template, { ...previewCtx, seq: seqNext, revisionNo: 0 })
+    : null;
+  const previewRevision = validation.valid
+    ? renderNumberTemplate(draft.template, { ...previewCtx, seq: seqNext, revisionNo: 1 })
+    : null;
+
+  /** Sisipkan token di posisi kursor (atau di akhir bila input belum fokus). */
+  function insertToken(token: string) {
+    const el = templateRef.current;
+    if (!el) {
+      onChange({ ...draft, template: draft.template + token });
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const nextTemplate = el.value.slice(0, start) + token + el.value.slice(end);
+    onChange({ ...draft, template: nextTemplate });
+    // Kembalikan fokus + posisi kursor setelah token (setelah React se-render).
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + token.length;
+      try { el.setSelectionRange(pos, pos); } catch { /* noop — input tertentu tak mendukung selection */ }
+    });
+  }
+
+  return (
+    <div className="rounded-xl border bg-white p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100" aria-hidden>
+          <FileText className="h-4 w-4 text-zinc-500" />
+        </span>
+        <p className="text-sm font-bold text-zinc-900">{DOC_TYPE_LABELS[docType]}</p>
+      </div>
+
+      <div className="mt-3 space-y-1.5">
+        <Label htmlFor={`bs-num-tpl-${docType}`} className="text-xs">Template nomor</Label>
+        <Input
+          id={`bs-num-tpl-${docType}`} ref={templateRef}
+          className="h-9 font-mono text-sm" value={draft.template}
+          onChange={(e) => onChange({ ...draft, template: e.target.value })}
+          placeholder={DEFAULT_NUMBERING_TEMPLATE}
+        />
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          {NUMBERING_CHIP_TOKENS.map((token) => (
+            <button
+              key={token} type="button" onClick={() => insertToken(token)}
+              aria-label={`Sisipkan token ${token}`}
+              className="rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-[11px] text-zinc-600 transition-colors hover:border-zinc-900 hover:bg-white hover:text-zinc-900"
+            >
+              {token}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          SEQ = nomor urut · DOC = kode dokumen · BRAND = kode brand · ROMAN = bulan romawi · MM/YY/YYYY = tanggal. Klik chip untuk menyisipkan token.
+        </p>
+        {!validation.valid ? (
+          <p className="flex items-center gap-1 text-xs font-medium text-rose-600">
+            <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden /> {validation.error}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor={`bs-num-code-${docType}`} className="text-xs">Kode dokumen ({"{DOC}"})</Label>
+          <Input
+            id={`bs-num-code-${docType}`}
+            className="h-9 font-mono uppercase" maxLength={12} value={draft.docCode}
+            onChange={(e) => onChange({ ...draft, docCode: e.target.value.toUpperCase().slice(0, 12) })}
+            placeholder={DOC_TYPE_DEFAULT_CODE[docType]}
+          />
+          <p className="text-[11px] text-zinc-500">Huruf besar, maks 12 karakter — kosong memakai default {DOC_TYPE_DEFAULT_CODE[docType]}.</p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`bs-num-reset-${docType}`} className="text-xs">Reset counter</Label>
+          <Select value={draft.resetPeriod} onValueChange={(v) => onChange({ ...draft, resetPeriod: v })}>
+            <SelectTrigger id={`bs-num-reset-${docType}`} className="h-9 w-full" aria-label="Periode reset counter">
+              <SelectValue placeholder="Pilih periode reset" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(RESET_PERIOD_LABELS).map(([key, label]) => (
+                <SelectItem key={key} value={key}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor={`bs-num-seq-${docType}`} className="text-xs">Counter — nomor berikutnya = counter + 1</Label>
+          <Input
+            id={`bs-num-seq-${docType}`} type="number" min={0} max={999999} inputMode="numeric"
+            className="h-9 w-full sm:w-40" value={draft.seq}
+            onChange={(e) => onChange({ ...draft, seq: e.target.value })}
+          />
+          <p className="text-[11px] text-zinc-500">Setel mis. 11 agar nomor berikutnya 012.</p>
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-1 rounded-lg border border-dashed bg-zinc-50/60 px-3 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Pratinjau langsung</p>
+        {previewNext ? (
+          <>
+            <p className="font-mono text-sm font-semibold text-zinc-900">Pratinjau nomor berikutnya: {previewNext}</p>
+            <p className="font-mono text-xs text-zinc-500">Contoh revisi ke-1: {previewRevision}</p>
+          </>
+        ) : (
+          <p className="text-xs italic text-zinc-400">Perbaiki template untuk melihat pratinjau nomor.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Ronde 50 — slot unggah kop/kaki per jenis surat (docAssets) ============
+
+function DocKopSlot({
+  docType, side, value, brandName, onPick, onClear,
+}: {
+  docType: "quotation" | "invoice";
+  side: "header" | "footer";
+  value: string;
+  brandName: string;
+  onPick: (file: File | undefined) => void;
+  onClear: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
+  // Ukur dimensi natural gambar (panduan cetak A4 sama dgn kop umum).
+  // Tanpa setState sinkron di effect-body — dims hanya dirender saat value ada,
+  // jadi tidak perlu reset manual (menghindari cascading render).
+  useEffect(() => {
+    if (!value) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (!cancelled) setDims({ w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.src = value;
+    return () => { cancelled = true; };
+  }, [value]);
+
+  const docLabel = docType === "quotation" ? "Quotation" : "Invoice";
+  const sideLabel = side === "header" ? "Kop surat (header)" : "Kaki surat (footer)";
+
+  return (
+    <div className="space-y-2 rounded-xl border p-4">
+      <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+        <ImageIcon className="h-4 w-4 text-zinc-400" aria-hidden /> {sideLabel} — {docLabel}
+      </p>
+      <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg border bg-zinc-50">
+        {value ? (
+          <img src={value} alt={`${sideLabel} ${docLabel} ${brandName}`} className="max-h-full max-w-full object-contain" />
+        ) : (
+          <p className="px-3 text-center text-xs text-zinc-400">Belum ada gambar — surat {docLabel.toLowerCase()} memakai kop Umum</p>
+        )}
+      </div>
+      {value ? (
+        <p className="text-[10px] leading-snug text-zinc-500">
+          Dimensi asli: <span className="font-mono font-semibold text-zinc-700">{dims ? `${dims.w} × ${dims.h}px` : "…"}</span>
+          {dims && dims.w > 0 ? ` · dicetak selebar 794px → tinggi ±${Math.round((dims.h / dims.w) * 794)}px di kertas` : null}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <input
+          ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp"
+          className="hidden" onChange={(e) => { onPick(e.target.files?.[0]); e.currentTarget.value = ""; }}
+        />
+        <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => inputRef.current?.click()}>
+          <ImageIcon className="h-3.5 w-3.5" aria-hidden /> Unggah
+        </Button>
+        {value ? (
+          <Button type="button" size="sm" variant="ghost" className="h-8 text-rose-600 hover:text-rose-700" onClick={onClear}>
+            <Trash2 className="h-3.5 w-3.5" aria-hidden /> Hapus
+          </Button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

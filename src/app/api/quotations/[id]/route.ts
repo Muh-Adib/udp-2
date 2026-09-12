@@ -4,9 +4,57 @@ import { ok, fail, readBody, logAudit, clampNum, dateOrNull, isUniqueViolation }
 import { resolveActor } from "@/lib/crm/auth";
 import { sendPushToRoles } from "@/lib/crm/push";
 import { CHANNELS } from "@/lib/crm/constants";
+import { nextDocumentNumber } from "@/lib/crm/numbering";
+
+/** Ronde 50 — item quotation → item faktur (deskripsi/qty/unitPrice; unit "1" default). */
+function parseQuotationItemsToInvoiceItems(raw: string): Array<{ description: string; qty: number; unit: string; unitPrice: number; total: number }> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((it) => it && String((it as { description?: string }).description ?? "").trim())
+      .map((it) => {
+        const qty = Math.max(0, Number((it as { qty?: number }).qty ?? 1) || 1);
+        const unitPrice = Math.max(0, Number((it as { unitPrice?: number }).unitPrice ?? 0) || 0);
+        return {
+          description: String((it as { description?: string }).description).trim().slice(0, 300),
+          qty,
+          unit: "",
+          unitPrice,
+          total: Math.round(qty * unitPrice),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
 
 // Ronde 40 — kanal pengiriman quotation: whitelist key CHANNELS (fallback email)
 const CHANNEL_KEYS: readonly string[] = CHANNELS.map((c) => c.key);
+
+/** Ronde 50 — teks pendek surat penawaran (trim + batasi panjang). */
+function shortText(v: unknown, max: number): string | null {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+/** Ronde 50 — field surat penawaran (gaya Unicam) dari body PATCH. */
+function letterFields(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if ("attachment" in body) {
+    const n = Number(body.attachment);
+    out.attachment = Number.isFinite(n) ? Math.min(99, Math.max(0, Math.floor(n))) : 1;
+  }
+  if ("regarding" in body) out.regarding = shortText(body.regarding, 160);
+  if ("attn" in body) out.attn = shortText(body.attn, 120);
+  if ("clientAddress" in body) out.clientAddress = shortText(body.clientAddress, 400);
+  if ("letterBody" in body) out.letterBody = shortText(body.letterBody, 4000);
+  if ("letterClosing" in body) out.letterClosing = shortText(body.letterClosing, 2000);
+  if ("timeline" in body) out.timeline = shortText(body.timeline, 400);
+  if ("revisionNotes" in body) out.revisionNotes = shortText(body.revisionNotes, 1200);
+  if ("termOfPayment" in body) out.termOfPayment = shortText(body.termOfPayment, 1200);
+  return out;
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -112,13 +160,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (quotation.status !== "accepted") return fail("Hanya quotation yang diterima (accepted) yang dapat dikonversi ke invoice");
     const existing = await db.invoice.findFirst({ where: { description: { contains: quotation.number } } });
     if (existing) return fail(`Invoice untuk quotation ini sudah ada: ${existing.number}`);
-    const invCount = await db.invoice.count();
-    const year = new Date().getFullYear();
+    // Ronde 50 — penomoran via rule brand (fallback legacy), item faktur disalin dari item quotation.
     let number = "";
-    for (let attempt = 0; attempt < 5 && !number; attempt++) {
-      const candidate = `${quotation.brand.invoicePrefix}-${year}-INV-${String(invCount + attempt + 1).padStart(3, "0")}`;
-      const exists = await db.invoice.findUnique({ where: { number: candidate } });
-      if (!exists) number = candidate;
+    let baseNumber = "";
+    let seqNo = 0;
+    for (let attempt = 0; attempt < 3 && !number; attempt++) {
+      try {
+        const res = await nextDocumentNumber(quotation.brandId, "invoice");
+        number = res.number;
+        baseNumber = res.baseNumber;
+        seqNo = res.seq;
+      } catch {
+        number = "";
+      }
     }
     if (!number) return fail("Gagal menyusun nomor invoice unik — coba sekali lagi", 409);
     const amount = quotation.total - quotation.taxAmount;
@@ -131,6 +185,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         return tx.invoice.create({
           data: {
             number,
+            baseNumber,
+            seqNo,
             brandId: quotation.brandId,
             companyId: quotation.companyId,
             opportunityId: quotation.opportunityId,
@@ -141,6 +197,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             taxName: quotation.taxName,
             taxAmount: quotation.taxAmount,
             total: quotation.total,
+            // Ronde 50 — item baris faktur = item quotation (deskripsi/qty/harga)
+            items: JSON.stringify(
+              parseQuotationItemsToInvoiceItems(quotation.items),
+            ),
+            projectName: quotation.opportunity?.title ?? null,
+            attn: quotation.attn,
+            clientAddress: quotation.clientAddress,
             currency: quotation.currency,
             status: "draft",
             dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
@@ -218,6 +281,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if ("notes" in body) data.notes = body.notes ? String(body.notes) : null;
   // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
   if ("validUntil" in body) data.validUntil = dateOrNull(body.validUntil);
+  // Ronde 50 — field surat penawaran (gaya Unicam) bisa diedit saat draft.
+  Object.assign(data, letterFields(body));
 
   const updated = await db.quotation.update({
     where: { id },

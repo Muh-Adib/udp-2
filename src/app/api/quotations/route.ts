@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, dateOrNull, isUniqueViolation, clampNum } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
+import { nextDocumentNumber, revisionDocumentNumber } from "@/lib/crm/numbering";
+import { stripRevisionSuffix } from "@/lib/crm/numbering-core";
 
 interface QuotationItem {
   description: string;
@@ -32,6 +34,30 @@ function computeTotals(items: QuotationItem[], discountPct: number, taxPct: numb
   const afterDiscount = subtotal - discountAmount;
   const taxAmount = Math.round((afterDiscount * taxPct) / 100);
   return { subtotal, discountAmount, taxAmount, total: afterDiscount + taxAmount };
+}
+
+/** Ronde 50 — teks pendek surat penawaran (trim + batasi panjang). */
+function shortText(v: unknown, max: number): string | null {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+/** Ronde 50 — field surat penawaran (gaya Unicam) dari body. */
+function letterFields(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if ("attachment" in body) {
+    const n = Number(body.attachment);
+    out.attachment = Number.isFinite(n) ? Math.min(99, Math.max(0, Math.floor(n))) : 1;
+  }
+  if ("regarding" in body) out.regarding = shortText(body.regarding, 160);
+  if ("attn" in body) out.attn = shortText(body.attn, 120);
+  if ("clientAddress" in body) out.clientAddress = shortText(body.clientAddress, 400);
+  if ("letterBody" in body) out.letterBody = shortText(body.letterBody, 4000);
+  if ("letterClosing" in body) out.letterClosing = shortText(body.letterClosing, 2000);
+  if ("timeline" in body) out.timeline = shortText(body.timeline, 400);
+  if ("revisionNotes" in body) out.revisionNotes = shortText(body.revisionNotes, 1200);
+  if ("termOfPayment" in body) out.termOfPayment = shortText(body.termOfPayment, 1200);
+  return out;
 }
 
 export async function GET(req: NextRequest) {
@@ -87,19 +113,25 @@ export async function POST(req: NextRequest) {
   const taxPct = taxName === null ? 0 : clampNum(body.taxPct ?? 11, 0, 100, 11);
   const totals = computeTotals(items, discountPct, taxPct);
 
-  // Ronde 36 (audit): nomor unik dicek loop 5x + P2002 → 409 ramah.
-  const year = new Date().getFullYear();
+  // Ronde 50 — penomoran via rule brand (builder) dgn fallback pola legacy;
+  // tabrakan nomor (double-click paralel) → coba lagi (maks 3x).
   let number = "";
-  for (let attempt = 0; attempt < 5 && !number; attempt++) {
-    const count = await db.quotation.count();
-    const candidate = `${opp.brand.quotePrefix}-${year}-${String(count + attempt + 1).padStart(4, "0")}`;
-    const exists = await db.quotation.findUnique({ where: { number: candidate } });
-    if (!exists) number = candidate;
+  let baseNumber = "";
+  let seqNo = 0;
+  for (let attempt = 0; attempt < 3 && !number; attempt++) {
+    try {
+      const res = await nextDocumentNumber(opp.brandId, "quotation");
+      number = res.number;
+      baseNumber = res.baseNumber;
+      seqNo = res.seq;
+    } catch {
+      number = "";
+    }
   }
   if (!number) return fail("Gagal menyusun nomor quotation unik — coba sekali lagi", 409);
 
-  // Ronde 39 — revisi quotation: quotation baru menunjuk quotation yang direvisi
-  // (riwayat versi tersambung — dulu quotation ditolak = jalan buntu).
+  // Ronde 39/50 — revisi quotation: quotation baru menunjuk quotation yang direvisi,
+  // nomor memakai DASAR nomor sumber + sufiks: 012/QT-UDP/I/26 → 012-1/QT-UDP/I/26.
   let revisionOfId: string | null = null;
   let revisionNo = 0;
   if (body.revisionOfId) {
@@ -108,29 +140,45 @@ export async function POST(req: NextRequest) {
     if (src.opportunityId !== opp.id) return fail("Quotation sumber revisi bukan milik opportunity ini", 400);
     revisionOfId = src.id;
     revisionNo = src.revisionNo + 1;
+    const rev = await revisionDocumentNumber(opp.brandId, "quotation", src.number, src.revisionNo, src.seqNo, src.createdAt);
+    number = rev.number;
+    baseNumber = rev.baseNumber ?? stripRevisionSuffix(src.number);
+    seqNo = rev.seq ?? src.seqNo;
   }
 
-  const quotation = await db.quotation.create({
-    data: {
-      number,
-      brandId: opp.brandId,
-      opportunityId: opp.id,
-      companyId: opp.companyId,
-      items: JSON.stringify(items),
-      ...totals,
-      discountPct,
-      taxPct,
-      taxName,
-      currency: opp.currency,
-      status: "draft",
-      revisionOfId,
-      revisionNo,
-      // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini fallback 14 hari (sebelumnya 500)
-      validUntil: dateOrNull(body.validUntil) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      notes: body.notes ? String(body.notes) : null,
-    },
-    include: { brand: true, company: true, opportunity: { select: { id: true, title: true, stage: true } } },
-  });
+  // Ronde 50 — nomor revisi deterministik: dua klik paralel → P2002 → 409 ramah.
+  let quotation;
+  try {
+    quotation = await db.quotation.create({
+      data: {
+        number,
+        baseNumber,
+        seqNo,
+        brandId: opp.brandId,
+        opportunityId: opp.id,
+        companyId: opp.companyId,
+        items: JSON.stringify(items),
+        ...totals,
+        discountPct,
+        taxPct,
+        taxName,
+        currency: opp.currency,
+        status: "draft",
+        revisionOfId,
+        revisionNo,
+        ...letterFields(body),
+        // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini fallback 14 hari (sebelumnya 500)
+        validUntil: dateOrNull(body.validUntil) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+        notes: body.notes ? String(body.notes) : null,
+      },
+      include: { brand: true, company: true, opportunity: { select: { id: true, title: true, stage: true } } },
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return fail(`Nomor ${number} baru saja dipakai proses lain — muat ulang lalu coba lagi`, 409);
+    }
+    throw err;
+  }
 
   await logAudit({
     actorName, actorRole, action: "create", entity: "quotation", entityId: quotation.id,
