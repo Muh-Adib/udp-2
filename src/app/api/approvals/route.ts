@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 import { sendPushToRoles } from "@/lib/crm/push";
+import { nextDocumentNumber } from "@/lib/crm/numbering";
 
 // Ronde 49 — RAB kategori→item hasil parse JSON estimation.costCategories
 interface RabCategory {
@@ -114,20 +115,25 @@ async function autoCreateQuotationFromEstimation(
   const taxAmount = round((netRevenue * taxPct) / 100);
   const total = netRevenue + taxAmount;
 
-  // Nomor quotation — pola sama dgn /api/quotations POST
-  const year = new Date().getFullYear();
+  // Nomor quotation — Ronde 50: via rule penomoran brand (fallback pola legacy sama).
   let number = "";
-  for (let attempt = 0; attempt < 5 && !number; attempt++) {
-    const count = await db.quotation.count();
-    const candidate = `${opp.brand.quotePrefix}-${year}-${String(count + attempt + 1).padStart(4, "0")}`;
-    const exists = await db.quotation.findUnique({ where: { number: candidate } });
-    if (!exists) number = candidate;
+  let baseNumber = "";
+  let seqNo = 0;
+  try {
+    const res = await nextDocumentNumber(opp.brandId, "quotation");
+    number = res.number;
+    baseNumber = res.baseNumber;
+    seqNo = res.seq;
+  } catch {
+    return null;
   }
   if (!number) return null;
 
   const quotation = await db.quotation.create({
     data: {
       number,
+      baseNumber,
+      seqNo,
       brandId: opp.brandId,
       opportunityId: opp.id,
       companyId: opp.companyId,

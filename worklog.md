@@ -2069,3 +2069,16 @@ Stage Summary:
 - Ronde 50 lengkap: builder penomoran per brand per jenis surat (dgn token template + counter + reset + preview), revisi dokumen quotation & invoice dgn nomor imbuhan di segmen SEQ (012 → 012-1 → 012-2), format cetak quotation & invoice gaya Unicam persis contoh user (termasuk terbilang dua bahasa, DP%, PPh potong, Payment to + NPWP, TTD), kop surat berbeda per jenis dokumen (quotation/invoice punya gambar sendiri, fallback kop umum), logo WhatsApp asli. Bonus audit: bug dashboard 500 (milestone yatim) ditemukan & diperbaiki permanen dgn cascade.
 - CATATAN: sandbox dev server mati sendiri setelah ±30 dtk bila pola detach salah — gunakan `setsid bash -c 'nohup bun run dev >> dev.log 2>&1 < /dev/null &'`; setelah prisma db push WAJIB bunx prisma generate + restart dev server (client basi → PrismaClientValidationError).
 - BACKLOG LANJUTAN: R49 (estimasi format kategori×item + konversi ke quotation dgn adjustment grand total) belum dikerjakan; attachment >1.1MB kompresi; WA/email kirim mode dev (client-side); RBAC enforcement lintas modul lain; A4 print uji fisik.
+---
+Task ID: 50-b
+Agent: main (Z.ai Code)
+Task: Integrasi rebase R49 (origin) ↔ R50 — auto-convert estimasi→quotation ikut sistem penomoran baru + pulihkan perbaikan data pasca-rebase
+
+Work Log:
+- origin/main ternyata maju ke fea7024 (Ronde 49 oleh agent lain: logo WA resmi versi forwardRef + estimasi RAB kategori×item + auto-konversi penawaran). Rebase: skip commit R48 duplikat lokal (isi sudah ada di remote), resolve konflik brand-settings-dialog (union import ikon), finance-module (pertahankan aria-hidden R49 + fitur R50), whatsapp-icon.tsx (ambil versi R49 forwardRef — kompatibel dgn pemakaian R50), db/custom.db → versi baru.
+- approvals/route.ts (auto-konversi estimasi→penawaran milik R49) kini memakai nextDocumentNumber + baseNumber/seqNo (sebelumnya pola legacy inline) — nomor penawaran otomatis mengikuti builder penomoran brand.
+- Pasca-rebase db/custom.db kembali ke kondisi R49 → jalankan ulang: hapus 6 milestone yatim (dashboard 500), PATCH identitas Unicam (UDP/NPWP/Bank Mandiri/TTD Andri), PUT rule penomoran QT+INV (preview 001/QT-UDP/IX/26). Dashboard 200, quotations/invoices/brands 200.
+- Schema merged terverifikasi: costCategories (R49) + NumberingRule/seqNo/cascade (R50) hidup berdampingan; tsc 0, lint bersih.
+
+Stage Summary:
+- HEAD = R49 + R50 utuh: penomoran builder berlaku untuk SEMUA pembuatan quotation (manual, revisi, auto-convert dari estimasi) dan invoice (manual, project, DP Won, convert quotation, revisi). Unicam siap demo format Unicam end-to-end.
