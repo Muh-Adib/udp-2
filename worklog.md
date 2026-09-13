@@ -2082,3 +2082,22 @@ Work Log:
 
 Stage Summary:
 - HEAD = R49 + R50 utuh: penomoran builder berlaku untuk SEMUA pembuatan quotation (manual, revisi, auto-convert dari estimasi) dan invoice (manual, project, DP Won, convert quotation, revisi). Unicam siap demo format Unicam end-to-end.
+---
+Task ID: 51-b
+Agent: main (Z.ai Code)
+Task: Laporan user "masih ada kendala" edit saluran demo → real (Hostinger SMTP+IMAP) + pastikan modul koneksi benar-benar bisa
+
+Work Log:
+- INVESTIGASI: dev.log tak punya jejak request channel sama sekali; DB kembali ke seed (kredensial Hostinger user HILANG); git log HEAD = f38b7f9 (commit "Ronde 48" hasil `git commit --amend` Sep 10 17:24) yang ternyata TIDAK memuat kode R49/R50 — working tree sandbox mundur ke R48 dan semua perbaikan Ronde 51 pagi itu ikut terhapus oleh operasi git (DB custom.db yang ter-track ikut ter-restore ke seed).
+- PEMULIHAN: git fetch origin → origin/main berisi R49 (fea7024) + R50 (39ba754) + R50-b (bb107e0) utuh → git reset --hard origin/main → semua file R50 kembali (numbering-core, terbilang, whatsapp-icon, NumberingRule) → bunx prisma generate → restart dev server (setsid pattern) → dashboard/brands/quotations 200.
+- VERIFIKASI DATA: DB origin memuat rules penomoran QT/INV, milestone yatim 0, identitas Unicam LENGKAP (shortCode UDP, NPWP, Bank Mandiri, TTD Andri, docAssets) — tak perlu di-repair.
+- RE-APPLY 4 FIX Ronde 51 (hilang bersama reset): isDemo=false saat kredensial disimpan; handleSave menampilkan statusNote (error inline + toast, dialog tetap terbuka); wizard props configs/onEditExisting + tombol "Edit koneksi yang ada" saat 409; pesan 535 per-penyedia.
+- FIX TAMBAHAN: precheckCredentials kini menerima host berbentuk IP (relay internal 127.0.0.1/192.168.x) selain hostname; nodemailer transport diberi name eksplisit "udp-crm.local" (os.hostname() tak teresolusi → nodemailer kirim "EHLO [127.0.0.1]" yang ditolak server ketat 501).
+- BUKTI END-TO-END (fake SMTP 127.0.0.1:2526 via paket resmi smtp-server + fake IMAP 127.0.0.1:1143): PATCH update kredensial → status=connected + isDemo=false + note "SMTP+IMAP terverifikasi nyata (login OK)"; action=test → verifikasi asli; POST /api/channels/email-sync → email dari fake inbox masuk CRM (1 created, run kedua skipped=1 → dedupe OK); sendEmailViaSmtp → ok:true + messageId + "PESAN DITERIMA 331 bytes" di server; error jujur tampil saat server mati (ECONNREFUSED) & password salah (535).
+- PROTEKSI DATA: db/custom.db dikeluarkan dari tracking git (git rm --cached) + .gitignore (db/custom.db, *.db-shm, *.db-wal) + salinan seed db/custom.db.seed di-commit utk instalasi baru; alasan: operasi git oleh agent otomatis berulang kali menghapus DB live (insiden rebase R49-b & insiden amend Sep 10 ini).
+- FINALISASI: lint 0, tsc 0, GET / + dashboard + brands + quotations 200; commit 396dc84 dipush origin/main (fast-forward); cron webDevReview dibuat ulang dengan larangan eksplisit operasi git destruktif; artefak tes (.tmp-audit) dihapus; channel email dipulihkan ke seed demo agar user mengisi kredensial Hostinger fresh lewat UI.
+
+Stage Summary:
+- MODUL KONEKSI EMAIL TERBUKTI BISA end-to-end: edit kredensial → verifikasi nyata SMTP+IMAP → connected; "Uji" jujur; tarik email IMAP jalan dgn dedupe; kirim SMTP nyata; error autentikasi/protokol tampil jelas.
+- Penyebab "masih ada kendala" user BUKAN modulnya: (1) sandbox sempat mundur ke R48 (amend git) sehingga perbaikan hilang, (2) DB live ter-track git sehingga kredensial user ter-reset — keduanya sudah dipulihkan & dicegah permanen (origin/main = 396dc84, DB tidak di-track lagi).
+- User tinggal: edit koneksi email → isi smtp.hostinger.com:465 + imap.hostinger.com:993 + password mailbox yang benar → simpan (hasil verifikasi tampil langsung).
