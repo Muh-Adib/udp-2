@@ -7,6 +7,7 @@ import { api } from "@/lib/crm/api-client";
 import LoginScreen from "@/components/crm/login-screen";
 import AppShell from "@/components/crm/app-shell";
 import ClientTokenPortal from "@/components/crm/client-token-portal";
+import QuotationShareView from "@/components/crm/quotation-share-view";
 import { Toaster } from "@/components/ui/sonner";
 
 /**
@@ -17,6 +18,9 @@ import { Toaster } from "@/components/ui/sonner";
 function PortalGate() {
   const sp = useSearchParams();
   const portal = sp.get("portal");
+  // Ronde 56 — mode link aman quotation: /?quote=<token>&key=<magic> (publik)
+  const quoteToken = sp.get("quote");
+  const quoteKey = sp.get("key");
   const user = useCrmStore((s) => s.user);
   const setUser = useCrmStore((s) => s.setUser);
   const setBrands = useCrmStore((s) => s.setBrands);
@@ -29,7 +33,7 @@ function PortalGate() {
   // Ronde 39 — deep-link modul dari Web Push: /?modul=projects → buka modul itu
   // (divalidasi terhadap akses role; URL lalu dibersihkan agar refresh tetap normal).
   useEffect(() => {
-    if (portal || !user) return;
+    if (portal || quoteToken || !user) return;
     const modul = sp.get("modul");
     if (!modul || !(modul in MODULE_META)) return;
     if (!canAccess(modul as ModuleKey, user.role)) return;
@@ -38,7 +42,7 @@ function PortalGate() {
   }, [portal, user, sp, setActiveModule]);
 
   useEffect(() => {
-    if (portal) return; // mode portal klien — bootstrap CRM tidak diperlukan
+    if (portal || quoteToken) return; // mode publik klien — bootstrap CRM tidak diperlukan
     let alive = true;
     (async () => {
       try {
@@ -60,9 +64,10 @@ function PortalGate() {
       if (alive) setSessionChecked(true);
     })();
     return () => { alive = false; };
-  }, [portal, setBrands, setUser, loadPermissions]);
+  }, [portal, quoteToken, setBrands, setUser, loadPermissions]);
 
   if (portal) return <ClientTokenPortal token={portal} />;
+  if (quoteToken) return <QuotationShareView token={quoteToken} magicKey={quoteKey} />;
   if (!sessionChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-100" role="status" aria-label="Memuat aplikasi">

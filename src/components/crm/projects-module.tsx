@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
-  Clock3, Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
+  Clock3, Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2, Mail,
   Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Route, ShieldCheck, Trash2, User, User2, UserRound, X, XCircle, Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { ProjectEmailLinkDialog } from "@/components/crm/project-email-link-dialog";
 import { api, portalApi } from "@/lib/crm/api-client";
 import { SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
@@ -1568,6 +1569,10 @@ export default function ProjectsModule() {
   const [rescheduleStatus, setRescheduleStatus] = useState("pending");
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
 
+  // Ronde 56 — dialog "Kirim link via Email": pengiriman portal link project
+  // langsung via SMTP kanal brand (dulu hanya salin ke clipboard lalu manual).
+  const [emailLinkTarget, setEmailLinkTarget] = useState<ProjectDTO | null>(null);
+
   // Task 22-4 — Deliverable & Review pada sheet detail
   const [deliverables, setDeliverables] = useState<ProjectDeliverableDTO[] | null>(null);
   // Ronde 34 — invoice project utk record tahap Penagihan di Alur Produksi
@@ -2615,9 +2620,9 @@ export default function ProjectsModule() {
                   {detail.brand ? ` · ${detail.brand.name}` : ""}
                   {detail.company?.name ? ` · ${detail.company.name}` : ""}
                 </SheetDescription>
-                {/* Ronde 48 — salin link portal klien (hanya pimpinan sistem) */}
+                {/* Ronde 48 — salin/kirim link portal klien (hanya pimpinan sistem) */}
                 {user?.role === "super_admin" || user?.role === "director" ? (
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     <Button
                       variant="outline"
                       size="sm"
@@ -2625,6 +2630,15 @@ export default function ProjectsModule() {
                       aria-label="Salin link portal klien untuk project ini"
                     >
                       <Link2 className="h-3.5 w-3.5" aria-hidden /> Link Portal
+                    </Button>
+                    {/* Ronde 56 — kirim link portal via email (SMTP kanal brand) */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEmailLinkTarget(detail)}
+                      aria-label="Kirim link portal klien via email"
+                    >
+                      <Mail className="h-3.5 w-3.5" aria-hidden /> Kirim link via Email
                     </Button>
                   </div>
                 ) : null}
@@ -3839,6 +3853,16 @@ export default function ProjectsModule() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Ronde 56 — dialog kirim link project via email (penerima = email klien tujuan).
+          Prefill kosong: ProjectDTO.company (CompanyRef) tidak membawa kontak email. */}
+      <ProjectEmailLinkDialog
+        projectId={emailLinkTarget?.id ?? ""}
+        projectName={emailLinkTarget?.name ?? ""}
+        companyEmail={null}
+        open={emailLinkTarget !== null}
+        onOpenChange={(v) => { if (!v) setEmailLinkTarget(null); }}
+      />
     </div>
   );
 }

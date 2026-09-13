@@ -34,6 +34,9 @@ const ALLOWED_MUTATION_PREFIXES = [
 
 const ALLOWED_MUTATION_REGEXES = [
   /^\/api\/portal\/[^/]+\/review$/,    // review portal publik — auth = token rahasia di URL
+  // Ronde 56 — tanda tangan & request kode baru quotation via link aman:
+  // auth berlapis = token rahasia 40-hex di URL + magic key / password (server-side).
+  /^\/api\/public\/quotation\/[^/]+$/,
 ];
 
 // Ronde 46 — mutasi yang tetap boleh SAAT layar terkunci:
@@ -56,6 +59,9 @@ const ALLOWED_GET_REGEXES = [
   // Portal klien publik — token rahasia di URL (1 segmen), TAPI bukan subpath
   // staf "tokens"/"documents" (dua route itu wajib sesi — Ronde 36 audit).
   /^\/api\/portal\/(?!tokens$|documents$)[^/]+$/,
+  // Ronde 56 — lihat/unduh PDF quotation via link aman (token 40-hex + magic
+  // key/password divalidasi di route; penghitung buka server-side).
+  /^\/api\/public\/quotation\/[^/]+$/,
 ];
 
 export async function proxy(req: NextRequest) {

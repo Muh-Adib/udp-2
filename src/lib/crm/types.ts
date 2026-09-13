@@ -397,7 +397,11 @@ export interface InvoiceDTO {
   /** JSON [{description, qty, unit, unitPrice, total}] — baris rincian faktur. */
   items?: string;
   downPaymentPct?: number;
-  /** add (PPN ditambah) | withhold (PPh dipotong). */
+  /** Ronde 56 — diskon nominal (gaya faktur Unicam). */
+  discountAmount?: number;
+  /** Ronde 56 — JSON jadwal termin [{label, pct, dueDays, dueEvent}]. */
+  terms?: string | null;
+  /** add | withhold | grossup (Ronde 56). */
   taxMode?: string;
   purchaseNumber?: string | null;
   projectName?: string | null;

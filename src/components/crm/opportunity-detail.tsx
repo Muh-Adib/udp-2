@@ -2768,13 +2768,27 @@ function QuotationTab({
   // Ronde 40-E — dialog pilih kanal sebelum kirim ke klien
   const [sendTarget, setSendTarget] = useState<QuotationDTO | null>(null);
   const [sendChannel, setSendChannel] = useState("email");
+  // Ronde 56 — kanal email kini NYATA via email brand: butuh email tujuan + konfirmasi legal wajib.
+  const [sendEmail, setSendEmail] = useState("");
+  const [sendAgree, setSendAgree] = useState(false);
 
   async function runAction(q: QuotationDTO, action: QuotationAction, extra?: Record<string, unknown>) {
     setBusyId(q.id);
     try {
       const res = await api.quotationAction(q.id, { action, actorName, actorRole, ...extra });
-      // Ronde 40-E — toast kirim menyebut kanal terpilih (tanda kirim, bukan pengiriman nyata)
-      if (action === "send") toast.success(`Quotation ${q.number} dikirim via ${channelLabel(String(extra?.channel ?? "email"))} (tanda kirim)`);
+      // Ronde 56 — kanal email kini kirim NYATA via email brand (email + confirmLegal wajib);
+      // kanal lain tetap dicatat sebagai tanda kirim di timeline (perilaku lama).
+      const delivery = (res as typeof res & { delivery?: { status: string; note: string | null; to: string } }).delivery;
+      if (action === "send") {
+        const channel = typeof extra?.channel === "string" ? extra.channel : "email";
+        if (channel === "email") {
+          toast.success(`Quotation ${q.number} TERKIRIM via email`, {
+            description: delivery ? `Status: ${delivery.status} → ${delivery.to}` : undefined,
+          });
+        } else {
+          toast.success(`Quotation ${q.number} dikirim via ${channelLabel(channel)} (tanda kirim)`);
+        }
+      }
       else if (action === "accept") toast.success(`Quotation ${q.number} diterima — stage jadi Verbal Agreement`);
       else if (action === "reject") toast.success(`Quotation ${q.number} ditandai ditolak klien`);
       else if (action === "convert_invoice" && res.invoice) toast.success(`Invoice ${res.invoice.number} dibuat`);
@@ -2790,6 +2804,9 @@ function QuotationTab({
   function openSendDialog(q: QuotationDTO) {
     const preferred = defaultSendChannel ?? "email";
     setSendChannel(CHANNELS.some((c) => c.key === preferred) ? preferred : "email");
+    // Ronde 56 — reset email & legal tiap dialog dibuka (CompanyRef tak memuat kontak email → diisi manual).
+    setSendEmail("");
+    setSendAgree(false);
     setSendTarget(q);
   }
 
@@ -2877,8 +2894,8 @@ function QuotationTab({
           <DialogHeader>
             <DialogTitle>Kirim ke Klien</DialogTitle>
             <DialogDescription>
-              Pilih kanal pengiriman (mode dev: dicatat sebagai tanda kirim di timeline &amp; memicu notifikasi —
-              bukan pengiriman nyata):
+              Pilih kanal pengiriman. Kanal email mengirim PDF penawaran secara nyata via email brand yang
+              terhubung; kanal lain hanya dicatat sebagai tanda kirim di timeline.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -2902,6 +2919,33 @@ function QuotationTab({
                 Quotation {sendTarget.number} · {formatCurrencyFull(sendTarget.total, sendTarget.currency)}
               </p>
             ) : null}
+            {/* Ronde 56 — kanal email: email klien tujuan + konfirmasi legal (pengiriman nyata) */}
+            {sendChannel === "email" ? (
+              <div className="space-y-2 pt-1">
+                <div className="grid gap-1.5">
+                  <label htmlFor="q-send-email" className="text-xs font-medium text-zinc-600">
+                    Email klien tujuan *
+                  </label>
+                  <Input
+                    id="q-send-email" type="email" autoComplete="email"
+                    value={sendEmail}
+                    onChange={(e) => setSendEmail(e.target.value)}
+                    placeholder="email klien tujuan"
+                  />
+                </div>
+                <label htmlFor="q-send-agree" className="flex items-start gap-2 text-xs leading-relaxed text-zinc-600">
+                  <Checkbox
+                    id="q-send-agree" checked={sendAgree} className="mt-0.5"
+                    onCheckedChange={(v) => setSendAgree(v === true)}
+                  />
+                  <span>
+                    Saya menyatakan penawaran ini akurat &amp; mengikat sesuai scope yang tertulis; pengiriman
+                    terekam sebagai korespondensi resmi. PDF terlampir &amp; link tanda tangan aman akan
+                    disertakan. *
+                  </span>
+                </label>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendTarget(null)} disabled={busyId === sendTarget?.id}>
@@ -2911,13 +2955,28 @@ function QuotationTab({
               className="bg-zinc-900 hover:bg-zinc-800"
               onClick={() => {
                 const q = sendTarget;
+                if (!q) return;
+                // Ronde 56 — kanal email wajib email valid + konfirmasi legal sebelum kirim nyata.
+                if (sendChannel === "email") {
+                  const email = sendEmail.trim();
+                  if (!email || !email.includes("@")) {
+                    toast.error("Email klien tujuan wajib diisi dan valid");
+                    return;
+                  }
+                  if (!sendAgree) {
+                    toast.error("Centang konfirmasi legal sebelum mengirim penawaran");
+                    return;
+                  }
+                }
                 setSendTarget(null);
-                if (q) void runAction(q, "send", { channel: sendChannel });
+                void runAction(q, "send", sendChannel === "email"
+                  ? { channel: sendChannel, email: sendEmail.trim(), confirmLegal: true }
+                  : { channel: sendChannel });
               }}
-              disabled={!sendTarget}
+              disabled={!sendTarget || busyId === sendTarget?.id || (sendChannel === "email" && (!sendEmail.trim().includes("@") || !sendAgree))}
               aria-label="Kirim quotation ke klien"
             >
-              <Send className="size-4" aria-hidden="true" />
+              {busyId === sendTarget?.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
               Kirim
             </Button>
           </DialogFooter>

@@ -50,7 +50,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       projects: { include: { milestones: { orderBy: { order: "asc" } } } },
       invoices: { include: { payments: true } },
       estimation: true,
-      quotations: { orderBy: { createdAt: "desc" } },
+      // Ronde 56 — include company: nama perusahaan kini muncul di "Detail Surat
+      // Penawaran" & cetakan quotation saat dibuka dari detail opportunity
+      // (dulu quotations polos → q.company undefined → kop surat tanpa nama PT).
+      quotations: { include: { company: true }, orderBy: { createdAt: "desc" } },
       // Ronde 40 — approval estimasi yang menunggu keputusan (tombol keputusan di detail)
       approvals: { where: { status: "pending" }, orderBy: { createdAt: "desc" }, take: 5 },
       _count: { select: { interactions: true, tasks: true } },

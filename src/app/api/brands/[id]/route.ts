@@ -73,10 +73,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.logoUrl !== undefined) {
     const val = String(body.logoUrl).trim();
     if (val && !val.startsWith("/") && !val.startsWith("data:image/")) {
-      return fail("logoUrl harus path aset publik atau data URL gambar");
+      return fail("Logo tidak valid — unggah file gambar (PNG/JPG) dari tombol upload, atau path aset /brands/...");
     }
-    if (val.startsWith("data:image/") && val.length > 1_600_000) {
-      return fail("Ukuran logo terlalu besar (maksimal ±1.2MB)");
+    if (val.startsWith("data:image/") && val.length > 4_700_000) {
+      return fail("Ukuran logo terlalu besar (maksimal ±3.5MB)");
     }
     data.logoUrl = val || null;
   }
@@ -97,20 +97,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.letterheadHeader !== undefined) {
     const val = String(body.letterheadHeader).trim();
     if (val && !val.startsWith("data:image/") && !val.startsWith("/")) {
-      return fail("Kop surat harus berupa gambar (data URL)");
+      return fail("Kop surat tidak valid — unggah file gambar (PNG/JPG) dari tombol upload");
     }
-    if (val.startsWith("data:image/") && val.length > 1_600_000) {
-      return fail("Gambar kop surat terlalu besar (maksimal ±1.2MB)");
+    if (val.startsWith("data:image/") && val.length > 4_700_000) {
+      return fail("Gambar kop surat terlalu besar (maksimal ±3.5MB)");
     }
     data.letterheadHeader = val || null;
   }
   if (body.letterheadFooter !== undefined) {
     const val = String(body.letterheadFooter).trim();
     if (val && !val.startsWith("data:image/") && !val.startsWith("/")) {
-      return fail("Kaki surat harus berupa gambar (data URL)");
+      return fail("Kaki surat tidak valid — unggah file gambar (PNG/JPG) dari tombol upload");
     }
-    if (val.startsWith("data:image/") && val.length > 1_600_000) {
-      return fail("Gambar kaki surat terlalu besar (maksimal ±1.2MB)");
+    if (val.startsWith("data:image/") && val.length > 4_700_000) {
+      return fail("Gambar kaki surat terlalu besar (maksimal ±3.5MB)");
     }
     data.letterheadFooter = val || null;
   }
@@ -182,7 +182,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             const s = typeof v === "string" ? v.trim() : "";
             if (!s) return null;
             if (!s.startsWith("data:image/") && !s.startsWith("/")) return null;
-            if (s.startsWith("data:image/") && s.length > 1_600_000) return null; // diam-diam buang gambar oversize
+            if (s.startsWith("data:image/") && s.length > 4_700_000) return null; // diam-diam buang gambar oversize
             return s;
           };
           clean[key] = { header: pick(entry.header), footer: pick(entry.footer) };

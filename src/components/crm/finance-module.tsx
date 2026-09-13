@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
+import { MoneyInput } from "@/components/crm/money-input";
 import { toast } from "sonner";
 
 import {
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -277,12 +279,19 @@ function parseQuotationItems(items: string | QuotationItemDTO[]): QuotationItemD
 
 // ============ Ronde 50 — item baris, DP, mode pajak (faktur gaya Unicam) ============
 
-type TaxMode = "add" | "withhold";
+/** Ronde 56 — grossup: Gross-Up (pajak ditanggung kami, Total Payment = dasar tagihan). */
+type TaxMode = "add" | "withhold" | "grossup";
 
 const TAX_MODE_LABEL: Record<TaxMode, string> = {
   add: "Ditambahkan (PPN)",
   withhold: "Dipotong (PPh 23/21)",
+  grossup: "Gross-Up (contoh Unicam)",
 };
+
+/** Suffix mode pajak utk ringkasan: dipotong / gross-up / ditambahkan. */
+function taxModeSuffix(mode: TaxMode): string {
+  return mode === "withhold" ? " (dipotong)" : mode === "grossup" ? " (gross-up)" : " (ditambahkan)";
+}
 
 /** Baris item pada editor faktur — state string agar input bebas diketik. */
 interface ItemRow {
@@ -338,18 +347,73 @@ function buildItemsPayload(rows: ItemRow[]): Array<{ description: string; qty: n
     .filter((r) => r.description !== "");
 }
 
-/**
- * Matematika Ronde 50 (paritas dengan server):
- * dp = round(amount×dpPct/100) saat dpPct>0 selain itu amount;
- * tax = taxName ? round(dp×taxRate/100) : 0;
- * total = withhold ? dp−tax : dp+tax.
- */
-function computeInvoiceTotals(amount: number, taxName: string | null, taxRate: number, dpPct: number, taxMode: TaxMode) {
-  const dp = dpPct > 0 ? Math.round((amount * dpPct) / 100) : amount;
-  const taxAmount = taxName ? Math.round((dp * taxRate) / 100) : 0;
-  const total = taxMode === "withhold" ? dp - taxAmount : dp + taxAmount;
-  return { dp, taxAmount, total };
+// ============ Ronde 56 — Term of Payment (termin) pada faktur ============
+
+/** Baris editor termin — state string agar input bebas diketik. */
+interface TermRow {
+  label: string;
+  pct: string;
+  dueDays: string;
+  dueEvent: "invoice" | "down_payment" | "bastp" | "handover" | "delivery";
 }
+
+/** Opsi momen jatuh tempo termin (dueEvent) — label bahasa Indonesia. */
+const TERM_DUE_EVENTS: Array<{ value: TermRow["dueEvent"]; label: string }> = [
+  { value: "invoice", label: "Setelah invoice terbit" },
+  { value: "down_payment", label: "Setelah DP diterima" },
+  { value: "bastp", label: "Setelah BASTP ditandatangani" },
+  { value: "handover", label: "Setelah serah terima project" },
+  { value: "delivery", label: "Setelah final delivery" },
+];
+
+/** Termin default tiap form dibuka: DP 50% (invoice terbit) + Final 50% (H+3 setelah BASTP). */
+function defaultTermRows(): TermRow[] {
+  return [
+    { label: "Down Payment", pct: "50", dueDays: "0", dueEvent: "invoice" },
+    { label: "Final Payment", pct: "50", dueDays: "3", dueEvent: "bastp" },
+  ];
+}
+
+/** Baris termin → payload terms: buang baris tanpa label; pct 0-100, dueDays >= 0. */
+function buildTermsPayload(rows: TermRow[]): Array<{ label: string; pct: number; dueDays: number; dueEvent: string }> {
+  return rows
+    .filter((r) => r.label.trim() !== "")
+    .map((r) => ({
+      label: r.label.trim(),
+      pct: Math.min(100, Math.max(0, Number(r.pct) || 0)),
+      dueDays: Math.max(0, Math.round(Number(r.dueDays) || 0)),
+      dueEvent: r.dueEvent,
+    }));
+}
+
+/**
+ * Matematika Ronde 50 + Ronde 56 (paritas dengan server):
+ * afterDiscount = amount − discount (Ronde 56: diskon nominal, dipotong sebelum DP & pajak);
+ * dp = round(afterDiscount×dpPct/100) saat dpPct>0 selain itu afterDiscount;
+ * tax = taxName ? round(dp×taxRate/100) : 0;
+ * total = withhold ? dp−tax : grossup ? dp : dp+tax.
+ */
+function computeInvoiceTotals(amount: number, taxName: string | null, taxRate: number, dpPct: number, taxMode: TaxMode, discount = 0) {
+  const afterDiscount = amount - (discount || 0);
+  const dp = dpPct > 0 ? Math.round((afterDiscount * dpPct) / 100) : afterDiscount;
+  const taxAmount = taxName ? Math.round((dp * taxRate) / 100) : 0;
+  const total = taxMode === "withhold" ? dp - taxAmount : taxMode === "grossup" ? dp : dp + taxAmount;
+  return { afterDiscount, dp, taxAmount, total };
+}
+
+/** Ronde 56 — payload create/revise invoice diperluas dgn diskon nominal, jadwal termin (terms),
+ * dan mode pajak "grossup". Backend sudah siap; tipe pada api-client belum memuat → diperluas
+ * lokal (pola sama dgn InvoiceWithProject — file api-client tidak boleh disentuh task ini). */
+type StandaloneInvoicePayload = Omit<Parameters<typeof api.createStandaloneInvoice>[0], "taxMode"> & {
+  taxMode?: TaxMode;
+  discountAmount?: number;
+  terms?: ReturnType<typeof buildTermsPayload>;
+};
+type ReviseInvoicePayload = Omit<Parameters<typeof api.reviseInvoice>[0], "taxMode"> & {
+  taxMode?: TaxMode;
+  discountAmount?: number;
+  terms?: ReturnType<typeof buildTermsPayload>;
+};
 
 /** Ronde 50 — badge kecil "Revisi N" utk invoice hasil revisi. */
 function RevisionBadge({ no }: { no: number }) {
@@ -493,16 +557,17 @@ function QuotationSkeleton() {
 
 // ============ Ronde 50 — komponen bersama dialog buat & revisi invoice ============
 
-/** Select "Mode Pajak": add (PPN ditambah) / withhold (PPh dipotong). Hanya tampil saat ada pajak. */
+/** Select "Mode Pajak": add (PPN ditambah) / withhold (PPh dipotong) / grossup (Gross-Up). Hanya tampil saat ada pajak. */
 function TaxModeField({ id, value, onChange }: { id: string; value: TaxMode; onChange: (v: TaxMode) => void }) {
   return (
     <div className="grid gap-2">
       <Label htmlFor={id}>Mode Pajak</Label>
-      <Select value={value} onValueChange={(v) => onChange(v === "withhold" ? "withhold" : "add")}>
+      <Select value={value} onValueChange={(v) => onChange(v === "withhold" ? "withhold" : v === "grossup" ? "grossup" : "add")}>
         <SelectTrigger id={id}><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="add">{TAX_MODE_LABEL.add}</SelectItem>
           <SelectItem value="withhold">{TAX_MODE_LABEL.withhold}</SelectItem>
+          <SelectItem value="grossup">{TAX_MODE_LABEL.grossup}</SelectItem>
         </SelectContent>
       </Select>
     </div>
@@ -622,6 +687,89 @@ function InvoiceItemsSection({ open, onToggle, rows, onRowsChange, idPrefix, dis
   );
 }
 
+// ============ Ronde 56 — editor "Term of Payment (termin)" ============
+
+/** Editor termin: label, persen, H+N, dan momen jatuh tempo (dueEvent) per baris + tambah/hapus. */
+function TermRowsEditor({ rows, onChange, idPrefix, disabled }: {
+  rows: TermRow[];
+  onChange: (rows: TermRow[]) => void;
+  idPrefix: string;
+  disabled?: boolean;
+}) {
+  function updateRow(idx: number, patch: Partial<TermRow>) {
+    onChange(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+  return (
+    <div className="space-y-2">
+      {rows.map((row, idx) => (
+        <div key={idx} className="rounded-lg border bg-zinc-50/50 p-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id={`${idPrefix}-term-label-${idx}`}
+              value={row.label}
+              onChange={(e) => updateRow(idx, { label: e.target.value })}
+              placeholder={`Label termin ${idx + 1} (mis. Down Payment)`}
+              aria-label={`Label termin ${idx + 1}`}
+              className="h-8 min-w-[150px] flex-1 text-sm"
+              disabled={disabled}
+            />
+            <div className="flex items-center gap-1">
+              <Input
+                id={`${idPrefix}-term-pct-${idx}`} type="number" min={0} max={100}
+                value={row.pct}
+                onChange={(e) => updateRow(idx, { pct: e.target.value })}
+                aria-label={`Persentase termin ${idx + 1}`}
+                className="h-8 w-16 text-sm" disabled={disabled}
+              />
+              <span className="text-xs text-zinc-400">%</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Input
+                id={`${idPrefix}-term-days-${idx}`} type="number" min={0}
+                value={row.dueDays}
+                onChange={(e) => updateRow(idx, { dueDays: e.target.value })}
+                aria-label={`Hari jatuh tempo termin ${idx + 1}`}
+                className="h-8 w-16 text-sm" disabled={disabled}
+              />
+              <span className="text-xs text-zinc-400">hari</span>
+            </div>
+            <Button
+              type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
+              onClick={() => onChange(rows.filter((_, i) => i !== idx))}
+              disabled={disabled}
+              aria-label={`Hapus termin ${idx + 1}`}
+              title="Hapus termin"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          </div>
+          <Select
+            value={row.dueEvent}
+            onValueChange={(v) => updateRow(idx, { dueEvent: v as TermRow["dueEvent"] })}
+          >
+            <SelectTrigger className="mt-2 h-8 text-sm" aria-label={`Momen jatuh tempo termin ${idx + 1}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TERM_DUE_EVENTS.map((ev) => (
+                <SelectItem key={ev.value} value={ev.value}>{ev.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ))}
+      <Button
+        type="button" variant="outline" size="sm"
+        onClick={() => onChange([...rows, { label: "", pct: "0", dueDays: "0", dueEvent: "invoice" }])}
+        disabled={disabled}
+        aria-label="Tambah termin"
+      >
+        <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah termin
+      </Button>
+    </div>
+  );
+}
+
 // ============ Module utama ============
 
 type QuotationAction = "send" | "accept" | "reject" | "convert_invoice";
@@ -650,6 +798,10 @@ export default function FinanceModule() {
   const [sendTarget, setSendTarget] = useState<InvoiceWithProject | null>(null);
   const [cancelTarget, setCancelTarget] = useState<InvoiceWithProject | null>(null);
   const [invBusy, setInvBusy] = useState(false);
+  // Ronde 56 — kirim invoice NYATA via email: butuh email tujuan + konfirmasi legal wajib.
+  const [sendEmail, setSendEmail] = useState("");
+  const [sendAgree, setSendAgree] = useState(false);
+  const [sendingNow, setSendingNow] = useState(false);
 
   // --- Ronde 47: buat invoice manual / edit draft / cetak / koreksi pembayaran ---
   const [createOpen, setCreateOpen] = useState(false);
@@ -671,6 +823,9 @@ export default function FinanceModule() {
   const [createProjectName, setCreateProjectName] = useState("");
   const [createItems, setCreateItems] = useState<ItemRow[]>([]);
   const [createItemsOpen, setCreateItemsOpen] = useState(false);
+  // Ronde 56 — diskon nominal + jadwal termin (term of payment) pada faktur.
+  const [createDiscount, setCreateDiscount] = useState("");
+  const [createTerms, setCreateTerms] = useState<TermRow[]>(defaultTermRows());
 
   const [editTarget, setEditTarget] = useState<InvoiceWithProject | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", tax: TAX_NONE, due: "", notes: "" });
@@ -680,7 +835,7 @@ export default function FinanceModule() {
   const [reviseTarget, setReviseTarget] = useState<InvoiceWithProject | null>(null);
   const [reviseForm, setReviseForm] = useState({
     description: "", amount: "", tax: TAX_NONE, taxMode: "add" as TaxMode, dp: "0",
-    poNumber: "", projectName: "", due: "", notes: "", reason: "",
+    discount: "", poNumber: "", projectName: "", due: "", notes: "", reason: "",
   });
   const [reviseItems, setReviseItems] = useState<ItemRow[]>([]);
   const [reviseItemsOpen, setReviseItemsOpen] = useState(false);
@@ -696,6 +851,11 @@ export default function FinanceModule() {
   const [quoteDetail, setQuoteDetail] = useState<QuotationDTO | null>(null);
   const [quoteBusyId, setQuoteBusyId] = useState<string | null>(null);
   const [printTarget, setPrintTarget] = useState<QuotationDTO | null>(null);
+  // Ronde 56 — dialog kirim quotation: kanal email kini NYATA via email brand (butuh legal check).
+  const [quoteSendTarget, setQuoteSendTarget] = useState<QuotationDTO | null>(null);
+  const [quoteSendChannel, setQuoteSendChannel] = useState("email");
+  const [quoteSendEmail, setQuoteSendEmail] = useState("");
+  const [quoteSendAgree, setQuoteSendAgree] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -784,6 +944,19 @@ export default function FinanceModule() {
     })();
   }, [createOpen]);
 
+  // Ronde 56 — prefill email tujuan dari kontak utama perusahaan saat target kirim invoice diset.
+  useEffect(() => {
+    if (sendTarget) {
+      setSendEmail(getInvoiceContacts(sendTarget)[0]?.email ?? "");
+      setSendAgree(false);
+    }
+  }, [sendTarget]);
+
+  // Ronde 56 — termin default setiap dialog buat invoice dibuka (DP 50% + Final 50%).
+  useEffect(() => {
+    if (createOpen) setCreateTerms(defaultTermRows());
+  }, [createOpen]);
+
   // Sinkron brand pada dialog buat invoice: ganti brand → pajak brand dipertahankan,
   // currency ditampilkan dari primaryCurrency brand (server yang menetapkan final).
   const createBrand = useMemo(
@@ -792,12 +965,14 @@ export default function FinanceModule() {
   );
   const createTotals = useMemo(() => {
     const amount = Number(createAmount) || 0;
+    // Ronde 56 — diskon nominal dipotong sebelum DP & pajak.
+    const discount = Number(createDiscount) || 0;
     const { name, rate } = parseTaxOption(createTax);
-    // Ronde 50 — DP 0-100%; dp = round(amount×dpPct/100) saat dpPct>0 selain itu amount penuh.
+    // Ronde 50 — DP 0-100%; dp = round(afterDiscount×dpPct/100) saat dpPct>0 selain itu afterDiscount.
     const dpPct = Math.min(100, Math.max(0, Number(createDp) || 0));
-    const { dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, createTaxMode);
-    return { amount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
-  }, [createAmount, createTax, createDp, createTaxMode]);
+    const { afterDiscount, dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, createTaxMode, discount);
+    return { amount, discount, afterDiscount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
+  }, [createAmount, createDiscount, createTax, createDp, createTaxMode]);
 
   /** Ronde 50 — buka editor item di dialog buat; seed satu baris kosong saat pertama dibuka. */
   function toggleCreateItems() {
@@ -811,10 +986,14 @@ export default function FinanceModule() {
     if (!createCompanyId) return toast.error("Perusahaan wajib dipilih");
     const amount = Number(createAmount);
     if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
+    // Ronde 56 — diskon nominal wajib lebih kecil dari nominal (hindari faktur minus).
+    if (createTotals.discount >= amount) return toast.error("Diskon nominal harus lebih kecil dari nominal invoice");
     setCreating(true);
     try {
       const items = buildItemsPayload(createItems);
-      const res = await api.createStandaloneInvoice({
+      const termsPayload = buildTermsPayload(createTerms);
+      // Ronde 56 — payload diperluas: discountAmount + terms (tipe api diperluas lokal, lihat catatan tipe).
+      const payload: StandaloneInvoicePayload = {
         brandId: createBrandId,
         companyId: createCompanyId,
         description: createDesc.trim() || undefined,
@@ -824,15 +1003,19 @@ export default function FinanceModule() {
         taxMode: createTotals.taxName ? createTaxMode : undefined,
         downPaymentPct: createTotals.dpPct,
         items: items.length > 0 ? items : undefined,
+        discountAmount: createTotals.discount > 0 ? createTotals.discount : undefined,
+        terms: termsPayload.length > 0 ? termsPayload : undefined,
         purchaseNumber: createPoNumber.trim() || undefined,
         projectName: createProjectName.trim() || undefined,
         dueDate: createDue || undefined,
         notes: createNotes.trim() || undefined,
-      });
+      };
+      const res = await api.createStandaloneInvoice(payload as Parameters<typeof api.createStandaloneInvoice>[0]);
       toast.success(`Invoice ${res.invoice.number} dibuat (draft)`);
       setCreateOpen(false);
       setCreateDesc("");
       setCreateAmount("");
+      setCreateDiscount("");
       setCreateNotes("");
       setCreateTax(TAX_NONE);
       setCreateDue("");
@@ -842,6 +1025,7 @@ export default function FinanceModule() {
       setCreateProjectName("");
       setCreateItems([]);
       setCreateItemsOpen(false);
+      setCreateTerms(defaultTermRows());
       await load(true);
       setDetail(res.invoice as InvoiceWithProject);
     } catch (err) {
@@ -908,8 +1092,10 @@ export default function FinanceModule() {
       description: inv.description ?? "",
       amount: String(inv.amount),
       tax: inv.taxName ? taxOptionValue({ name: inv.taxName, rate: inv.taxRate }) : TAX_NONE,
-      taxMode: inv.taxMode === "withhold" ? "withhold" : "add",
+      taxMode: inv.taxMode === "withhold" || inv.taxMode === "grossup" ? inv.taxMode : "add",
       dp: inv.downPaymentPct && inv.downPaymentPct > 0 ? String(inv.downPaymentPct) : "0",
+      // Ronde 56 — diskon nominal & mode grossup ikut disalin dari invoice sumber.
+      discount: inv.discountAmount && inv.discountAmount > 0 ? String(inv.discountAmount) : "",
       poNumber: inv.purchaseNumber ?? "",
       projectName: inv.projectName ?? "",
       due: inv.dueDate ? inv.dueDate.slice(0, 10) : "",
@@ -922,23 +1108,28 @@ export default function FinanceModule() {
 
   const reviseTotals = useMemo(() => {
     const amount = Number(reviseForm.amount) || 0;
+    // Ronde 56 — diskon nominal dipotong sebelum DP & pajak.
+    const discount = Number(reviseForm.discount) || 0;
     const { name, rate } = parseTaxOption(reviseForm.tax);
     const dpPct = Math.min(100, Math.max(0, Number(reviseForm.dp) || 0));
-    const { dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, reviseForm.taxMode);
-    return { amount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
-  }, [reviseForm.amount, reviseForm.tax, reviseForm.dp, reviseForm.taxMode]);
+    const { afterDiscount, dp, taxAmount, total } = computeInvoiceTotals(amount, name, rate, dpPct, reviseForm.taxMode, discount);
+    return { amount, discount, afterDiscount, dpPct, dp, taxAmount, total, taxName: name, taxRate: rate };
+  }, [reviseForm.amount, reviseForm.discount, reviseForm.tax, reviseForm.dp, reviseForm.taxMode]);
 
   async function submitReviseInvoice(e: React.FormEvent) {
     e.preventDefault();
     if (!reviseTarget) return;
     const amount = Number(reviseForm.amount);
     if (!Number.isFinite(amount) || amount <= 0) return toast.error("Nominal harus angka lebih besar dari 0");
+    // Ronde 56 — diskon nominal wajib lebih kecil dari nominal (hindari faktur minus).
+    if (reviseTotals.discount >= amount) return toast.error("Diskon nominal harus lebih kecil dari nominal invoice");
     const reason = reviseForm.reason.trim();
     if (!reason) return toast.error("Alasan revisi wajib diisi");
     setRevising(true);
     try {
       const items = buildItemsPayload(reviseItems);
-      const res = await api.reviseInvoice({
+      // Ronde 56 — payload revisi diperluas: discountAmount (tipe api diperluas lokal).
+      const payload: ReviseInvoicePayload = {
         invoiceId: reviseTarget.id,
         description: reviseForm.description.trim() || undefined,
         amount,
@@ -947,12 +1138,14 @@ export default function FinanceModule() {
         taxMode: reviseTotals.taxName ? reviseForm.taxMode : undefined,
         downPaymentPct: reviseTotals.dpPct,
         items: items.length > 0 ? items : undefined,
+        discountAmount: reviseTotals.discount > 0 ? reviseTotals.discount : undefined,
         purchaseNumber: reviseForm.poNumber.trim() || null,
         projectName: reviseForm.projectName.trim() || null,
         dueDate: reviseForm.due || null,
         notes: reviseForm.notes.trim() || null,
         revisionReason: reason,
-      });
+      };
+      const res = await api.reviseInvoice(payload as Parameters<typeof api.reviseInvoice>[0]);
       toast.success(`Revisi ${res.invoice.number} dibuat`);
       setReviseTarget(null);
       await load(true);
@@ -1084,22 +1277,38 @@ export default function FinanceModule() {
 
   async function confirmSendInvoice() {
     if (!sendTarget) return;
-    setInvBusy(true);
+    // Ronde 56 — kirim NYATA via email: validasi email + konfirmasi legal sebelum submit.
+    const email = sendEmail.trim();
+    if (!email || !email.includes("@")) {
+      toast.error("Email klien tujuan wajib diisi dan mengandung '@'");
+      return;
+    }
+    if (!sendAgree) {
+      toast.error("Centang konfirmasi legal sebelum mengirim invoice");
+      return;
+    }
+    setSendingNow(true);
     try {
       const res = await api.invoiceAction({
         invoiceId: sendTarget.id,
         action: "send_invoice",
+        email,
+        confirmLegal: true,
         actorName: user?.name ?? "finance",
         actorRole: user?.role ?? "finance",
       });
-      toast.success(`Invoice ${res.invoice.number} terkirim`);
+      toast.success(`Invoice ${res.invoice.number} TERKIRIM via email`, {
+        description: res.delivery ? `Status: ${res.delivery.status} → ${res.delivery.to}` : undefined,
+      });
       setInvoices((prev) => (prev ?? []).map((inv) => (inv.id === res.invoice.id ? (res.invoice as InvoiceWithProject) : inv)));
       setSendTarget(null);
+      setSendEmail("");
+      setSendAgree(false);
       await load(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal mengirim invoice");
     } finally {
-      setInvBusy(false);
+      setSendingNow(false);
     }
   }
 
@@ -1148,6 +1357,66 @@ export default function FinanceModule() {
     }
   }
 
+  // ============ Ronde 56 — dialog kirim quotation (email klien + konfirmasi legal) ============
+
+  /** Tombol "Kirim ke Klien" membuka dialog kanal dulu — kanal email kini kirim NYATA via email brand. */
+  function openQuoteSendDialog(q: QuotationDTO) {
+    setQuoteSendChannel("email");
+    // QuotationDTO.company (CompanyRef) tidak memuat kontak email — biarkan kosong utk diisi manual.
+    setQuoteSendEmail("");
+    setQuoteSendAgree(false);
+    setQuoteSendTarget(q);
+  }
+
+  async function confirmQuoteSend() {
+    const q = quoteSendTarget;
+    if (!q) return;
+    // Kanal email: validasi email + konfirmasi legal sebelum kirim nyata; kanal lain perilaku lama.
+    if (quoteSendChannel === "email") {
+      const email = quoteSendEmail.trim();
+      if (!email || !email.includes("@")) {
+        toast.error("Email klien tujuan wajib diisi dan mengandung '@'");
+        return;
+      }
+      if (!quoteSendAgree) {
+        toast.error("Centang konfirmasi legal sebelum mengirim penawaran");
+        return;
+      }
+    }
+    setQuoteBusyId(q.id);
+    try {
+      const res = await api.quotationAction(q.id, {
+        action: "send" as QuotationAction,
+        channel: quoteSendChannel,
+        actorName: user?.name ?? "System",
+        actorRole: user?.role ?? "finance",
+        // Ronde 56 — kanal email: payload wajib email + confirmLegal (pengiriman nyata via SMTP brand).
+        ...(quoteSendChannel === "email" ? { email: quoteSendEmail.trim(), confirmLegal: true } : {}),
+      });
+      // Ronde 56 — respons kini bisa membawa delivery (status pengiriman email nyata).
+      const delivery = (res as typeof res & { delivery?: { status: string; note: string | null; to: string } }).delivery;
+      if (quoteSendChannel === "email") {
+        toast.success(`Quotation ${q.number} TERKIRIM via email`, {
+          description: delivery ? `Status: ${delivery.status} → ${delivery.to}` : undefined,
+        });
+      } else {
+        const label = CHANNELS.find((c) => c.key === quoteSendChannel)?.label ?? quoteSendChannel;
+        toast.success(`Quotation ${q.number} dikirim via ${label} (tanda kirim)`);
+      }
+      const fresh = res.quotation ?? null;
+      setQuotations((prev) => (prev ?? []).map((x) => (x.id === q.id ? (fresh ?? x) : x)));
+      if (fresh && quoteDetail?.id === fresh.id) setQuoteDetail(fresh);
+      setQuoteSendTarget(null);
+      setQuoteSendEmail("");
+      setQuoteSendAgree(false);
+      await Promise.all([loadQuotations(), load(true)]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengirim quotation");
+    } finally {
+      setQuoteBusyId(null);
+    }
+  }
+
   if (loading && invoices === null) return <InvoiceSkeleton />;
 
   const detailPaid = detail ? paidAmount(detail) : 0;
@@ -1157,6 +1426,10 @@ export default function FinanceModule() {
   const printBrand: Brand | null = printTarget
     ? printTarget.brand ?? storeBrands.find((b) => b.id === printTarget.brandId) ?? null
     : null;
+  // Ronde 56 — mata uang form create/revise (mengikuti brand/invoice) + status busy dialog kirim quotation.
+  const createCurrency = createBrand?.primaryCurrency ?? "IDR";
+  const reviseCurrency = reviseTarget?.currency ?? "IDR";
+  const quoteSendBusy = quoteSendTarget !== null && quoteBusyId === quoteSendTarget.id;
 
   return (
     <div className="space-y-6">
@@ -1645,24 +1918,48 @@ export default function FinanceModule() {
             </DialogContent>
           </Dialog>
 
-          {/* AlertDialog konfirmasi kirim invoice */}
+          {/* Ronde 56 — AlertDialog kirim invoice: kirim NYATA via email (email + konfirmasi legal wajib) */}
           <AlertDialog open={sendTarget !== null} onOpenChange={(open) => { if (!open) setSendTarget(null); }}>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Kirim Invoice</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Kirim invoice {sendTarget?.number} ke klien? Due date akan diset +14 hari jika kosong.
+                  Invoice {sendTarget?.number} akan dikirim nyata via email sebagai PDF. Due date akan diset +14 hari jika kosong.
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              <div className="grid gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="inv-send-email">Email klien tujuan *</Label>
+                  <Input
+                    id="inv-send-email" type="email" autoComplete="email"
+                    value={sendEmail}
+                    onChange={(e) => setSendEmail(e.target.value)}
+                    placeholder="nama@perusahaan.com"
+                  />
+                </div>
+                <label htmlFor="inv-send-agree" className="flex items-start gap-2 text-xs leading-relaxed text-zinc-600">
+                  <Checkbox
+                    id="inv-send-agree" checked={sendAgree} className="mt-0.5"
+                    onCheckedChange={(v) => setSendAgree(v === true)}
+                  />
+                  <span>
+                    Saya menyatakan berwenang mengirim invoice ini atas nama brand, memastikan nominal &amp; data
+                    tagihan benar, dan setuju pengiriman terekam sebagai korespondensi resmi perusahaan. *
+                  </span>
+                </label>
+                <p className="text-[11px] leading-relaxed text-zinc-500">
+                  Invoice dikirim sebagai PDF via email brand yang terhubung.
+                </p>
+              </div>
               <AlertDialogFooter>
-                <AlertDialogCancel disabled={invBusy}>Batal</AlertDialogCancel>
+                <AlertDialogCancel disabled={sendingNow}>Batal</AlertDialogCancel>
                 <AlertDialogAction
                   className="bg-amber-600 hover:bg-amber-700"
-                  disabled={invBusy}
+                  disabled={sendingNow || !sendEmail.trim().includes("@") || !sendAgree}
                   onClick={(e) => { e.preventDefault(); void confirmSendInvoice(); }}
                   aria-label="Konfirmasi kirim invoice"
                 >
-                  {invBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
+                  {sendingNow ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
                   Kirim Invoice
                 </AlertDialogAction>
               </AlertDialogFooter>
@@ -1747,11 +2044,14 @@ export default function FinanceModule() {
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="grid gap-2">
                     <Label htmlFor="inv-amount">Nominal *</Label>
-                    <Input
-                      id="inv-amount" type="number" min={1} step="any" required
+                    {/* Ronde 56 — MoneyInput: format ribuan sesuai mata uang brand (IDR tanpa desimal, USD 2 desimal). */}
+                    <MoneyInput
+                      id="inv-amount"
                       value={createAmount}
-                      onChange={(e) => setCreateAmount(e.target.value)}
-                      placeholder="5000000"
+                      onChange={setCreateAmount}
+                      currency={createCurrency}
+                      required
+                      ariaLabel="Nominal invoice"
                     />
                   </div>
                   <div className="grid gap-2">
@@ -1775,7 +2075,7 @@ export default function FinanceModule() {
                     />
                   </div>
                 </div>
-                {/* Ronde 50 — mode pajak (PPN ditambah / PPh dipotong) + Down Payment % */}
+                {/* Ronde 50/56 — mode pajak (PPN/PPh/Gross-Up) + Down Payment % + diskon nominal */}
                 <div className="grid gap-4 sm:grid-cols-2">
                   {createTotals.taxName ? (
                     <TaxModeField id="inv-taxmode" value={createTaxMode} onChange={setCreateTaxMode} />
@@ -1791,6 +2091,32 @@ export default function FinanceModule() {
                     <p className="text-[11px] leading-relaxed text-zinc-500">
                       0 = tagihan penuh. Contoh: 50 → baris Down Payment (50%).
                     </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-discount">Diskon (nominal)</Label>
+                    <MoneyInput
+                      id="inv-discount"
+                      value={createDiscount}
+                      onChange={setCreateDiscount}
+                      currency={createCurrency}
+                      ariaLabel="Diskon nominal invoice"
+                    />
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      Potongan langsung dari nominal, sebelum DP &amp; pajak.
+                    </p>
+                  </div>
+                </div>
+                {/* Ronde 56 — Term of Payment (termin): jadwal penagihan per tahap project */}
+                <div className="rounded-lg border bg-white">
+                  <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-700">
+                      <Wallet className="h-3.5 w-3.5 text-zinc-400" aria-hidden />
+                      Term of Payment (termin)
+                    </span>
+                    <span className="text-[11px] text-zinc-400">Jadwal tagihan per tahap</span>
+                  </div>
+                  <div className="px-3 py-3">
+                    <TermRowsEditor rows={createTerms} onChange={setCreateTerms} idPrefix="inv-create" disabled={creating} />
                   </div>
                 </div>
                 {/* Ronde 50 — referensi PO & nama project pada faktur */}
@@ -1829,33 +2155,44 @@ export default function FinanceModule() {
                     placeholder="Instruksi pembayaran, rekening, dll."
                   />
                 </div>
+                {/* Ronde 56 — ringkasan live: Sub Total → Diskon → Dasar tagihan (DP%) → Pajak → Total Payment */}
                 <div className="rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
                   <div className="flex items-center justify-between text-zinc-600">
-                    <span>Subtotal</span>
-                    <span className="tabular-nums">{formatCurrencyFull(createTotals.amount, createBrand?.primaryCurrency ?? "IDR")}</span>
+                    <span>Sub Total</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.amount, createCurrency)}</span>
+                  </div>
+                  {createTotals.discount > 0 ? (
+                    <div className="flex items-center justify-between text-zinc-600">
+                      <span>Diskon</span>
+                      <span className="tabular-nums">-{formatCurrencyFull(createTotals.discount, createCurrency)}</span>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>Sub Total (setelah diskon)</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.afterDiscount, createCurrency)}</span>
                   </div>
                   {createTotals.dpPct > 0 ? (
                     <div className="flex items-center justify-between text-zinc-600">
-                      <span>Down Payment ({createTotals.dpPct}%)</span>
-                      <span className="tabular-nums">{formatCurrencyFull(createTotals.dp, createBrand?.primaryCurrency ?? "IDR")}</span>
+                      <span>Dasar tagihan (DP {createTotals.dpPct}%)</span>
+                      <span className="tabular-nums">{formatCurrencyFull(createTotals.dp, createCurrency)}</span>
                     </div>
                   ) : null}
                   <div className="flex items-center justify-between text-zinc-600">
                     <span>{createTotals.taxName ? `${createTotals.taxName} ${createTotals.taxRate}%` : "Pajak"}</span>
                     <span className="tabular-nums">
-                      {formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}
-                      {createTotals.taxName ? (createTaxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""}
+                      {formatCurrencyFull(createTotals.taxAmount, createCurrency)}
+                      {createTotals.taxName ? taxModeSuffix(createTaxMode) : ""}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between border-t pt-1 font-semibold text-zinc-900">
-                    <span>Total</span>
-                    <span className="tabular-nums">{formatCurrencyFull(createTotals.total, createBrand?.primaryCurrency ?? "IDR")}</span>
+                    <span>Total Payment</span>
+                    <span className="tabular-nums">{formatCurrencyFull(createTotals.total, createCurrency)}</span>
                   </div>
                   <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">
-                    Dasar tagihan: {formatCurrencyFull(createTotals.dp, createBrand?.primaryCurrency ?? "IDR")} ·{" "}
-                    Pajak: {formatCurrencyFull(createTotals.taxAmount, createBrand?.primaryCurrency ?? "IDR")}
-                    {createTotals.taxName ? (createTaxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""} ·{" "}
-                    Total: {formatCurrencyFull(createTotals.total, createBrand?.primaryCurrency ?? "IDR")}
+                    Dasar tagihan: {formatCurrencyFull(createTotals.dp, createCurrency)} ·{" "}
+                    Pajak: {formatCurrencyFull(createTotals.taxAmount, createCurrency)}
+                    {createTotals.taxName ? taxModeSuffix(createTaxMode) : ""} ·{" "}
+                    Total Payment: {formatCurrencyFull(createTotals.total, createCurrency)}
                   </p>
                 </div>
                 <DialogFooter className="mt-1">
@@ -1963,10 +2300,14 @@ export default function FinanceModule() {
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="grid gap-2">
                     <Label htmlFor="inv-rev-amount">Nominal *</Label>
-                    <Input
-                      id="inv-rev-amount" type="number" min={1} step="any" required
+                    {/* Ronde 56 — MoneyInput: format ribuan sesuai mata uang invoice sumber. */}
+                    <MoneyInput
+                      id="inv-rev-amount"
                       value={reviseForm.amount}
-                      onChange={(e) => setReviseForm((f) => ({ ...f, amount: e.target.value }))}
+                      onChange={(raw) => setReviseForm((f) => ({ ...f, amount: raw }))}
+                      currency={reviseCurrency}
+                      required
+                      ariaLabel="Nominal invoice revisi"
                     />
                   </div>
                   <div className="grid gap-2">
@@ -1990,7 +2331,7 @@ export default function FinanceModule() {
                     />
                   </div>
                 </div>
-                {/* Ronde 50 — mode pajak + DP prefill dari invoice sumber */}
+                {/* Ronde 50/56 — mode pajak + DP + diskon nominal (prefill dari invoice sumber) */}
                 <div className="grid gap-4 sm:grid-cols-2">
                   {reviseTotals.taxName ? (
                     <TaxModeField
@@ -2009,6 +2350,19 @@ export default function FinanceModule() {
                     />
                     <p className="text-[11px] leading-relaxed text-zinc-500">
                       0 = tagihan penuh. Contoh: 50 → baris Down Payment (50%).
+                    </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inv-rev-discount">Diskon (nominal)</Label>
+                    <MoneyInput
+                      id="inv-rev-discount"
+                      value={reviseForm.discount}
+                      onChange={(raw) => setReviseForm((f) => ({ ...f, discount: raw }))}
+                      currency={reviseCurrency}
+                      ariaLabel="Diskon nominal invoice revisi"
+                    />
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      Potongan langsung dari nominal, sebelum DP &amp; pajak.
                     </p>
                   </div>
                 </div>
@@ -2056,33 +2410,44 @@ export default function FinanceModule() {
                     placeholder="Wajib diisi — mis. koreksi nominal & tambah baris item sesuai PO"
                   />
                 </div>
+                {/* Ronde 56 — ringkasan live revisi: Sub Total → Diskon → Dasar tagihan (DP%) → Pajak → Total Payment */}
                 <div className="rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
                   <div className="flex items-center justify-between text-zinc-600">
-                    <span>Subtotal</span>
-                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.amount, reviseTarget?.currency ?? "IDR")}</span>
+                    <span>Sub Total</span>
+                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.amount, reviseCurrency)}</span>
+                  </div>
+                  {reviseTotals.discount > 0 ? (
+                    <div className="flex items-center justify-between text-zinc-600">
+                      <span>Diskon</span>
+                      <span className="tabular-nums">-{formatCurrencyFull(reviseTotals.discount, reviseCurrency)}</span>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between text-zinc-600">
+                    <span>Sub Total (setelah diskon)</span>
+                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.afterDiscount, reviseCurrency)}</span>
                   </div>
                   {reviseTotals.dpPct > 0 ? (
                     <div className="flex items-center justify-between text-zinc-600">
-                      <span>Down Payment ({reviseTotals.dpPct}%)</span>
-                      <span className="tabular-nums">{formatCurrencyFull(reviseTotals.dp, reviseTarget?.currency ?? "IDR")}</span>
+                      <span>Dasar tagihan (DP {reviseTotals.dpPct}%)</span>
+                      <span className="tabular-nums">{formatCurrencyFull(reviseTotals.dp, reviseCurrency)}</span>
                     </div>
                   ) : null}
                   <div className="flex items-center justify-between text-zinc-600">
                     <span>{reviseTotals.taxName ? `${reviseTotals.taxName} ${reviseTotals.taxRate}%` : "Pajak"}</span>
                     <span className="tabular-nums">
-                      {formatCurrencyFull(reviseTotals.taxAmount, reviseTarget?.currency ?? "IDR")}
-                      {reviseTotals.taxName ? (reviseForm.taxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""}
+                      {formatCurrencyFull(reviseTotals.taxAmount, reviseCurrency)}
+                      {reviseTotals.taxName ? taxModeSuffix(reviseForm.taxMode) : ""}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between border-t pt-1 font-semibold text-zinc-900">
-                    <span>Total</span>
-                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.total, reviseTarget?.currency ?? "IDR")}</span>
+                    <span>Total Payment</span>
+                    <span className="tabular-nums">{formatCurrencyFull(reviseTotals.total, reviseCurrency)}</span>
                   </div>
                   <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">
-                    Dasar tagihan: {formatCurrencyFull(reviseTotals.dp, reviseTarget?.currency ?? "IDR")} ·{" "}
-                    Pajak: {formatCurrencyFull(reviseTotals.taxAmount, reviseTarget?.currency ?? "IDR")}
-                    {reviseTotals.taxName ? (reviseForm.taxMode === "withhold" ? " (dipotong)" : " (ditambahkan)") : ""} ·{" "}
-                    Total: {formatCurrencyFull(reviseTotals.total, reviseTarget?.currency ?? "IDR")}
+                    Dasar tagihan: {formatCurrencyFull(reviseTotals.dp, reviseCurrency)} ·{" "}
+                    Pajak: {formatCurrencyFull(reviseTotals.taxAmount, reviseCurrency)}
+                    {reviseTotals.taxName ? taxModeSuffix(reviseForm.taxMode) : ""} ·{" "}
+                    Total Payment: {formatCurrencyFull(reviseTotals.total, reviseCurrency)}
                   </p>
                 </div>
                 <DialogFooter className="mt-1">
@@ -2359,7 +2724,7 @@ export default function FinanceModule() {
                           <Button
                             size="sm" className="bg-zinc-900 hover:bg-zinc-800"
                             disabled={quoteBusyId === quoteDetail.id}
-                            onClick={() => void runQuotationAction(quoteDetail, "send")}
+                            onClick={() => openQuoteSendDialog(quoteDetail)}
                             aria-label={`Kirim quotation ${quoteDetail.number} ke klien`}
                           >
                             {quoteBusyId === quoteDetail.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
@@ -2406,6 +2771,75 @@ export default function FinanceModule() {
               ) : null}
             </SheetContent>
           </Sheet>
+
+          {/* Ronde 56 — dialog kirim quotation: kanal email kini NYATA via email brand (butuh konfirmasi legal) */}
+          <Dialog open={quoteSendTarget !== null} onOpenChange={(open) => { if (!open) setQuoteSendTarget(null); }}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Kirim ke Klien</DialogTitle>
+                <DialogDescription>
+                  Pilih kanal pengiriman. Kanal email mengirim PDF penawaran secara nyata via email brand yang
+                  terhubung; kanal lain hanya dicatat sebagai tanda kirim di timeline.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="q-send-channel">Kanal</Label>
+                  <Select value={quoteSendChannel} onValueChange={setQuoteSendChannel}>
+                    <SelectTrigger id="q-send-channel"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CHANNELS.map((c) => (
+                        <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {quoteSendTarget ? (
+                  <p className="text-xs text-zinc-500">
+                    Quotation {quoteSendTarget.number} · {formatCurrencyFull(quoteSendTarget.total, quoteSendTarget.currency)}
+                  </p>
+                ) : null}
+                {quoteSendChannel === "email" ? (
+                  <>
+                    <div className="grid gap-2">
+                      <Label htmlFor="q-send-email">Email klien tujuan *</Label>
+                      <Input
+                        id="q-send-email" type="email" autoComplete="email"
+                        value={quoteSendEmail}
+                        onChange={(e) => setQuoteSendEmail(e.target.value)}
+                        placeholder="email klien tujuan"
+                      />
+                    </div>
+                    <label htmlFor="q-send-agree" className="flex items-start gap-2 text-xs leading-relaxed text-zinc-600">
+                      <Checkbox
+                        id="q-send-agree" checked={quoteSendAgree} className="mt-0.5"
+                        onCheckedChange={(v) => setQuoteSendAgree(v === true)}
+                      />
+                      <span>
+                        Saya menyatakan penawaran ini akurat &amp; mengikat sesuai scope yang tertulis; pengiriman
+                        terekam sebagai korespondensi resmi. PDF terlampir &amp; link tanda tangan aman akan
+                        disertakan. *
+                      </span>
+                    </label>
+                  </>
+                ) : null}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setQuoteSendTarget(null)} disabled={quoteSendBusy}>
+                  Batal
+                </Button>
+                <Button
+                  className="bg-zinc-900 hover:bg-zinc-800"
+                  disabled={quoteSendBusy || (quoteSendChannel === "email" && (!quoteSendEmail.trim().includes("@") || !quoteSendAgree))}
+                  onClick={() => void confirmQuoteSend()}
+                  aria-label="Kirim quotation ke klien"
+                >
+                  {quoteSendBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
+                  Kirim
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
       </Tabs>
     </div>

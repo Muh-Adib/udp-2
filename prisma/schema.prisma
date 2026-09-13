@@ -307,7 +307,9 @@ model Invoice {
   // ==== Ronde 50 — format faktur (gaya Unicam): item baris, DP, pajak potong, revisi ====
   items           String         @default("[]") // JSON [{description, qty, unit, unitPrice, total}]
   downPaymentPct  Float          @default(0) // >0 → baris "Down Payment (N%)", total dibayar = DP − pajak potong
-  taxMode         String         @default("add") // add (PPN ditambahkan) | withhold (PPh dipotong)
+  taxMode         String         @default("add") // add (PPN ditambahkan) | withhold (PPh dipotong) | grossup (Ronde 56: Gross-Up lalu Less — Total Payment = dasar)
+  discountAmount  Float          @default(0) // Ronde 56 — diskon nominal (baris "Discount" gaya Unicam)
+  terms           String? // Ronde 56 — JSON jadwal pembayaran [{label, pct, dueDays, dueEvent}] dueEvent: invoice|down_payment|bastp|handover|delivery
   purchaseNumber  String? // nomor PO klien ("Purchase Number")
   projectName     String? // label project di faktur (mis. "AI Video")
   attn            String? // personel klien di faktur
@@ -361,6 +363,7 @@ model Project {
   status          String       @default("planning") // planning, in_progress, review, completed, cancelled
   progress        Int          @default(0)
   pmName          String?
+  poNumber        String? // Ronde 56 — nomor PO klien (salah satu pemicu status WON)
   startDate       DateTime?
   dueDate         DateTime?
   budgetInternal  Float        @default(0)
@@ -550,6 +553,12 @@ model Quotation {
   total          Float       @default(0)
   currency       String      @default("IDR")
   status         String      @default("draft") // draft, sent, accepted, rejected, expired
+  // ==== Ronde 56 — tanda tangan elektronik klien (secure share link) ====
+  signedAt         DateTime? // waktu klien menandatangani via link aman
+  signedByName     String? // nama penanda tangan (diisi klien)
+  signedByTitle    String? // jabatan penanda tangan (opsional)
+  signatureImage   String? // gambar tanda tangan klien (data URL, ≤600KB)
+  shareTokens      QuotationShareToken[]
   // Ronde 39 — riwayat revisi: quotation revisi menunjuk quotation yang direvisi
   revisionOfId   String?
   revisionOf     Quotation?  @relation("QuotationRevision", fields: [revisionOfId], references: [id], onDelete: SetNull)
@@ -575,6 +584,32 @@ model Quotation {
   updatedAt      DateTime    @updatedAt
 
   @@index([revisionOfId])
+}
+
+/**
+ * Ronde 56 — token link aman quotation (secure share link).
+ * - token  : identifier publik di URL (/?quote=<token>)
+ * - keySha : SHA-256 dari "magic key" — magic link di email berisi key asli,
+ *            server hanya membandingkan hash (key tidak pernah disimpan polos).
+ * - passwordSha: SHA-256 password manual (fallback bila magic link hilang).
+ * - maxOpens/opens: link aman terbatas dibuka 3× — habis → klien bisa minta
+ *   kode baru (POST request-new-code) yang otomatis dikirim via email brand.
+ */
+model QuotationShareToken {
+  id          String     @id @default(cuid())
+  quotationId String
+  quotation   Quotation  @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  token       String     @unique
+  keySha      String? // SHA-256 magic key (null = hanya password)
+  passwordSha String? // SHA-256 password manual (null = hanya magic)
+  maxOpens    Int        @default(3)
+  opens       Int        @default(0)
+  revoked     Boolean    @default(false)
+  lastOpenedAt DateTime?
+  createdBy   String?
+  createdAt   DateTime   @default(now())
+
+  @@index([quotationId])
 }
 
 model ApprovalRequest {

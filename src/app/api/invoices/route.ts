@@ -5,6 +5,9 @@ import { resolveActor, assertRole } from "@/lib/crm/auth";
 import { assertModuleLevel } from "@/lib/crm/permissions";
 import { sendPushToRoles } from "@/lib/crm/push";
 import { nextDocumentNumber, revisionDocumentNumber } from "@/lib/crm/numbering";
+// Ronde 56 — pengiriman nyata: PDF faktur + email brand terhubung
+import { buildInvoicePdf, pdfFileName } from "@/lib/crm/doc-pdf";
+import { sendDocumentEmail, pdfAttachment, isDelivered } from "@/lib/crm/doc-send";
 
 // ============ Ronde 50 — helper faktur gaya Unicam (item baris, DP, pajak potong) ============
 
@@ -35,12 +38,16 @@ export function parseInvoiceItems(raw: unknown): InvoiceItemRow[] {
 }
 
 /**
- * Kalkulasi total faktur Ronde 50:
+ * Kalkulasi total faktur Ronde 50 + Ronde 56 (diskon nominal + mode gross-up):
+ * - discountAmount (R56): potongan nominal dari contoh faktur Unicam
+ *   (item 11.250.000 − discount 1.250.000 = Sub Total 10.000.000).
  * - downPaymentPct > 0 → dasar tagihan = amount × DP% (invoice DP/termin dari kontrak),
  *   pajak dihitung dari dasar tagihan (contoh Unicam: PPh 23 2% × DP 15.750.000 = 315.000).
  * - taxMode "withhold" → pajak MENGURANGI (PPh 23/21 dipotong penyelenggara);
+ *   taxMode "grossup" (R56, contoh faktur Unicam) → pajak ditambahkan lalu
+ *   dikurangi lagi ("Gross-Up … Total … Less … Total Payment") → Total Payment = dasar;
  *   taxMode "add" (default) → pajak menambah (PPN).
- * - total (payable) = dasar tagihan ± pajak.
+ * - total (payable) = dasar tagihan ± pajak (grossup: dasar).
  */
 function computeInvoiceTotals(input: {
   amount: number;
@@ -48,12 +55,19 @@ function computeInvoiceTotals(input: {
   taxRate: number;
   taxMode: string;
   downPaymentPct: number;
+  discountAmount?: number;
 }) {
+  const discount = Math.min(Math.max(0, input.amount), Math.max(0, Math.round(input.discountAmount || 0)));
+  const afterDiscount = Math.max(0, input.amount - discount);
   const dpPct = Math.min(100, Math.max(0, input.downPaymentPct || 0));
-  const dpAmount = dpPct > 0 ? Math.round((input.amount * dpPct) / 100) : input.amount;
+  const dpAmount = dpPct > 0 ? Math.round((afterDiscount * dpPct) / 100) : afterDiscount;
   const taxAmount = input.taxName ? Math.round((dpAmount * Math.min(100, Math.max(0, input.taxRate))) / 100) : 0;
-  const total = input.taxMode === "withhold" ? dpAmount - taxAmount : dpAmount + taxAmount;
-  return { dpAmount, taxAmount, total };
+  const total = input.taxMode === "withhold"
+    ? dpAmount - taxAmount
+    : input.taxMode === "grossup"
+      ? dpAmount
+      : dpAmount + taxAmount;
+  return { discount, afterDiscount, dpAmount, taxAmount, total };
 }
 
 function shortText(v: unknown, max: number): string | null {
@@ -82,12 +96,82 @@ function unicamFields(body: Record<string, unknown>): Record<string, unknown> {
     const n = Number(body.downPaymentPct);
     out.downPaymentPct = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
   }
-  if ("taxMode" in body) out.taxMode = body.taxMode === "withhold" ? "withhold" : "add";
+  // Ronde 56 — taxMode kini juga menerima "grossup" (Gross-Up → Less → Total Payment)
+  if ("taxMode" in body) out.taxMode = body.taxMode === "withhold" ? "withhold" : body.taxMode === "grossup" ? "grossup" : "add";
   if ("purchaseNumber" in body) out.purchaseNumber = shortText(body.purchaseNumber, 80);
   if ("projectName" in body) out.projectName = shortText(body.projectName, 160);
   if ("attn" in body) out.attn = shortText(body.attn, 120);
   if ("clientAddress" in body) out.clientAddress = shortText(body.clientAddress, 400);
+  // Ronde 56 — jadwal termin (Term of Payment terstruktur)
+  if ("terms" in body) {
+    const terms = parseInvoiceTerms(body.terms);
+    out.terms = terms.length > 0 ? JSON.stringify(terms) : null;
+  }
+  // Ronde 56 — diskon nominal (gaya contoh faktur Unicam)
+  if ("discountAmount" in body) {
+    const n = Number(body.discountAmount);
+    out.discountAmount = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+  }
   return out;
+}
+
+/** Ronde 56 — validasi jadwal termin: [{label, pct, dueDays, dueEvent}] maks 6 baris. */
+const TERM_EVENTS = ["invoice", "down_payment", "bastp", "handover", "delivery"] as const;
+export function parseInvoiceTerms(raw: unknown): Array<{ label: string; pct: number; dueDays: number; dueEvent: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((t) => t && typeof t === "object")
+    .slice(0, 6)
+    .map((t) => {
+      const term = t as { label?: unknown; pct?: unknown; dueDays?: unknown; dueEvent?: unknown };
+      const label = String(term.label ?? "").trim().slice(0, 80) || "Payment";
+      const pct = Math.min(100, Math.max(0, Number(term.pct) || 0));
+      const dueDays = Math.min(365, Math.max(0, Math.round(Number(term.dueDays) || 0)));
+      const dueEvent = TERM_EVENTS.includes(String(term.dueEvent) as (typeof TERM_EVENTS)[number])
+        ? String(term.dueEvent)
+        : "invoice";
+      return { label, pct, dueDays, dueEvent };
+    });
+}
+
+/**
+ * Ronde 56 — otomasi WON via Nomor PO: bila faktur terhubung opportunity
+ * diberi purchaseNumber (PO klien masuk), opportunity otomatis won
+ * (ketentuan user: project won bila PO diterima ATAU dokumen ditandatangani).
+ */
+async function maybeWinByPO(opts: {
+  opportunityId: string | null;
+  purchaseNumber: string | null;
+  actorName: string;
+  req?: NextRequest;
+}): Promise<void> {
+  if (!opts.opportunityId || !opts.purchaseNumber) return;
+  try {
+    const opp = await db.opportunity.findUnique({ where: { id: opts.opportunityId }, select: { id: true, stage: true, title: true } });
+    if (!opp || opp.stage === "won") return;
+    await db.opportunity.update({ where: { id: opp.id }, data: { stage: "won" } });
+    await logAudit({
+      actorName: opts.actorName,
+      action: "update",
+      entity: "opportunity",
+      entityId: opp.id,
+      entityLabel: opp.title,
+      field: "stage",
+      oldValue: opp.stage,
+      newValue: "won",
+      metadata: `Otomatis WON — nomor PO klien diterima: ${opts.purchaseNumber}`,
+      req: opts.req,
+    });
+    void sendPushToRoles(["director", "super_admin"], {
+      title: "Deal WON — PO diterima",
+      body: `${opp.title} otomatis won karena nomor PO ${opts.purchaseNumber} dicatat pada invoice.`.slice(0, 140),
+      url: "/?modul=pipeline",
+      tag: `po-win:${opp.id}`,
+      type: "activity",
+    }, opts.actorName).catch(() => {});
+  } catch {
+    /* win-otomatis gagal tidak boleh menggagalkan penyimpanan invoice */
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -195,17 +279,83 @@ export async function POST(req: NextRequest) {
     });
     return ok({ invoice: updated });
   }
-  // Kirim invoice (draft → sent)
+  // Kirim invoice (draft → sent) — Ronde 56: KIRIM NYATA via email brand + PDF
   if (body.action === "send_invoice") {
     const invoiceId = String(body.invoiceId ?? "");
-    const invoice = await db.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
+    const invoice = await db.invoice.findUnique({
+      where: { id: invoiceId },
+      include: { payments: true, brand: true, company: { select: { name: true, address: true } }, project: { select: { name: true } } },
+    });
     if (!invoice) return ok({ error: "Invoice tidak ditemukan" }, 404);
     if (invoice.status !== "draft") {
       return ok({ error: "Hanya invoice draft yang bisa dikirim" }, 400);
     }
+
+    // ==== Ronde 56 — dulu hanya menandai "sent" TANPA mengirim apa pun ====
+    // (laporan user: "invoice tidak terkirim"). Kini PDF faktur dibangun
+    // server-side (English, gaya contoh Unicam: Discount → Sub Total →
+    // Gross-Up → Total → Less → Total Payment + Terbilang), dikirim via SMTP
+    // kanal email brand, dan interaksi tercatat (sinkron timeline & inbox).
+    const recipient = String(body.email ?? "").trim();
+    if (!recipient || !recipient.includes("@")) {
+      return ok({ error: "Alamat email klien wajib diisi pada dialog kirim" }, 400);
+    }
+    if (body.confirmLegal !== true) {
+      return ok({ error: "Konfirmasi syarat & ketentuan pengiriman wajib dicentang" }, 400);
+    }
+    // Kontak utama perusahaan → agar interaksi tertaut thread inbox
+    const contact = await db.contact.findFirst({
+      where: { companyId: invoice.companyId, email: { not: null } },
+      select: { id: true, fullName: true, email: true },
+      orderBy: { createdAt: "asc" },
+    });
+
     const now = new Date();
-    const dueDate =
-      invoice.dueDate ?? new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const dueDate = invoice.dueDate ?? new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const pdf = buildInvoicePdf(
+      { ...invoice, issueDate: invoice.issueDate ?? now, dueDate },
+      invoice.brand,
+      { name: invoice.company?.name ?? null, address: invoice.clientAddress ?? invoice.company?.address ?? null },
+    );
+    const pdfName = pdfFileName("Invoice", invoice.number);
+    const totalTxt = `${invoice.currency} ${Number(invoice.total ?? 0).toLocaleString("en-US")}`;
+    const subject = `Invoice ${invoice.number} — ${invoice.brand.name ?? "Payment Request"}`;
+    const content = [
+      `Dear ${invoice.attn || invoice.company?.name || "Valued Client"},`,
+      "",
+      `Please find attached invoice ${invoice.number} for ${totalTxt}, due on ${dueDate.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}.`,
+      invoice.purchaseNumber ? `Purchase Order reference: ${invoice.purchaseNumber}.` : "",
+      "",
+      "Bank transfer details are stated on the invoice. Kindly send the payment confirmation after transfer.",
+      "",
+      "This invoice is issued subject to the agreed scope and terms of payment in the signed quotation/contract between both parties.",
+      "",
+      "Best regards,",
+      invoice.brand.name ?? "Finance Team",
+    ].filter(Boolean).join("\n");
+
+    const send = await sendDocumentEmail({
+      req,
+      actorName: actor.name,
+      actorRole: actor.role,
+      brandId: invoice.brandId,
+      recipientEmail: recipient,
+      recipientName: contact?.fullName ?? invoice.company?.name ?? null,
+      subject,
+      content,
+      attachments: [pdfAttachment(pdfName, pdf)],
+      interaction: {
+        opportunityId: invoice.opportunityId,
+        contactId: contact?.id ?? null,
+        companyId: invoice.companyId,
+      },
+      entityLabel: `Kirim invoice ${invoice.number} → ${recipient}`,
+      auditMetadata: `PDF ${pdfName} · total ${totalTxt}`,
+    });
+    if (!isDelivered(send.status)) {
+      return ok({ error: `Gagal mengirim email invoice: ${send.note ?? send.status}. Invoice tetap draft — periksa kanal email di Saluran & Integrasi.` }, 502);
+    }
+
     const updated = await db.invoice.update({
       where: { id: invoiceId },
       data: { status: "sent", issueDate: now, dueDate },
@@ -214,17 +364,18 @@ export async function POST(req: NextRequest) {
     await logAudit({
       actorName: actor.name, actorRole: actor.role,
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
-      field: "status", oldValue: "draft", newValue: "sent", req,
+      field: "status", oldValue: "draft", newValue: "sent",
+      metadata: `TERKIRIM via email (${send.status}) → ${recipient}`, req,
     });
     // Ronde 46+48 — push: invoice dikirim ke klien → pimpinan & finance ikut tahu.
     void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${updated.number} dikirim`,
-      body: `${actor.name} mengirim tagihan ${updated.number} — ${updated.description ?? ""}`.slice(0, 140),
+      body: `${actor.name} mengirim tagihan ${updated.number} via email (${send.status}) — ${totalTxt}`.slice(0, 140),
       url: "/?modul=finance",
       tag: `invoice:${updated.id}`,
       type: "activity",
     }, actor.name);
-    return ok({ invoice: updated });
+    return ok({ invoice: updated, delivery: { status: send.status, note: send.note, to: recipient } });
   }
   // Batalkan invoice
   if (body.action === "cancel_invoice") {
@@ -266,11 +417,14 @@ export async function POST(req: NextRequest) {
     const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
     const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? invoice.taxRate)) : 0;
     // Ronde 50 — DP & mode pajak bisa diedit saat draft; total dihitung ulang konsisten.
-    const taxMode = body.taxMode === "withhold" ? "withhold" : body.taxMode === "add" ? "add" : invoice.taxMode;
+    const taxMode = body.taxMode === "withhold" ? "withhold" : body.taxMode === "grossup" ? "grossup" : body.taxMode === "add" ? "add" : invoice.taxMode;
     const downPaymentPct = body.downPaymentPct !== undefined
       ? Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0))
       : invoice.downPaymentPct;
-    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const discountAmount = body.discountAmount !== undefined
+      ? Math.max(0, Math.round(Number(body.discountAmount) || 0))
+      : invoice.discountAmount;
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct, discountAmount });
     const unicam = unicamFields(body);
     const updated = await db.invoice.update({
       where: { id: invoiceId },
@@ -285,6 +439,7 @@ export async function POST(req: NextRequest) {
         total: totals.total,
         taxMode,
         downPaymentPct,
+        discountAmount: totals.discount,
         ...unicam,
         dueDate: body.dueDate !== undefined ? dateOrNull(body.dueDate) : invoice.dueDate,
         notes: body.notes !== undefined
@@ -298,6 +453,8 @@ export async function POST(req: NextRequest) {
       action: "update", entity: "invoice", entityId: invoiceId, entityLabel: invoice.number,
       field: "draft_edit", newValue: `${updated.description ?? ""} · ${amount} · ${taxName ?? "tanpa pajak"}`, req,
     });
+    // Ronde 56 — PO klien diisi saat edit draft → opportunity otomatis WON.
+    await maybeWinByPO({ opportunityId: updated.opportunityId, purchaseNumber: updated.purchaseNumber, actorName: actor.name, req });
     return ok({ invoice: updated });
   }
 
@@ -355,10 +512,11 @@ export async function POST(req: NextRequest) {
     const taxNameRaw = body.taxName;
     const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
     const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? 11)) : 0;
-    // Ronde 50 — mode pajak (add=PPN ditambah, withhold=PPh dipotong) + DP + item baris.
-    const taxMode = body.taxMode === "withhold" ? "withhold" : "add";
+    // Ronde 50 — mode pajak (add=PPN ditambah, withhold=PPh dipotong, grossup=R56) + DP + item baris.
+    const taxMode = body.taxMode === "withhold" ? "withhold" : body.taxMode === "grossup" ? "grossup" : "add";
     const downPaymentPct = Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0));
-    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const discountAmount = Math.max(0, Math.round(Number(body.discountAmount) || 0));
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct, discountAmount });
     const items = parseInvoiceItems(body.items);
     const dueDate = dateOrNull(body.dueDate) ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
@@ -384,6 +542,7 @@ export async function POST(req: NextRequest) {
           total: totals.total,
           taxMode,
           downPaymentPct,
+          discountAmount: totals.discount,
           items: JSON.stringify(items),
           ...unicamFields(body),
           // Sinkron brand: mata uang mengikuti konfigurasi brand (bukan hardcode IDR)
@@ -403,6 +562,8 @@ export async function POST(req: NextRequest) {
       action: "create", entity: "invoice", entityId: invoice.id, entityLabel: invoice.number,
       newValue: `Invoice manual ${description} · ${amount}${taxName ? ` + ${taxName} ${taxRate}%` : ""} · brand ${brand.name}`, req,
     });
+    // Ronde 56 — PO klien pada invoice manual → opportunity otomatis WON.
+    await maybeWinByPO({ opportunityId: invoice.opportunityId, purchaseNumber: invoice.purchaseNumber, actorName: actor.name, req });
     // Ronde 48 — finance adalah pemilik proses tagihan → wajib di-notify.
     void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${invoice.number} diterbitkan`,
@@ -500,11 +661,14 @@ export async function POST(req: NextRequest) {
     const taxNameRaw = body.taxName === undefined ? source.taxName : body.taxName;
     const taxName = taxNameRaw && String(taxNameRaw).trim() ? String(taxNameRaw).trim().slice(0, 60) : null;
     const taxRate = taxName ? Math.min(100, Math.max(0, numOrNull(body.taxRate) ?? source.taxRate)) : 0;
-    const taxMode = body.taxMode === "add" ? "add" : body.taxMode === "withhold" ? "withhold" : source.taxMode;
+    const taxMode = body.taxMode === "add" ? "add" : body.taxMode === "withhold" ? "withhold" : body.taxMode === "grossup" ? "grossup" : source.taxMode;
     const downPaymentPct = body.downPaymentPct !== undefined
       ? Math.min(100, Math.max(0, numOrNull(body.downPaymentPct) ?? 0))
       : source.downPaymentPct;
-    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct });
+    const discountAmount = body.discountAmount !== undefined
+      ? Math.max(0, Math.round(Number(body.discountAmount) || 0))
+      : source.discountAmount;
+    const totals = computeInvoiceTotals({ amount, taxName, taxRate, taxMode, downPaymentPct, discountAmount });
     const description = body.description !== undefined
       ? (String(body.description ?? "").trim() || source.description)
       : source.description;
@@ -540,6 +704,7 @@ export async function POST(req: NextRequest) {
           total: totals.total,
           taxMode,
           downPaymentPct,
+          discountAmount: totals.discount,
           ...unicamFields({ ...bodyToSourceItems(source), ...body }),
           currency: source.currency,
           status: "draft",
@@ -563,6 +728,8 @@ export async function POST(req: NextRequest) {
       metadata: `Revisi ke-${invoice.revisionNo} dari ${source.number}${revisionReason ? ` — ${revisionReason}` : ""}`,
       req,
     });
+    // Ronde 56 — PO pada invoice revisi juga memicu WON otomatis.
+    await maybeWinByPO({ opportunityId: invoice.opportunityId, purchaseNumber: invoice.purchaseNumber, actorName: actor.name, req });
     void sendPushToRoles(["director", "super_admin", "finance"], {
       title: `Invoice ${invoice.number} diterbitkan (revisi)`,
       body: `${actor.name} merevisi ${source.number} → ${invoice.number} · total ${invoice.total}`.slice(0, 140),

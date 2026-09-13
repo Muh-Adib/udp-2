@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, readBody, logAudit, fail } from "@/lib/crm/server";
+import { ok, readBody, logAudit, fail, unsafeAttachmentReason } from "@/lib/crm/server";
 import { deliverEmailReply } from "@/lib/crm/email-delivery";
 import { resolveActor } from "@/lib/crm/auth";
 
@@ -48,10 +48,36 @@ export async function POST(req: NextRequest) {
   const recipientRaw = body.recipientName ? String(body.recipientName) : null;
 
   // Ronde 21: email outbound → kirim nyata via SMTP (lihat email-delivery.ts).
+  // Ronde 56 — FIX "timeline tidak sinkron / lampiran tidak terkirim":
+  // - deliverEmailReply kini menerima brandId → memakai kanal email MILIK BRAND
+  //   interaksi (dulu kanal email acak/non-brand);
+  // - lampiran (data URL ≤2MB, maks 3) ikut dikirim via SMTP DAN disimpan di
+  //   interaksi sehingga bisa diunduh dari thread inbox & timeline.
   let deliveryStatus: string | null = null;
   let deliveryNote: string | null = null;
+  const parsedAttachments: Array<{ name: string; url: string; size?: number }> = [];
   if (channel === "email" && direction === "outbound") {
-    const delivery = await deliverEmailReply({ recipientRaw, subject, content });
+    if (Array.isArray(body.attachments)) {
+      for (const raw of body.attachments.slice(0, 3)) {
+        const item = raw as { name?: unknown; url?: unknown };
+        const name = String(item?.name ?? "").trim().slice(0, 200);
+        const url = String(item?.url ?? "");
+        if (!name || !url.startsWith("data:")) continue;
+        const unsafe = unsafeAttachmentReason(name, url);
+        if (unsafe) return fail(`Lampiran "${name}" ditolak — ${unsafe}`, 422);
+        const base64 = url.slice(url.indexOf(",") + 1);
+        const bytes = Math.floor((base64.length * 3) / 4);
+        if (bytes > 2 * 1024 * 1024) return fail(`Lampiran "${name}" melebihi 2 MB`, 422);
+        parsedAttachments.push({ name, url, size: bytes });
+      }
+    }
+    const delivery = await deliverEmailReply({
+      recipientRaw,
+      subject,
+      content,
+      brandId: body.brandId ? String(body.brandId) : null,
+      ...(parsedAttachments.length > 0 ? { attachments: parsedAttachments } : {}),
+    });
     deliveryStatus = delivery.status;
     deliveryNote = delivery.note;
   } else if (direction === "outbound") {
@@ -73,6 +99,7 @@ export async function POST(req: NextRequest) {
       respondedAt: body.respondedBy ? new Date() : null,
       deliveryStatus,
       deliveryNote,
+      ...(parsedAttachments.length > 0 ? { attachments: JSON.stringify(parsedAttachments) } : {}),
       opportunityId: body.opportunityId ? String(body.opportunityId) : null,
       contactId: body.contactId ? String(body.contactId) : null,
       companyId: body.companyId ? String(body.companyId) : null,

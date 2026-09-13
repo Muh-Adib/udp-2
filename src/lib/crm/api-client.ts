@@ -337,8 +337,16 @@ export const api = {
   addPayment: (payload: { invoiceId: string; amount: number; method?: string; reference?: string; actorName?: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "add_payment", ...payload }) }),
   /** Kirim (draft→sent) atau batalkan invoice — Fase 2/3 lifecycle. */
-  invoiceAction: (payload: { invoiceId: string; action: "send_invoice" | "cancel_invoice"; actorName?: string; actorRole?: string }) =>
-    request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify(payload) }),
+  // Ronde 56 — kirim invoice NYATA via email: email + confirmLegal dari dialog
+  invoiceAction: (payload: {
+    invoiceId: string;
+    action: "send_invoice" | "cancel_invoice";
+    email?: string;
+    confirmLegal?: boolean;
+    actorName?: string;
+    actorRole?: string;
+  }) =>
+    request<{ invoice: InvoiceDTO; delivery?: { status: string; note: string | null; to: string } }>("/api/invoices", { method: "POST", body: JSON.stringify(payload) }),
   /** Ronde 35 — terbitkan invoice manual dari project (termin/milestone): alur Produksi → Keuangan. */
   createProjectInvoice: (payload: { projectId: string; description: string; amount: number; taxRate?: number; dueDate?: string; milestoneName?: string; actorName?: string; actorRole?: string }) =>
     request<{ invoice: InvoiceDTO }>("/api/invoices", { method: "POST", body: JSON.stringify({ action: "create_invoice", ...payload }) }),

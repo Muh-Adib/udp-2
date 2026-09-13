@@ -5,6 +5,9 @@ import { resolveActor } from "@/lib/crm/auth";
 import { sendPushToRoles } from "@/lib/crm/push";
 import { CHANNELS } from "@/lib/crm/constants";
 import { nextDocumentNumber } from "@/lib/crm/numbering";
+// Ronde 56 — pengiriman nyata: PDF + email brand terhubung + link aman
+import { buildQuotationPdf, pdfFileName } from "@/lib/crm/doc-pdf";
+import { sendDocumentEmail, pdfAttachment, isDelivered, sha256, randomToken, baseUrlFromReq } from "@/lib/crm/doc-send";
 
 /** Ronde 50 — item quotation → item faktur (deskripsi/qty/unitPrice; unit "1" default). */
 function parseQuotationItemsToInvoiceItems(raw: string): Array<{ description: string; qty: number; unit: string; unitPrice: number; total: number }> {
@@ -78,6 +81,127 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (quotation.status !== "draft") return fail("Hanya quotation berstatus draft yang dapat dikirim");
     // Ronde 40 — kanal kirim bebas pilih (whitelist CHANNELS), default email
     const channel = body.channel && CHANNEL_KEYS.includes(String(body.channel)) ? String(body.channel) : "email";
+
+    // ==== Ronde 56 — KIRIM NYATA via email brand terhubung (PDF terlampir) ====
+    // Dulu: hanya menandai status "sent" — klien TIDAK PERNAH menerima email
+    // (laporan user: "penawaran tidak terkirim"). Kini: PDF dibangun server-side
+    // (bahasa Inggris, kop brand), dikirim via SMTP kanal email brand, link aman
+    // (password + 3x buka + magic link) disertakan, dan interaksi dicatat agar
+    // tampil di timeline opportunity SERTA thread Inbox (sinkron).
+    if (channel === "email") {
+      const contact = await db.contact.findUnique({
+        where: { id: quotation.opportunity.contactId },
+        select: { id: true, fullName: true, email: true },
+      });
+      const recipient = String(body.email ?? "").trim() || (contact?.email ?? "").trim();
+      if (!recipient || !recipient.includes("@")) {
+        return fail("Tidak ada alamat email klien — isi kolom email pada dialog kirim (atau lengkapi email kontak)", 422);
+      }
+      if (body.confirmLegal !== true) {
+        return fail("Konfirmasi syarat & ketentuan pengiriman wajib dicentang", 422);
+      }
+
+      // 1) Token link aman (password + magic key + maks 3 kali buka)
+      const token = randomToken(20);
+      const magicKey = randomToken(20);
+      await db.quotationShareToken.create({
+        data: {
+          quotationId: id,
+          token,
+          keySha: sha256(magicKey),
+          maxOpens: 3,
+          createdBy: actorName,
+        },
+      });
+      const baseUrl = baseUrlFromReq(req);
+      const magicUrl = `${baseUrl}/?quote=${token}&key=${magicKey}`;
+      const manualUrl = `${baseUrl}/?quote=${token}`;
+
+      // 2) PDF quotation (English, kop brand)
+      const pdf = buildQuotationPdf(
+        {
+          ...quotation,
+          issueDate: quotation.createdAt,
+        },
+        quotation.brand,
+        { name: quotation.company?.name ?? null, address: quotation.clientAddress ?? null },
+      );
+      const pdfName = pdfFileName("Quotation", quotation.number);
+
+      // 3) Isi email (English — dokumen resmi)
+      const subject = `Quotation ${quotation.number} — ${quotation.brand.name ?? "Our Offer"}`;
+      const totalTxt = `${quotation.currency} ${quotation.total.toLocaleString("en-US")}`;
+      const content = [
+        `Dear ${quotation.attn || quotation.company?.name || "Valued Client"},`,
+        "",
+        `Thank you for your interest in working with us. Please find attached our official quotation ${quotation.number} with a total value of ${totalTxt}.`,
+        `This quotation is valid until ${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }) : "the stated validity date"}.`,
+        "",
+        "You can also review and SIGN the quotation electronically via this secure link:",
+        magicUrl,
+        "",
+        `(Secure access — the link can be opened up to 3 times. If the access window is exhausted, you may request a new code and it will be emailed to you automatically. Password access is also available on request: ${manualUrl})`,
+        "",
+        "By signing the quotation electronically, you agree to the scope, timeline, and terms of payment stated in the document, and confirm the purchase on behalf of your company.",
+        "",
+        `Best regards,`,
+        `${quotation.brand.name ?? "Sales Team"}`,
+      ].join("\n");
+
+      // 4) Kirim via SMTP kanal email brand + catat interaksi (status jujur)
+      const send = await sendDocumentEmail({
+        req,
+        actorName,
+        actorRole,
+        brandId: quotation.brandId,
+        recipientEmail: recipient,
+        recipientName: contact?.fullName ?? quotation.company?.name ?? null,
+        subject,
+        content,
+        attachments: [pdfAttachment(pdfName, pdf)],
+        interaction: {
+          opportunityId: quotation.opportunityId,
+          contactId: quotation.opportunity.contactId,
+          companyId: quotation.companyId,
+        },
+        entityLabel: `Kirim quotation ${quotation.number} → ${recipient}`,
+        auditMetadata: `PDF ${pdfName} · total ${totalTxt}`,
+      });
+      if (!isDelivered(send.status)) {
+        return fail(`Gagal mengirim email quotation: ${send.note ?? send.status}. Quotation tetap draft — periksa kanal email di Saluran & Integrasi.`, 502);
+      }
+
+      const updated = await db.quotation.update({
+        where: { id },
+        data: { status: "sent", sentAt: new Date() },
+        include: { brand: true, company: true, opportunity: { select: { id: true, title: true, stage: true } } },
+      });
+      if (quotation.opportunityId && quotation.opportunity.stage === "estimation") {
+        await db.opportunity.update({
+          where: { id: quotation.opportunityId },
+          data: { stage: "proposal_sent" },
+        });
+      }
+      await logAudit({
+        actorName, actorRole, action: "update", entity: "quotation", entityId: id,
+        entityLabel: quotation.number, field: "status", oldValue: "draft", newValue: "sent",
+        metadata: `Quotation TERKIRIM via email (${send.status}) → ${recipient}`, req,
+      });
+      void sendPushToRoles(
+        ["director", "super_admin"],
+        {
+          title: "Quotation terkirim",
+          body: `${quotation.number} — ${quotation.company?.name ?? "klien"} · email ${send.status === "sent" ? "terkirim nyata" : "simulasi (kanal demo)"}`,
+          url: "/?modul=pipeline",
+          tag: `quo-${id}-sent`,
+          type: "quotation",
+        },
+        actor.email,
+      ).catch(() => {});
+      return ok({ quotation: updated, delivery: { status: send.status, note: send.note, to: recipient }, shareToken: token });
+    }
+
+    // Kanal non-email (whatsapp/instagram): perilaku lama — tanda kirim manual.
     const updated = await db.quotation.update({
       where: { id },
       data: { status: "sent", sentAt: new Date() },
@@ -91,6 +215,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           direction: "outbound",
           brandId: quotation.brandId,
           opportunityId: quotation.opportunityId,
+          contactId: quotation.opportunity.contactId,
           content: `Quotation ${quotation.number} dikirim ke klien. Total: ${quotation.total.toLocaleString("id-ID")} ${quotation.currency}. Berlaku sampai ${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString("id-ID") : "-"}.`,
           senderName: actorName,
           subject: `Quotation ${quotation.number}`,
@@ -120,6 +245,32 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       actor.email
     ).catch(() => {});
     return ok({ quotation: updated });
+  }
+
+  // ==== Ronde 56 — buat/atur ulang link aman quotation (dgn password opsional) ====
+  if (action === "create_share") {
+    const password = typeof body.password === "string" && body.password.trim() ? body.password.trim().slice(0, 64) : null;
+    await db.quotationShareToken.updateMany({ where: { quotationId: id }, data: { revoked: true } });
+    const token = randomToken(20);
+    const magicKey = randomToken(20);
+    await db.quotationShareToken.create({
+      data: {
+        quotationId: id,
+        token,
+        keySha: sha256(magicKey),
+        ...(password ? { passwordSha: sha256(password) } : {}),
+        maxOpens: 3,
+        createdBy: actorName,
+      },
+    });
+    const baseUrl = baseUrlFromReq(req);
+    return ok({
+      token,
+      magicUrl: `${baseUrl}/?quote=${token}&key=${magicKey}`,
+      manualUrl: `${baseUrl}/?quote=${token}`,
+      hasPassword: Boolean(password),
+      maxOpens: 3,
+    });
   }
 
   if (action === "accept" || action === "reject") {
@@ -175,7 +326,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
     if (!number) return fail("Gagal menyusun nomor invoice unik — coba sekali lagi", 409);
-    const amount = quotation.total - quotation.taxAmount;
     // Ronde 36 (audit): cek ulang invoice-quotation DI DALAM transaksi + P2002 → 409
     // (dulu double-click bisa membuat dua DP invoice untuk quotation yang sama).
     const invoice = await db
@@ -191,12 +341,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             companyId: quotation.companyId,
             opportunityId: quotation.opportunityId,
             description: `Invoice dari quotation ${quotation.number}`,
-            amount,
+            // Ronde 56 — sinkron penuh dgn penawaran: amount = subtotal quotation,
+            // diskon ikut, pajak ditambahkan → total identik dgn quotation.
+            amount: quotation.subtotal,
+            discountAmount: quotation.discountAmount,
             taxRate: quotation.taxPct,
             // Ronde 40 — nama pajak ikut dibawa ke invoice (null = tanpa pajak)
             taxName: quotation.taxName,
             taxAmount: quotation.taxAmount,
             total: quotation.total,
+            taxMode: "add",
+            // Ronde 56 — default jadwal termin (mengikuti contoh: DP 50% sebelum
+            // mulai + Final 50% setelah BASTP); bisa diedit di draft invoice.
+            terms: JSON.stringify([
+              { label: "Down Payment", pct: 50, dueDays: 0, dueEvent: "invoice" },
+              { label: "Final Payment", pct: 50, dueDays: 3, dueEvent: "bastp" },
+            ]),
             // Ronde 50 — item baris faktur = item quotation (deskripsi/qty/harga)
             items: JSON.stringify(
               parseQuotationItemsToInvoiceItems(quotation.items),
