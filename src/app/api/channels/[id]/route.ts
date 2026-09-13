@@ -83,7 +83,10 @@ function precheckCredentials(channel: string, creds: Record<string, string>): { 
     }
   }
   if (channel === "email") {
-    if (creds.smtpHost && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(creds.smtpHost)) {
+    // Hostname (smtp.zoho.com) ATAU alamat IP (relay internal, mis. 192.168.1.10 / 127.0.0.1).
+    const isHostname = /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(creds.smtpHost ?? "");
+    const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(creds.smtpHost ?? "") || /^\[[0-9a-f:]+\]$/i.test(creds.smtpHost ?? "");
+    if (creds.smtpHost && !isHostname && !isIp) {
       return { ok: false, note: "Format host tidak valid (mis. smtp.zoho.com)" };
     }
   }
@@ -203,6 +206,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (current[f.key]) safeCreds[f.key] = current[f.key];
     }
     data.credentials = JSON.stringify(safeCreds);
+    // Bugfix (Ronde 51 audit SMTP): kredensial diganti kredensial asli → kanal TIDAK lagi demo.
+    // Dulu isDemo tetap true sehingga tombol "Uji" memakai jalur demo (tanpa uji
+    // jaringan) dan menimpa hasil verifikasi nyata dgn catatan "Koneksi demo" —
+    // error autentikasi asli jadi tak terlihat dan email tak pernah terkirim nyata.
+    data.isDemo = false;
     const pre = precheckCredentials(row.channel, safeCreds);
     const result = pre.ok ? await verifyChannel(row.channel, safeCreds) : pre;
     data.status = result.ok ? "connected" : "error";

@@ -398,7 +398,7 @@ export default function ChannelsModule() {
     setFormError(null);
     try {
       if (editing) {
-        await channelsApi.update(editing.id, {
+        const res = await channelsApi.update(editing.id, {
           action: "update",
           displayName: formName.trim(),
           accountRef: formAccount.trim(),
@@ -406,6 +406,20 @@ export default function ChannelsModule() {
           actorName: user?.name,
           actorRole: user?.role,
         });
+        // Bugfix (Ronde 51 audit SMTP): server menjalankan verifikasi NYATA saat
+        // kredensial disimpan — hasilnya kini DITAMPILKAN. Dulu dialog ditutup
+        // seolah sukses walau SMTP/Graph menolak (mis. 535 password salah) sehingga
+        // user tidak tahu koneksi sebenarnya gagal.
+        const st = res.config?.status;
+        const note = res.config?.statusNote;
+        if (st === "error") {
+          setFormError(note || "Verifikasi koneksi gagal — periksa kredensial");
+          toast.error(note || "Verifikasi koneksi gagal");
+          return;
+        }
+        setFormOpen(false);
+        if (st === "connected" && note) toast.success(note);
+        else toast.success("Koneksi diperbarui");
       } else {
         await channelsApi.connect({
           channel: formChannel,
@@ -416,8 +430,8 @@ export default function ChannelsModule() {
           actorName: user?.name,
           actorRole: user?.role,
         });
+        setFormOpen(false);
       }
-      setFormOpen(false);
       await load();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Gagal menyimpan koneksi");
@@ -743,6 +757,11 @@ export default function ChannelsModule() {
         callbackPath={waInfo?.path ?? "/api/webhooks/whatsapp"}
         verifyToken={waInfo?.effectiveVerifyToken ?? "grupcrm-demo-token"}
         brands={brands.map((b) => ({ id: b.id, name: b.name }))}
+        configs={data?.configs ?? []}
+        onEditExisting={(cfg) => {
+          setWizardOpen(false);
+          openEdit(cfg);
+        }}
         actorName={user?.name}
         actorRole={user?.role}
         onConnected={load}

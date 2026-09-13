@@ -47,7 +47,7 @@ export function friendlyVerifyError(err: unknown, kind: "smtp" | "imap" | "graph
     return `${kind.toUpperCase()}: timeout — host/port tidak merespons (coba port SSL 465/993 vs 587/143, cek firewall)`;
   }
   if (code === "EAUTH" || e?.responseCode === 535 || /authentication|invalid login|535/i.test(msg + (e?.response ?? ""))) {
-    return `${kind.toUpperCase()}: autentikasi gagal — username atau App Password salah (Gmail wajib App Password, bukan password biasa)`;
+    return `${kind.toUpperCase()}: autentikasi ditolak server (535) — pastikan username = alamat email LENGKAP & password benar (Gmail/Google Workspace wajib App Password 16 karakter; Hostinger/Zoho/cPanel pakai password mailbox biasa)`;
   }
   if (e?.responseCode === 530 || /authentication required|530/i.test(msg)) {
     return `${kind.toUpperCase()}: server mewajibkan autentikasi/TLS — aktifkan secure connection`;
@@ -88,6 +88,10 @@ async function verifySmtp(creds: Record<string, string>): Promise<VerifyResult> 
     port,
     secure: port === 465, // 465 = implicit TLS; 587 = STARTTLS
     auth: { user, pass },
+    // EHLO name eksplisit — di beberapa lingkaran hosting os.hostname() tak
+    // teresolusi sehingga nodemailer mengirim "EHLO [127.0.0.1]" yang ditolak
+    // server SMTP ketat (501). Nama valid menjaga handshake tetap jalan.
+    name: "udp-crm.local",
     connectionTimeout: 8_000,
     greetingTimeout: 8_000,
     socketTimeout: 10_000,
@@ -262,6 +266,7 @@ export async function sendEmailViaSmtp(
     port,
     secure: port === 465,
     auth: { user, pass },
+    name: "udp-crm.local",
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,

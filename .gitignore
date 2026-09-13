@@ -53,3 +53,11 @@ server.log
 # Skills directory
 /skills/qa26-main-palette
 tool-results/
+
+# Database LIVE tidak boleh di-track git — operasi git (reset/checkout/rebase)
+# akan MENGHAPUS data user (pernah terjadi: kredensial SMTP & konfigurasi hilang).
+# Salinan seed utk instalasi baru disimpan sebagai db/custom.db.seed
+# (cp db/custom.db.seed db/custom.db saat setup baru).
+db/custom.db
+db/*.db-shm
+db/*.db-wal

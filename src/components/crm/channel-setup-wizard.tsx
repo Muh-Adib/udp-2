@@ -28,6 +28,7 @@ import {
   Mail,
   Plug,
   PlugZap,
+  Settings2,
   Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -155,6 +156,10 @@ export interface ChannelSetupWizardProps {
   callbackPath: string;
   verifyToken: string;
   brands: Array<{ id: string; name: string }>;
+  /** Koneksi yang sudah ada — dipakai utk mendeteksi konflik 409 & menawarkan jalur edit. */
+  configs?: Array<import("@/lib/crm/types").ChannelConfigDTO>;
+  /** Buka dialog edit utk koneksi yang sudah ada (dipanggil dari peringatan 409). */
+  onEditExisting?: (config: import("@/lib/crm/types").ChannelConfigDTO) => void;
   actorName?: string;
   actorRole?: string;
   /** Dipanggil setelah koneksi berhasil (refresh daftar). */
@@ -170,6 +175,8 @@ export default function ChannelSetupWizard({
   callbackPath,
   verifyToken,
   brands,
+  configs,
+  onEditExisting,
   actorName,
   actorRole,
   onConnected,
@@ -186,6 +193,8 @@ export default function ChannelSetupWizard({
   const [isDemo, setIsDemo] = useState(false);
   const [skipVerify, setSkipVerify] = useState(false);
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
+  // Konflik 409 — koneksi utk kanal+brand ini sudah ada; tawarkan jalur edit.
+  const [conflictConfig, setConflictConfig] = useState<import("@/lib/crm/types").ChannelConfigDTO | null>(null);
   const [origin, setOrigin] = useState("");
 
   const meta = channelKey ? CHANNEL_TYPES[channelKey] : null;
@@ -205,6 +214,7 @@ export default function ChannelSetupWizard({
       setIsDemo(false);
       setSkipVerify(false);
       setVerifyNote(null);
+      setConflictConfig(null);
       setOrigin(window.location.origin);
     }
   }, [open, channelKey]);
@@ -291,7 +301,26 @@ export default function ChannelSetupWizard({
       toast.success(`${meta.label} berhasil terhubung 🎉`);
     } catch (e) {
       // Verifikasi nyata gagal → pesan error asli ditampilkan inline agar bisa diperbaiki.
-      setError(e instanceof Error ? e.message : "Gagal menghubungkan kanal");
+      const msg = e instanceof Error ? e.message : "Gagal menghubungkan kanal";
+      // 409 — koneksi utk kanal+brand ini sudah ada (seed/demo atau sebelumnya):
+      // jangan biarkan user buntu — tunjukkan koneksi yang dimaksud & tawarkan Edit.
+      if (/sudah terhubung/i.test(msg)) {
+        const match =
+          configs?.find(
+            (c) =>
+              c.channel === channelKey &&
+              (brandId === "all" ? c.brandId == null : c.brandId === brandId)
+          ) ?? null;
+        setConflictConfig(match);
+        setError(
+          match
+            ? `${msg}. Koneksi yang ada: “${match.displayName}”${match.accountRef ? ` (${match.accountRef})` : ""} — gunakan tombol di bawah untuk mengedit kredensialnya.`
+            : `${msg} — tutup wizard lalu gunakan tombol Edit pada koneksi yang ada.`
+        );
+      } else {
+        setConflictConfig(null);
+        setError(msg);
+      }
     } finally {
       setConnecting(false);
     }
@@ -659,7 +688,21 @@ export default function ChannelSetupWizard({
 
           {/* Error */}
           {error ? (
-            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600" role="alert">{error}</p>
+            <div className="mt-3 space-y-2" role="alert">
+              <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>
+              {conflictConfig && onEditExisting ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 w-full gap-1.5 border-zinc-300 text-xs text-zinc-700 hover:bg-zinc-50"
+                  onClick={() => onEditExisting(conflictConfig)}
+                >
+                  <Settings2 className="size-3.5" aria-hidden="true" />
+                  Edit koneksi yang ada: {conflictConfig.displayName}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
 
