@@ -49,10 +49,30 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     data.opportunityId = oppId;
   }
+  // Ronde 52 — task produksi: pindah project / menempel milestone timeline
+  if ("projectId" in body) {
+    const pid = body.projectId ? String(body.projectId) : null;
+    if (pid) {
+      const proj = await db.project.findUnique({ where: { id: pid }, select: { id: true } });
+      if (!proj) return fail("Project tidak ditemukan", 400);
+    }
+    data.projectId = pid;
+  }
+  if ("milestoneId" in body) {
+    const mid = body.milestoneId ? String(body.milestoneId) : null;
+    if (mid) {
+      const ms = await db.milestone.findUnique({ where: { id: mid }, select: { id: true, projectId: true } });
+      if (!ms) return fail("Milestone tidak ditemukan", 400);
+      const targetProject = ("projectId" in data ? (data.projectId as string | null) : current.projectId) ?? ms.projectId;
+      if (ms.projectId !== targetProject) return fail("Milestone tidak milik project ini", 400);
+      data.projectId = ms.projectId;
+    }
+    data.milestoneId = mid;
+  }
   // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
   if ("dueDate" in body) data.dueDate = dateOrNull(body.dueDate);
 
-  const task = await db.task.update({ where: { id }, data, include: { opportunity: { include: { brand: true } } } });
+  const task = await db.task.update({ where: { id }, data, include: { opportunity: { include: { brand: true } }, project: { select: { id: true, code: true, name: true } }, milestone: { select: { id: true, name: true } } } });
 
   await logAudit({
     actorName: actor.name, actorRole: actor.role,

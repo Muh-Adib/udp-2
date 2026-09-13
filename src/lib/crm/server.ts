@@ -227,16 +227,72 @@ export async function handleWonTransition(oppId: string) {
 
     const flow = workflowFor(opp.serviceCategory);
     const span = project.dueDate ? project.dueDate.getTime() - (project.startDate?.getTime() ?? Date.now()) : 60 * 24 * 60 * 60 * 1000;
-    await tx.milestone.createMany({
-      data: flow.map((name, i) => ({
-        projectId: project.id,
-        name,
-        order: i,
-        status: i === 0 ? "in_progress" : "pending",
-        dueDate: new Date((project.startDate?.getTime() ?? Date.now()) + ((i + 1) * span) / flow.length),
-        achievement: achievementFor(name),
-      })),
-    });
+    const startMs = project.startDate?.getTime() ?? Date.now();
+
+    // Ronde 52 — BREAKDOWN pekerjaan dari estimasi: kategori RAB (kategori×item)
+    // menjadi tahap produksi nyata — "apa saja pekerjaannya" langsung terbawa dari
+    // estimasi ke timeline produksi, lengkap dgn capaian per tahap.
+    let breakdown: { name: string; items: { name: string; qty: number; unit: string }[] }[] = [];
+    const est = await tx.estimation.findUnique({ where: { opportunityId: opp.id }, select: { costCategories: true } });
+    if (est?.costCategories) {
+      try {
+        const parsed: unknown = JSON.parse(est.costCategories);
+        if (Array.isArray(parsed)) {
+          breakdown = parsed
+            .map((c) => {
+              const cat = (c ?? {}) as Record<string, unknown>;
+              const catName = typeof cat.name === "string" ? cat.name.trim() : "";
+              const rawItems = Array.isArray(cat.items) ? cat.items : [];
+              const items = rawItems
+                .map((it) => {
+                  const o = (it ?? {}) as Record<string, unknown>;
+                  return { name: typeof o.name === "string" ? o.name.trim() : "", qty: Number(o.qty ?? 0), unit: typeof o.unit === "string" && o.unit.trim() ? o.unit.trim() : "unit" };
+                })
+                .filter((it) => it.name);
+              return { name: catName, items };
+            })
+            .filter((c) => c.name);
+        }
+      } catch {
+        // JSON rusak → fallback template workflow di bawah
+      }
+    }
+
+    if (breakdown.length > 0) {
+      await tx.milestone.createMany({
+        data: breakdown.map((cat, i) => ({
+          projectId: project.id,
+          name: cat.name,
+          order: i,
+          status: i === 0 ? "in_progress" : "pending",
+          dueDate: new Date(startMs + ((i + 1) * span) / breakdown.length),
+          achievement: cat.items.length > 0
+            ? cat.items.map((it) => `${it.name}${it.qty > 1 ? ` ×${it.qty}` : ""}`).join(", ")
+            : achievementFor(cat.name),
+          // Ronde 52 — PIC default = PM project; estimasi waktu & paralel disetel
+          // PM di timeline produksi (estimasi waktu per tahap = span dibagi tahap).
+          picName: project.pmName,
+          durationDays: Math.max(1, Math.round(span / breakdown.length / (24 * 60 * 60 * 1000))),
+          parallel: false,
+        })),
+      });
+    } else {
+      await tx.milestone.createMany({
+        data: flow.map((name, i) => ({
+          projectId: project.id,
+          name,
+          order: i,
+          status: i === 0 ? "in_progress" : "pending",
+          dueDate: new Date(startMs + ((i + 1) * span) / flow.length),
+          achievement: achievementFor(name),
+          picName: project.pmName,
+        })),
+      });
+    }
+
+    // Ronde 52 — task yang dibuat saat masih di pipeline (opportunity) ikut pindah
+    // ke project sehingga tetap terlihat di timeline produksi & bisa di-assign ulang.
+    await tx.task.updateMany({ where: { opportunityId: opp.id, projectId: null }, data: { projectId: project.id } });
 
     // Ronde 48 — brief klien ter-link ke project (produksi membaca brief dari
     // detail project, tanpa harus membuka pipeline yang bukan domennya).

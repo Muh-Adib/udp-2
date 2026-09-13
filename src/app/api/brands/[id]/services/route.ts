@@ -22,7 +22,7 @@ function parseKind(raw: unknown): Kind | null {
   return raw === "category" || raw === "service" || raw === "stage" ? raw : null;
 }
 
-/** Ronde 29-b — validasi rincian biaya template harga layanan. */
+/** Ronde 29-b — validasi rincian biaya template harga layanan (LEGACY flat). */
 interface CostItemIn { name: string; amount: number; note?: string | null }
 
 function parseCostItems(raw: unknown): { err?: string; items?: CostItemIn[] | null } {
@@ -46,6 +46,50 @@ function parseCostItems(raw: unknown): { err?: string; items?: CostItemIn[] | nu
   return { items };
 }
 
+// Ronde 52 — rincian biaya kategori×item: struktur SAMA PERSIS dgn RAB estimasi
+// (EstimationCostCategory) sehingga katalog → saran → estimasi benar-benar terhubung.
+interface CatItemIn { name: string; qty: number; unit: string; price: number; subtotal: number }
+interface CatIn { name: string; items: CatItemIn[]; total: number }
+
+function parseCostCategories(raw: unknown): { err?: string; cats?: CatIn[] | null } {
+  if (raw === undefined) return {};
+  if (raw === null || raw === "") return { cats: null };
+  let arr: unknown = raw;
+  if (typeof arr === "string") {
+    try { arr = JSON.parse(arr); } catch { return { err: "Struktur rincian biaya (kategori) bukan JSON valid" }; }
+  }
+  if (!Array.isArray(arr)) return { err: "Rincian biaya (kategori) harus berupa array" };
+  if (arr.length > 30) return { err: "Maksimal 30 kategori biaya" };
+  const cats: CatIn[] = [];
+  const seen = new Set<string>();
+  for (const cat of arr) {
+    if (!cat || typeof cat !== "object") return { err: "Kategori rincian biaya tidak valid" };
+    const c = cat as Record<string, unknown>;
+    const catName = String(c.name ?? "").trim();
+    if (!catName) return { err: "Nama kategori wajib diisi" };
+    const key = catName.toLowerCase();
+    if (seen.has(key)) return { err: `Kategori "${catName}" muncul dua kali — gunakan nama unik` };
+    seen.add(key);
+    const rawItems = Array.isArray(c.items) ? c.items : [];
+    if (rawItems.length > 50) return { err: `Maksimal 50 item pada kategori "${catName}"` };
+    const items: CatItemIn[] = [];
+    for (const item of rawItems) {
+      if (!item || typeof item !== "object") return { err: `Item pada kategori "${catName}" tidak valid` };
+      const it = item as Record<string, unknown>;
+      const name = String(it.name ?? "").trim();
+      if (!name) return { err: `Nama item pada kategori "${catName}" wajib diisi` };
+      const qty = Number(it.qty ?? 0);
+      if (!Number.isFinite(qty) || qty < 0) return { err: `Qty item "${name}" tidak valid` };
+      const unit = String(it.unit ?? "").trim().slice(0, 40) || "unit";
+      const price = Number(it.price ?? 0);
+      if (!Number.isFinite(price) || price < 0) return { err: `Harga item "${name}" tidak valid` };
+      items.push({ name, qty, unit, price, subtotal: Math.round(qty * price) });
+    }
+    cats.push({ name: catName.slice(0, 120), items, total: items.reduce((s, i) => s + i.subtotal, 0) });
+  }
+  return { cats };
+}
+
 function parseMargin(raw: unknown): { err?: string; pct?: number | null } {
   if (raw === undefined) return {};
   if (raw === null || raw === "") return { pct: null };
@@ -54,10 +98,20 @@ function parseMargin(raw: unknown): { err?: string; pct?: number | null } {
   return { pct: n };
 }
 
-/** Saran harga = total biaya × (1 + margin) dibulatkan ke 100 ribu terdekat. */
-function computePricing(costItemsJson: string | null, targetMarginPct: number | null, _basePrice: number | null) {
+/** Saran harga = total biaya × (1 + margin) dibulatkan ke 100 ribu terdekat.
+ * Ronde 52 — total biaya dari kategori×item (prioritas); fallback legacy flat costItems. */
+function computePricing(costCategoriesJson: string | null, costItemsJson: string | null, targetMarginPct: number | null, _basePrice: number | null) {
   let costTotal: number | null = null;
-  if (costItemsJson) {
+  if (costCategoriesJson) {
+    try {
+      const arr = JSON.parse(costCategoriesJson) as CatIn[];
+      if (Array.isArray(arr)) {
+        const t = arr.reduce((sum, c) => sum + (Array.isArray(c.items) ? c.items.reduce((s, i) => s + (Number(i.subtotal) || (Number(i.qty) || 0) * (Number(i.price) || 0)) , 0) : 0), 0);
+        if (t > 0) costTotal = Math.round(t);
+      }
+    } catch { /* biarkan null */ }
+  }
+  if (costTotal === null && costItemsJson) {
     try {
       const arr = JSON.parse(costItemsJson) as CostItemIn[];
       if (Array.isArray(arr) && arr.length) costTotal = arr.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
@@ -71,6 +125,11 @@ function computePricing(costItemsJson: string | null, targetMarginPct: number | 
 function parseCostItemsForOutput(json: string | null): CostItemIn[] | null {
   if (!json) return null;
   try { return JSON.parse(json) as CostItemIn[]; } catch { return null; }
+}
+
+function parseCostCategoriesForOutput(json: string | null): CatIn[] | null {
+  if (!json) return null;
+  try { return JSON.parse(json) as CatIn[]; } catch { return null; }
 }
 
 async function loadTree(brandId: string) {
@@ -92,11 +151,12 @@ async function loadTree(brandId: string) {
       id: c.id, name: c.name, description: c.description, order: c.order, active: c.active,
     })),
     services: services.map((s) => {
-      const { costTotal, suggestedPrice } = computePricing(s.costItems, s.targetMarginPct, s.basePrice);
+      const { costTotal, suggestedPrice } = computePricing(s.costCategories, s.costItems, s.targetMarginPct, s.basePrice);
       return {
         id: s.id, categoryId: s.categoryId, name: s.name, description: s.description,
         unit: s.unit, basePrice: s.basePrice, order: s.order, active: s.active,
         costItems: parseCostItemsForOutput(s.costItems),
+        costCategories: parseCostCategoriesForOutput(s.costCategories),
         targetMarginPct: s.targetMarginPct,
         costTotal, suggestedPrice,
         workflow: s.workflowStages.map((w) => ({
@@ -110,6 +170,19 @@ async function loadTree(brandId: string) {
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Ronde 52 — migrasi lazy: layanan yang masih memakai rincian biaya LEGACY flat
+  // (costItems) otomatis dikonversi ke struktur kategori×item agar selaras dgn estimasi.
+  const legacy = await db.service.findMany({ where: { brandId: id, costCategories: null, costItems: { not: null } }, select: { id: true, costItems: true } });
+  for (const svc of legacy) {
+    const parsed = parseCostItems(svc.costItems);
+    if (parsed.err || !parsed.items || parsed.items.length === 0) continue;
+    const cats: CatIn[] = [{
+      name: "Biaya Umum",
+      items: parsed.items.map((it) => ({ name: it.name, qty: 1, unit: "unit", price: it.amount, subtotal: Math.round(it.amount) })),
+      total: Math.round(parsed.items.reduce((s, it) => s + it.amount, 0)),
+    }];
+    await db.service.update({ where: { id: svc.id }, data: { costCategories: JSON.stringify(cats) } });
+  }
   const tree = await loadTree(id);
   if (!tree) return fail("Brand tidak ditemukan", 404);
   return ok(tree);
@@ -168,16 +241,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         order: typeof body.order === "number" ? body.order : (last?.order ?? -1) + 1,
       },
     });
-    // Rincian biaya + margin target (opsional, dikirim bersamaan) — Ronde 29-b
-    if (body.costItems !== undefined || body.targetMarginPct !== undefined) {
-      const ci = parseCostItems(body.costItems);
+    // Rincian biaya + margin target (opsional, dikirim bersamaan) — Ronde 29-b.
+    // Ronde 52 — costCategories (kategori×item) menjadi struktur utama; bila dikirim,
+    // legacy costItems flat dinolkan agar tidak dobel hitung.
+    if (body.costCategories !== undefined || body.costItems !== undefined || body.targetMarginPct !== undefined) {
+      const cc = parseCostCategories(body.costCategories);
+      if (cc.err) return fail(cc.err);
+      const ci = body.costCategories === undefined ? parseCostItems(body.costItems) : { items: null as CostItemIn[] | null };
       if (ci.err) return fail(ci.err);
       const mg = parseMargin(body.targetMarginPct);
       if (mg.err) return fail(mg.err);
       await db.service.update({
         where: { id: svc.id },
         data: {
-          costItems: ci.items === undefined ? undefined : ci.items ? JSON.stringify(ci.items) : null,
+          costCategories: cc.cats === undefined ? undefined : cc.cats ? JSON.stringify(cc.cats) : null,
+          costItems: cc.cats ? null : ci.items === undefined ? undefined : ci.items ? JSON.stringify(ci.items) : undefined,
           targetMarginPct: mg.pct,
         },
       });
@@ -273,7 +351,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
       data.categoryId = cid;
     }
-    if (body.costItems !== undefined) {
+    if (body.costCategories !== undefined) {
+      const cc = parseCostCategories(body.costCategories);
+      if (cc.err) return fail(cc.err);
+      data.costCategories = cc.cats === undefined ? undefined : cc.cats ? JSON.stringify(cc.cats) : null;
+      // Struktur baru aktif → legacy flat dinolkan agar total biaya tidak dobel hitung
+      if (cc.cats) data.costItems = null;
+    }
+    if (body.costItems !== undefined && body.costCategories === undefined) {
       const ci = parseCostItems(body.costItems);
       if (ci.err) return fail(ci.err);
       data.costItems = ci.items === undefined ? undefined : ci.items ? JSON.stringify(ci.items) : null;

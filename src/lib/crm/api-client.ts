@@ -295,11 +295,11 @@ export const api = {
     ),
   deleteDeliverable: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/deliverables`, { method: "DELETE", body: JSON.stringify({ id }) }),
-  /** Ronde 35 — tambah milestone baru (sheet project produksi). */
-  createMilestone: (payload: { projectId: string; name: string; achievement?: string; dueDate?: string | null; actorName?: string; actorRole?: string }) =>
+  /** Ronde 35 — tambah milestone baru (sheet project produksi). Ronde 52 + PIC/durasi/paralel. */
+  createMilestone: (payload: { projectId: string; name: string; achievement?: string; dueDate?: string | null; picName?: string | null; durationDays?: number | null; parallel?: boolean; actorName?: string; actorRole?: string }) =>
     request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "POST", body: JSON.stringify(payload) }),
-  /** Update milestone (drag-reschedule kalender / status / capaian) — Fase 3 + Ronde 35. */
-  updateMilestone: (payload: { milestoneId: string; dueDate?: string | null; status?: string; name?: string; achievement?: string | null; actorName?: string; actorRole?: string }) =>
+  /** Update milestone (drag-reschedule kalender / status / capaian) — Fase 3 + Ronde 35+52. */
+  updateMilestone: (payload: { milestoneId: string; dueDate?: string | null; status?: string; name?: string; achievement?: string | null; picName?: string | null; durationDays?: number | null; parallel?: boolean; actorName?: string; actorRole?: string }) =>
     request<{ milestone: import("@/lib/crm/types").MilestoneDTO }>("/api/projects/milestones", { method: "PATCH", body: JSON.stringify(payload) }),
 
   // Change Requests (Fase 2 — Produksi): scope change → persetujuan klien → invoice tambahan

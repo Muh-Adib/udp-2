@@ -39,6 +39,20 @@ export async function POST(req: NextRequest) {
   // Capaian default dari template — user tetap bisa override lewat body.achievement.
   const achievement = body.achievement ? String(body.achievement).trim() : achievementFor(name);
 
+  // Ronde 52 — breakdown pekerjaan: PIC, estimasi waktu (hari kerja), dan paralel
+  const picName = body.picName !== undefined ? (body.picName ? String(body.picName).trim().slice(0, 120) : null) : undefined;
+  let durationDays: number | null | undefined;
+  if (body.durationDays !== undefined) {
+    if (body.durationDays === null || String(body.durationDays).trim() === "") {
+      durationDays = null;
+    } else {
+      const n = Number(body.durationDays);
+      if (!Number.isFinite(n) || n < 0 || n > 3650) return fail("Estimasi waktu (hari) tidak valid");
+      durationDays = Math.round(n);
+    }
+  }
+  const parallel = body.parallel !== undefined ? Boolean(body.parallel) : undefined;
+
   const milestone = await db.milestone.create({
     data: {
       projectId,
@@ -47,6 +61,9 @@ export async function POST(req: NextRequest) {
       status: "pending",
       dueDate,
       achievement,
+      ...(picName !== undefined ? { picName } : {}),
+      ...(durationDays !== undefined ? { durationDays } : {}),
+      ...(parallel !== undefined ? { parallel } : {}),
     },
   });
 
@@ -57,7 +74,7 @@ export async function POST(req: NextRequest) {
     entity: "milestone",
     entityId: milestone.id,
     entityLabel: `${project.code} — ${milestone.name}`,
-    newValue: JSON.stringify({ name, order, dueDate: dueDate?.toISOString() ?? null, achievement }),
+    newValue: JSON.stringify({ name, order, dueDate: dueDate?.toISOString() ?? null, achievement, picName: picName ?? null, durationDays: durationDays ?? null, parallel: parallel ?? false }),
     req,
   });
 
@@ -78,8 +95,8 @@ export async function PATCH(req: NextRequest) {
   });
   if (!existing) return fail("Milestone tidak ditemukan", 404);
 
-  const data: { dueDate?: Date | null; status?: string; name?: string; achievement?: string | null } = {};
-  const changes: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  const data: { dueDate?: Date | null; status?: string; name?: string; achievement?: string | null; picName?: string | null; durationDays?: number | null; parallel?: boolean } = {};
+  const changes: { field: string; oldValue: unknown; newValue: unknown }[] = [];
 
   if (body.dueDate !== undefined) {
     const next = body.dueDate ? new Date(String(body.dueDate)) : null;
@@ -108,6 +125,26 @@ export async function PATCH(req: NextRequest) {
     const achievement = body.achievement ? String(body.achievement).trim() : null;
     data.achievement = achievement || null;
     changes.push({ field: "achievement", oldValue: existing.achievement, newValue: data.achievement });
+  }
+  // Ronde 52 — breakdown pekerjaan: PIC / estimasi waktu / paralel
+  if (body.picName !== undefined) {
+    const pic = body.picName ? String(body.picName).trim().slice(0, 120) : null;
+    data.picName = pic || null;
+    changes.push({ field: "picName", oldValue: existing.picName, newValue: data.picName });
+  }
+  if (body.durationDays !== undefined) {
+    if (body.durationDays === null || String(body.durationDays).trim() === "") {
+      data.durationDays = null;
+    } else {
+      const n = Number(body.durationDays);
+      if (!Number.isFinite(n) || n < 0 || n > 3650) return fail("Estimasi waktu (hari) tidak valid");
+      data.durationDays = Math.round(n);
+    }
+    changes.push({ field: "durationDays", oldValue: existing.durationDays, newValue: data.durationDays });
+  }
+  if (body.parallel !== undefined) {
+    data.parallel = Boolean(body.parallel);
+    changes.push({ field: "parallel", oldValue: existing.parallel, newValue: data.parallel });
   }
 
   if (Object.keys(data).length === 0) return fail("Tidak ada perubahan");

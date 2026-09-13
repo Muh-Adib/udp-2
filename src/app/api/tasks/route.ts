@@ -10,14 +10,19 @@ export async function GET(req: NextRequest) {
   const status = sp.get("status");
   const assignee = sp.get("assignee");
   const overdue = sp.get("overdue");
+  // Ronde 52 — filter task produksi per project / milestone
+  const projectId = sp.get("projectId");
+  const milestoneId = sp.get("milestoneId");
 
   const tasks = await db.task.findMany({
     where: {
       ...(status && status !== "all" ? { status } : {}),
       ...(assignee && assignee !== "all" ? { assigneeName: assignee } : {}),
       ...(overdue === "true" ? { dueDate: { lt: new Date() } } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(milestoneId ? { milestoneId } : {}),
     },
-    include: { opportunity: { include: { brand: true, contact: true } } },
+    include: { opportunity: { include: { brand: true, contact: true } }, project: { select: { id: true, code: true, name: true } }, milestone: { select: { id: true, name: true } } },
     orderBy: [{ status: "asc" }, { dueDate: "asc" }],
     take: 300,
   });
@@ -52,6 +57,23 @@ export async function POST(req: NextRequest) {
     opportunityId = String(body.opportunityId);
   }
 
+  // Ronde 52 — task produksi bisa menempel ke project & milestone timeline.
+  let projectId: string | null = null;
+  if (body.projectId) {
+    const proj = await db.project.findUnique({ where: { id: String(body.projectId) }, select: { id: true } });
+    if (!proj) return fail("Project tidak ditemukan", 400);
+    projectId = String(body.projectId);
+  }
+  let milestoneId: string | null = null;
+  if (body.milestoneId) {
+    const ms = await db.milestone.findUnique({ where: { id: String(body.milestoneId) }, select: { id: true, projectId: true } });
+    if (!ms) return fail("Milestone tidak ditemukan", 400);
+    // Konsistensi: milestone wajib milik project yang sama (bila keduanya dikirim)
+    if (projectId && ms.projectId !== projectId) return fail("Milestone tidak milik project ini", 400);
+    milestoneId = String(body.milestoneId);
+    if (!projectId) projectId = ms.projectId; // milestone menyertakan project-nya
+  }
+
   const task = await db.task.create({
     data: {
       title,
@@ -66,8 +88,10 @@ export async function POST(req: NextRequest) {
       // Ronde 36 (audit): dateOrNull — tanggal "garbage" kini null (sebelumnya 500)
       dueDate: dateOrNull(body.dueDate),
       opportunityId,
+      projectId,
+      milestoneId,
     },
-    include: { opportunity: { include: { brand: true } } },
+    include: { opportunity: { include: { brand: true } }, project: { select: { id: true, code: true, name: true } }, milestone: { select: { id: true, name: true } } },
   });
 
   await logAudit({

@@ -1,9 +1,19 @@
 import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { fail, logAudit, ok, readBody, clampNum } from "@/lib/crm/server";
 import { resolveActor } from "@/lib/crm/auth";
 import { workflowFor, achievementFor } from "@/lib/crm/constants";
 import { sendPushToRoles } from "@/lib/crm/push";
+
+const PROJECT_INCLUDE: Prisma.ProjectInclude = {
+  brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
+  changeRequests: { orderBy: { createdAt: "desc" } },
+  // Ronde 48 — brief klien ter-link (alur Won) untuk tim produksi di detail project.
+  brief: true,
+  // Ronde 52 — tugas produksi project (bisa menempel milestone timeline).
+  tasks: { orderBy: [{ status: "asc" }, { dueDate: "asc" }] },
+};
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -17,12 +27,7 @@ export async function GET(req: NextRequest) {
       ...(companyId ? { companyId } : {}),
       ...(brandId && brandId !== "all" ? { brandId } : {}),
     },
-    include: {
-      brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
-      changeRequests: { orderBy: { createdAt: "desc" } },
-      // Ronde 48 — brief klien ter-link (alur Won) untuk tim produksi di detail project.
-      brief: true,
-    },
+    include: PROJECT_INCLUDE,
     orderBy: { createdAt: "desc" },
   });
   return ok({ projects });
@@ -72,6 +77,55 @@ export async function POST(req: NextRequest) {
   const safeStart = startDate && !Number.isNaN(startDate.getTime()) ? startDate : null;
   const safeDue = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null;
 
+  // Ronde 52 — project bisa lahir langsung dari opportunity (lead/peluang) + membawa
+  // BREAKDOWN pekerjaan: daftar milestone {name, achievement, picName, durationDays, parallel}
+  // sehingga "apa saja pekerjaannya, siapa yang bertanggung jawab, estimasi waktu, dan
+  // paralel" langsung terlihat di timeline produksi.
+  let opportunityId: string | null = null;
+  if (body.opportunityId) {
+    const opp = await db.opportunity.findUnique({
+      where: { id: String(body.opportunityId) },
+      select: { id: true, serviceCategory: true, estimatedValue: true },
+    });
+    if (!opp) return fail("Opportunity tidak ditemukan", 404);
+    const taken = await db.project.findUnique({ where: { opportunityId: opp.id }, select: { id: true } });
+    if (taken) return fail("Opportunity ini sudah punya project", 409);
+    opportunityId = opp.id;
+    if (!serviceCategory && opp.serviceCategory) body.serviceCategory = opp.serviceCategory;
+  }
+
+  // Ronde 52 — validasi breakdown milestone dari body (semua opsional kecuali name).
+  interface BreakdownMs { name: string; achievement: string | null; picName: string | null; durationDays: number | null; parallel: boolean; dueDate: Date | null }
+  let breakdown: BreakdownMs[] | null = null;
+  if (Array.isArray(body.milestones) && body.milestones.length > 0) {
+    if (body.milestones.length > 30) return fail("Maksimal 30 milestone");
+    breakdown = [];
+    for (const rawMs of body.milestones) {
+      const m = (rawMs ?? {}) as Record<string, unknown>;
+      const mName = String(m.name ?? "").trim();
+      if (!mName) return fail("Nama milestone pada breakdown wajib diisi");
+      let msDue: Date | null = null;
+      if (m.dueDate) {
+        const d = new Date(String(m.dueDate));
+        if (!Number.isNaN(d.getTime())) msDue = d;
+      }
+      let dur: number | null = null;
+      if (m.durationDays !== undefined && m.durationDays !== null && String(m.durationDays).trim() !== "") {
+        const n = Number(m.durationDays);
+        if (!Number.isFinite(n) || n < 0 || n > 3650) return fail(`Estimasi waktu milestone "${mName}" tidak valid`);
+        dur = Math.round(n);
+      }
+      breakdown.push({
+        name: mName.slice(0, 160),
+        achievement: m.achievement ? String(m.achievement).trim().slice(0, 500) : null,
+        picName: m.picName ? String(m.picName).trim().slice(0, 120) : null,
+        durationDays: dur,
+        parallel: m.parallel === true,
+        dueDate: msDue,
+      });
+    }
+  }
+
   // Ronde 38 — project + milestone dalam satu transaksi (atomic, pola handleWonTransition).
   const project = await db.$transaction(async (tx) => {
     const created = await tx.project.create({
@@ -80,7 +134,8 @@ export async function POST(req: NextRequest) {
         name,
         brandId,
         companyId,
-        serviceCategory,
+        opportunityId,
+        serviceCategory: body.serviceCategory ? String(body.serviceCategory) : serviceCategory,
         status,
         progress: 0,
         pmName,
@@ -91,21 +146,54 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Milestone dari template workflow layanan — bila layanan dikenal.
-    const flow = workflowFor(serviceCategory);
-    if (flow.length > 0) {
+    if (breakdown && breakdown.length > 0) {
+      // Ronde 52 — milestone dari BREAKDOWN: due date dihitung berantai dari
+      // durationDays (tahap paralel mulai bersamaan dgn tahap sebelumnya).
       const startMs = safeStart?.getTime() ?? Date.now();
-      const span = safeDue ? safeDue.getTime() - startMs : 60 * 24 * 60 * 60 * 1000;
+      let cursor = startMs; // akhir tahap berurutan terakhir
       await tx.milestone.createMany({
-        data: flow.map((mName, i) => ({
-          projectId: created.id,
-          name: mName,
-          order: i,
-          status: i === 0 ? "in_progress" : "pending",
-          dueDate: new Date(startMs + ((i + 1) * span) / flow.length),
-          achievement: achievementFor(mName),
-        })),
+        data: breakdown.map((m, i) => {
+          let msStart = cursor;
+          if (m.parallel) msStart = cursor; // paralel: mulai bersamaan dgn posisi kursor
+          let msDue = m.dueDate;
+          if (!msDue && m.durationDays != null) msDue = new Date(msStart + m.durationDays * 24 * 60 * 60 * 1000);
+          if (!m.parallel && msDue) cursor = Math.max(cursor, msDue.getTime());
+          return {
+            projectId: created.id,
+            name: m.name,
+            order: i,
+            status: i === 0 ? "in_progress" : "pending",
+            dueDate: msDue,
+            achievement: m.achievement ?? achievementFor(m.name),
+            picName: m.picName,
+            durationDays: m.durationDays,
+            parallel: m.parallel,
+          };
+        }),
       });
+    } else {
+      // Milestone dari template workflow layanan — bila layanan dikenal.
+      const flow = workflowFor(serviceCategory);
+      if (flow.length > 0) {
+        const startMs = safeStart?.getTime() ?? Date.now();
+        const span = safeDue ? safeDue.getTime() - startMs : 60 * 24 * 60 * 60 * 1000;
+        await tx.milestone.createMany({
+          data: flow.map((mName, i) => ({
+            projectId: created.id,
+            name: mName,
+            order: i,
+            status: i === 0 ? "in_progress" : "pending",
+            dueDate: new Date(startMs + ((i + 1) * span) / flow.length),
+            achievement: achievementFor(mName),
+          })),
+        });
+      }
+    }
+
+    // Ronde 52 — task yang sudah dibuat pada opportunity ikut pindah ke project
+    // (terlihat di timeline produksi, bukan hilang setelah deal won).
+    if (opportunityId) {
+      await tx.task.updateMany({ where: { opportunityId, projectId: null }, data: { projectId: created.id } });
     }
     return created;
   });
@@ -117,18 +205,14 @@ export async function POST(req: NextRequest) {
     entity: "project",
     entityId: project.id,
     entityLabel: name,
-    newValue: JSON.stringify({ code: project.code, brand: brand.name, company: company.name, status, milestones: workflowFor(serviceCategory).length }),
+    newValue: JSON.stringify({ code: project.code, brand: brand.name, company: company.name, status, milestones: breakdown?.length ?? workflowFor(serviceCategory).length }),
     req,
   });
 
   // Include paritas dengan GET agar UI bisa langsung membuka detail tanpa fetch ulang.
   const full = await db.project.findUnique({
     where: { id: project.id },
-    include: {
-      brand: true, company: true, milestones: { orderBy: { order: "asc" } }, opportunity: true,
-      changeRequests: { orderBy: { createdAt: "desc" } },
-      brief: true,
-    },
+    include: PROJECT_INCLUDE,
   });
   return ok({ project: full }, 201);
 }

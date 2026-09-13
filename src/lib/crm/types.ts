@@ -195,6 +195,11 @@ export interface TaskDTO {
   /** Ronde 40 — lampiran task: JSON string di DB atau array hasil parse. */
   attachments?: string | TaskAttachment[];
   dueDate?: string | null;
+  // Ronde 52 — task produksi: menempel ke project & milestone timeline
+  projectId?: string | null;
+  milestoneId?: string | null;
+  project?: { id: string; code: string; name: string } | null;
+  milestone?: { id: string; name: string } | null;
   opportunityId?: string | null;
   /** Ronde 34-b — contact ikut di-include API tasks agar task follow-up bisa loncat ke chat kontak. */
   opportunity?: { id: string; title: string; stage: string; brand?: Brand; contact?: ContactRef | null } | null;
@@ -280,6 +285,8 @@ export interface ProjectDTO {
   budgetInternal?: number;
   contractValue?: number;
   milestones?: MilestoneDTO[];
+  /** Ronde 52 — tugas produksi project (bisa menempel milestone). */
+  tasks?: TaskDTO[];
   /** Daftar change request project (ringkas) — Produksi Fase 2. */
   changeRequests?: ChangeRequestDTO[];
   /** Ronde 48 — brief klien ter-link (alur Won) — dibaca produksi dari detail project. */
@@ -295,6 +302,10 @@ export interface MilestoneDTO {
   dueDate?: string | null;
   /** Ronde 35 — apa yang dicapai/diserahkan pada milestone ini (opsional). */
   achievement?: string | null;
+  // Ronde 52 — breakdown pekerjaan: PIC, estimasi waktu (hari kerja), dan paralel
+  picName?: string | null;
+  durationDays?: number | null;
+  parallel?: boolean;
 }
 
 /** Deliverable project: tautan atau file kecil yang dikirim untuk ditinjau klien/manajemen. */
@@ -1064,6 +1075,8 @@ export interface ServiceDTO {
   unit?: string | null;
   basePrice?: number | null;
   costItems?: ServiceCostItem[] | null;
+  /** Ronde 52 — rincian biaya kategori×item (struktur sama dgn RAB estimasi); menggantikan costItems. */
+  costCategories?: import("@/lib/crm/types").EstimationCostCategory[] | null;
   costTotal?: number | null;
   suggestedPrice?: number | null;
   targetMarginPct?: number | null;

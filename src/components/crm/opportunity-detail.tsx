@@ -1044,10 +1044,11 @@ function EstimationTab({
 
   const locked = est?.status === "pending_approval" || est?.status === "approved";
 
-  // Ronde 42 — SARAN HARGA dari katalog layanan brand: layanan yang dipilih di opportunity
-  // punya rincian biaya + margin target → saran harga (dihitung server). Auto-terapkan saat
+  // Ronde 42/52 — SARAN dari katalog layanan brand: layanan yang dipilih di opportunity
+  // punya rincian biaya kategori×item (struktur SAMA dgn RAB estimasi) + margin target
+  // → saran harga (dihitung server) DAN rincian RAB siap-tempel. Auto-terapkan saat
   // estimasi masih draft kosong; tombol "Terapkan" selalu tersedia (kecuali terkunci).
-  const [suggestion, setSuggestion] = useState<{ name: string; suggestedPrice: number } | null>(null);
+  const [suggestion, setSuggestion] = useState<{ name: string; suggestedPrice: number; rab: EstimationCostCategory[] | null } | null>(null);
   useEffect(() => {
     if (!serviceName || !brandId) {
       setSuggestion(null);
@@ -1058,8 +1059,12 @@ function EstimationTab({
       .then((res) => {
         if (cancelled) return;
         const svc = res.services.find((s) => s.name === serviceName);
+        // Ronde 52 — rincian biaya katalog kini kategori×item (struktur RAB)
+        const rab = svc && Array.isArray(svc.costCategories) && svc.costCategories.length > 0 ? svc.costCategories : null;
         if (svc?.suggestedPrice && svc.suggestedPrice > 0) {
-          setSuggestion({ name: svc.name, suggestedPrice: svc.suggestedPrice });
+          setSuggestion({ name: svc.name, suggestedPrice: svc.suggestedPrice, rab });
+        } else if (svc && rab) {
+          setSuggestion({ name: svc.name, suggestedPrice: 0, rab });
         } else {
           setSuggestion(null);
         }
@@ -1076,8 +1081,46 @@ function EstimationTab({
   useEffect(() => {
     if (!suggestion) return;
     if (est && est.status !== "draft") return;
-    setForm((f) => (f.revenue.trim() === "" ? { ...f, revenue: String(suggestion.suggestedPrice) } : f));
+    setForm((f) => (f.revenue.trim() === "" && suggestion.suggestedPrice > 0 ? { ...f, revenue: String(suggestion.suggestedPrice) } : f));
   }, [suggestion, est?.status]);
+
+  // Ronde 52 — RAB kosong + katalog punya rincian kategori×item → isi otomatis sekali
+  // sehingga rincian biaya katalog (rancangan estimasi) benar-benar mengalir ke estimasi.
+  const [rabAutoApplied, setRabAutoApplied] = useState(false);
+  useEffect(() => {
+    if (rabAutoApplied || !suggestion?.rab) return;
+    if (est && est.status !== "draft") return;
+    if (categories.some((c) => c.name.trim() !== "" || c.items.some((r) => r.name.trim() !== ""))) return;
+    setCategories(
+      suggestion.rab.map((c) => ({
+        name: c.name,
+        items: (Array.isArray(c.items) ? c.items : []).map((it) => ({
+          name: it.name,
+          qty: String(it.qty ?? 1),
+          unit: it.unit ?? "unit",
+          price: String(it.price ?? 0),
+        })),
+      }))
+    );
+    setRabAutoApplied(true);
+  }, [suggestion, est?.status, categories, rabAutoApplied]);
+
+  // Ronde 52 — tombol terapkan manual RAB dari katalog (bisa dipakai ulang kapan pun
+  // selama estimasi belum terkunci — menimpa isi editor saat ini).
+  function applyCatalogRab() {
+    if (!suggestion?.rab) return;
+    setCategories(
+      suggestion.rab.map((c) => ({
+        name: c.name,
+        items: (Array.isArray(c.items) ? c.items : []).map((it) => ({
+          name: it.name,
+          qty: String(it.qty ?? 1),
+          unit: it.unit ?? "unit",
+          price: String(it.price ?? 0),
+        })),
+      }))
+    );
+  }
   // Ronde 49 — Σ total kategori RAB (hanya kategori & item bernama; bulatkan spt server)
   const categoriesTotal = useMemo(
     () =>
@@ -1606,24 +1649,47 @@ function EstimationTab({
                 aria-label={`Harga penawaran (${cur})`}
               />
             </div>
-            {/* Ronde 42 — saran harga dari katalog layanan brand */}
+            {/* Ronde 42/52 — saran harga + rincian RAB dari katalog layanan brand */}
             {suggestion ? (
               <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs">
                 <span className="text-emerald-800">
-                  Saran harga katalog <strong>{suggestion.name}</strong>: {cur}{" "}
-                  {new Intl.NumberFormat("id-ID").format(suggestion.suggestedPrice)}
+                  Saran harga katalog <strong>{suggestion.name}</strong>
+                  {suggestion.suggestedPrice > 0 ? (
+                    <>
+                      : {cur}{" "}
+                      {new Intl.NumberFormat("id-ID").format(suggestion.suggestedPrice)}
+                    </>
+                  ) : null}
+                  {suggestion.rab ? ` · ${suggestion.rab.length} kategori rincian biaya siap diterapkan` : ""}
                 </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-6 border-emerald-300 px-2 text-[11px] text-emerald-800 hover:bg-emerald-100"
-                  disabled={disabled}
-                  onClick={() => setField("revenue", String(suggestion.suggestedPrice))}
-                  aria-label={`Terapkan saran harga ${suggestion.suggestedPrice}`}
-                >
-                  Terapkan
-                </Button>
+                <span className="flex items-center gap-1.5">
+                  {suggestion.rab ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 border-emerald-300 px-2 text-[11px] text-emerald-800 hover:bg-emerald-100"
+                      disabled={disabled}
+                      onClick={applyCatalogRab}
+                      aria-label="Terapkan rincian biaya katalog ke RAB"
+                    >
+                      Terapkan Rincian
+                    </Button>
+                  ) : null}
+                  {suggestion.suggestedPrice > 0 ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 border-emerald-300 px-2 text-[11px] text-emerald-800 hover:bg-emerald-100"
+                      disabled={disabled}
+                      onClick={() => setField("revenue", String(suggestion.suggestedPrice))}
+                      aria-label={`Terapkan saran harga ${suggestion.suggestedPrice}`}
+                    >
+                      Terapkan
+                    </Button>
+                  ) : null}
+                </span>
               </div>
             ) : null}
           </div>

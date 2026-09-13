@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarClock, CalendarDays, ChartGantt, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed, CircleDotDashed,
-  Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
-  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Route, ShieldCheck, Trash2, User, User2, X, XCircle,
+  Clock3, Download, ExternalLink, Factory, FileCheck, FolderKanban, GitPullRequestArrow, GripVertical, LayoutGrid, Link2, Loader2,
+  Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Route, ShieldCheck, Trash2, User, User2, UserRound, X, XCircle, Zap,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,7 +33,7 @@ import { api, portalApi } from "@/lib/crm/api-client";
 import { SERVICE_CATEGORIES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type {
-  Brand, ChangeRequestDTO, CompanyRef, ClientBriefDTO, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO,
+  Brand, ChangeRequestDTO, CompanyRef, ClientBriefDTO, InvoiceDTO, MilestoneDTO, ProjectDeliverableDTO, ProjectDTO, TaskDTO,
 } from "@/lib/crm/types";
 import { formatCurrency, formatDate, formatDateTime, timeAgo } from "@/lib/crm/utils";
 import { cn } from "@/lib/utils";
@@ -397,6 +397,70 @@ function dueSoon(p: ProjectDTO): boolean {
   return diffDays < 7;
 }
 
+// ============ Ronde 52-b — breakdown pekerjaan: PIC, estimasi, paralel & tugas produksi ============
+
+/** Titik warna prioritas tugas (kompak, cukup satu dot + title). */
+const TASK_PRIORITY_DOTS: Record<string, string> = {
+  high: "bg-rose-500",
+  medium: "bg-amber-500",
+  low: "bg-zinc-300",
+};
+
+const TASK_PRIORITY_LABELS: Record<string, string> = {
+  high: "Prioritas tinggi",
+  medium: "Prioritas sedang",
+  low: "Prioritas rendah",
+};
+
+/** TaskDTO.assignees bisa JSON string (kolom DB) atau array (hasil parse API) — versi lokal murni
+ * dari parseTaskAssignees (server) agar modul client tidak ikut mengimpor kode server. */
+function parseTaskAssigneeNames(raw: string | string[] | null | undefined): string[] {
+  if (!raw) return [];
+  let list: unknown[];
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      list = Array.isArray(parsed) ? parsed : [raw];
+    } catch {
+      list = [raw]; // bukan JSON → anggap satu nama tunggal
+    }
+  }
+  const out: string[] = [];
+  for (const item of list) {
+    if (typeof item !== "string") continue;
+    const name = item.trim();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/** Estimasi waktu total (hari kerja): tahap non-paralel dijumlahkan; satu run tahap paralel
+ * berurutan hanya dihitung sekali — diambil durasi TERPANJANG di run tersebut. */
+function estimateMilestoneDays(milestones: MilestoneDTO[]): { total: number; parallelCount: number } {
+  let total = 0;
+  let parallelCount = 0;
+  let i = 0;
+  while (i < milestones.length) {
+    if (milestones[i].parallel) {
+      let maxDays = 0;
+      while (i < milestones.length && milestones[i].parallel) {
+        parallelCount += 1;
+        const d = milestones[i].durationDays;
+        if (typeof d === "number" && Number.isFinite(d) && d > maxDays) maxDays = d;
+        i += 1;
+      }
+      total += maxDays;
+    } else {
+      const d = milestones[i].durationDays;
+      if (typeof d === "number" && Number.isFinite(d) && d > 0) total += d;
+      i += 1;
+    }
+  }
+  return { total, parallelCount };
+}
+
 // ============ Sub-komponen kecil ============
 
 function ProjectCard({ project, onOpen, onMilestoneClick }: {
@@ -498,6 +562,142 @@ function ProjectCard({ project, onOpen, onMilestoneClick }: {
   );
 }
 
+// Ronde 52-b — satu baris tugas produksi (kompak, text-xs): toggle status, judul,
+// chip assignee, nama tahap (opsional), tenggat singkat, dan titik prioritas.
+function TaskRow({ task, milestoneName, busy, onToggle }: {
+  task: TaskDTO;
+  milestoneName?: string | null;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  const done = task.status === "done";
+  const assignees = parseTaskAssigneeNames(task.assignees);
+  const dueTs = task.dueDate ? new Date(task.dueDate).getTime() : NaN;
+  const dotCls = TASK_PRIORITY_DOTS[task.priority] ?? "bg-zinc-300";
+  return (
+    <div className={cn("flex items-center gap-2 rounded-lg border bg-white px-2 py-1.5 text-xs", done ? "opacity-75" : "")}>
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={busy}
+        aria-label={done ? `Tandai tugas "${task.title}" belum selesai` : `Tandai tugas "${task.title}" selesai`}
+        title={done ? "Tandai belum selesai" : "Tandai selesai"}
+        className="shrink-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-zinc-400 disabled:opacity-50"
+      >
+        {done
+          ? <CheckCircle2 className="h-4 w-4 fill-emerald-500 text-emerald-500" aria-hidden />
+          : <CircleDashed className="h-4 w-4 text-zinc-400" aria-hidden />}
+      </button>
+      <span className={cn("min-w-0 flex-1 truncate", done ? "text-zinc-400 line-through decoration-zinc-400" : "text-zinc-800")}>
+        {task.title}
+      </span>
+      {milestoneName ? (
+        <span
+          className="hidden shrink-0 items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 sm:inline-flex"
+          title="Tahap (milestone) terkait"
+        >
+          <Route className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="max-w-[8rem] truncate">{milestoneName}</span>
+        </span>
+      ) : null}
+      {assignees.map((a) => (
+        <span
+          key={a}
+          className="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600"
+          title="Assignee tugas"
+        >
+          <UserRound className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="truncate">{a}</span>
+        </span>
+      ))}
+      <span
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)}
+        title={TASK_PRIORITY_LABELS[task.priority] ?? `Prioritas ${task.priority}`}
+        aria-label={TASK_PRIORITY_LABELS[task.priority] ?? task.priority}
+      />
+      {Number.isFinite(dueTs) ? (
+        <span className={cn("shrink-0 tabular-nums", done ? "text-zinc-400" : "text-zinc-500")} title="Tenggat tugas">
+          {shortDate(dueTs)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// Ronde 52-b — mini-form inline tambah tugas (dipakai di section "Tugas Produksi" & per-milestone).
+// State lokal: otomatis ter-reset tiap kali form dibuka (mount/unmount via conditional render).
+function TaskMiniForm({ picOptions, milestones, fixedMilestoneId, saving, onSubmit, onCancel }: {
+  picOptions: string[];
+  /** Bila diberikan → tampil Select tahap (opsional, "— tanpa tahap —"). */
+  milestones?: MilestoneDTO[];
+  /** Bila diberikan → tugas otomatis menempel milestone ini (form per-milestone, tanpa Select). */
+  fixedMilestoneId?: string;
+  saving: boolean;
+  onSubmit: (fields: { title: string; pic: string; due: string; milestoneId: string }) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [pic, setPic] = useState("");
+  const [due, setDue] = useState("");
+  const [milestoneId, setMilestoneId] = useState(fixedMilestoneId ?? "");
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); onSubmit({ title, pic, due, milestoneId }); }}
+      className="space-y-2 rounded-lg border bg-zinc-50/60 p-2.5"
+      aria-label="Form tambah tugas"
+    >
+      <Input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Judul tugas — mis. Cutting footage adegan 1"
+        aria-label="Judul tugas"
+        required
+        className="h-8 bg-white text-xs"
+      />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Input
+          value={pic}
+          onChange={(e) => setPic(e.target.value)}
+          list="task-pic-options"
+          placeholder="PIC / penanggung jawab"
+          aria-label="PIC / penanggung jawab tugas"
+          className="h-8 bg-white text-xs"
+        />
+        <Input
+          type="date"
+          value={due}
+          onChange={(e) => setDue(e.target.value)}
+          aria-label="Tenggat tugas"
+          className="h-8 bg-white text-xs"
+        />
+      </div>
+      {milestones ? (
+        <Select value={milestoneId || "none"} onValueChange={(v) => setMilestoneId(v === "none" ? "" : v)}>
+          <SelectTrigger aria-label="Tahap untuk tugas ini" className="h-8 bg-white text-xs">
+            <SelectValue placeholder="Pilih tahap (opsional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">— tanpa tahap —</SelectItem>
+            {milestones.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      ) : null}
+      <div className="flex items-center justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={onCancel} disabled={saving}>
+          Batal
+        </Button>
+        <Button type="submit" size="sm" className="h-7 px-2.5 text-xs" disabled={saving || !title.trim()}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+          Simpan
+        </Button>
+      </div>
+      <datalist id="task-pic-options">
+        {picOptions.map((n) => <option key={n} value={n} />)}
+      </datalist>
+    </form>
+  );
+}
+
 // ============ Timeline (Gantt) view ============
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -577,6 +777,8 @@ function TimelineRow({ project, pct, onOpen }: {
             Tanpa tanggal
           </span>
         ) : null}
+        {/* Ronde 52-b — marker milestone dgn lane paralel: milestone "Paralel" digambar di lane bawah
+            agar tidak menimpa diamond tahap lain; milestone berdurasi mendapat bar rentang di belakangnya. */}
         {(project.milestones ?? []).map((m) => {
           if (!m.dueDate) return null;
           const ts = new Date(m.dueDate).getTime();
@@ -585,17 +787,38 @@ function TimelineRow({ project, pct, onOpen }: {
             m.status === "done" ? "bg-emerald-500"
             : m.status === "in_progress" ? "bg-amber-500"
             : "bg-zinc-300";
+          const durDays =
+            typeof m.durationDays === "number" && Number.isFinite(m.durationDays) && m.durationDays > 0
+              ? m.durationDays
+              : null;
+          const endPct = pct(ts);
+          const startPct = durDays !== null ? pct(ts - durDays * DAY_MS) : null;
+          const laneTop = m.parallel ? "calc(50% + 8px)" : "calc(50% - 10px)";
+          const msTitle = `${m.name} · ${msMeta(m.status).label}${m.picName ? ` · PIC ${m.picName}` : ""}${durDays !== null ? ` · ±${durDays} hari` : ""}`;
           return (
-            <span
-              key={m.id}
-              className={`absolute h-2.5 w-2.5 rounded-[2px] ${dCls}`}
-              style={{
-                left: `${pct(ts)}%`,
-                top: "calc(50% - 10px)",
-                transform: "translate(-50%, -50%) rotate(45deg)",
-              }}
-              title={`${m.name} · ${msMeta(m.status).label}`}
-            />
+            <Fragment key={m.id}>
+              {durDays !== null && startPct !== null ? (
+                <span
+                  className={`absolute h-1.5 rounded-full ${dCls}`}
+                  style={{
+                    left: `${Math.min(startPct, endPct)}%`,
+                    width: `${Math.max(endPct - startPct, 0.5)}%`,
+                    top: laneTop,
+                    transform: "translateY(-50%)",
+                  }}
+                  title={msTitle}
+                />
+              ) : null}
+              <span
+                className={`absolute h-2.5 w-2.5 rounded-[2px] ${dCls}`}
+                style={{
+                  left: `${endPct}%`,
+                  top: laneTop,
+                  transform: "translate(-50%, -50%) rotate(45deg)",
+                }}
+                title={msTitle}
+              />
+            </Fragment>
           );
         })}
       </div>
@@ -620,7 +843,13 @@ function TimelineView({ projects, onOpen }: { projects: ProjectDTO[]; onOpen: (p
       };
       track(p.startDate);
       track(p.dueDate);
-      for (const m of p.milestones ?? []) track(m.dueDate);
+      for (const m of p.milestones ?? []) {
+        track(m.dueDate);
+        // Ronde 52-b — rentang juga mengikuti awal durasi milestone (due - N hari) agar bar durasi tak terpotong
+        if (m.dueDate && typeof m.durationDays === "number" && Number.isFinite(m.durationDays) && m.durationDays > 0) {
+          track(new Date(m.dueDate).getTime() - m.durationDays * DAY_MS);
+        }
+      }
       if (!contributed) track(now); // fallback: project tanpa tanggal → acuan hari ini
     }
     if (min === null || max === null) return { min: now - 15 * DAY_MS, max: now + 15 * DAY_MS };
@@ -1363,6 +1592,16 @@ export default function ProjectsModule() {
   const [msAchievement, setMsAchievement] = useState("");
   const [msDueDate, setMsDueDate] = useState("");
   const [msSaving, setMsSaving] = useState(false);
+  // Ronde 52-b — breakdown per tahap: PIC, estimasi hari kerja, paralel
+  const [msPic, setMsPic] = useState("");
+  const [msDays, setMsDays] = useState("");
+  const [msParallel, setMsParallel] = useState(false);
+
+  // Ronde 52-b — tugas produksi: form tambah ("project" = section umum, milestoneId = per tahap),
+  // guard aksi toggle status, dan daftar tugas detail (terurut: belum selesai dulu, lalu due terdekat).
+  const [taskAddFor, setTaskAddFor] = useState<string | null>(null);
+  const [taskSaving, setTaskSaving] = useState(false);
+  const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
 
   // Ronde 35 — tagih milestone (invoice termin): alur Produksi → Keuangan
   const [invTarget, setInvTarget] = useState<{ project: ProjectDTO; milestone: MilestoneDTO } | null>(null);
@@ -1405,9 +1644,53 @@ export default function ProjectsModule() {
     };
   }, [deliverables]);
 
+  // Ronde 52-b — tugas produksi project (detail.tasks dari GET /api/projects): belum selesai dulu, lalu due terdekat.
+  const detailTasks = useMemo(() => {
+    const list = detail?.tasks ?? [];
+    return [...list].sort((a, b) => {
+      const aDone = a.status === "done";
+      const bDone = b.status === "done";
+      if (aDone !== bDone) return aDone ? 1 : -1;
+      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
+      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
+      return ad - bd;
+    });
+  }, [detail]);
+
+  // Ronde 52-b — catatan estimasi di atas timeline: total hari kerja (run paralel dihitung MAX-nya),
+  // fallback rentang tanggal project (hari kalender) bila belum ada estimasi per tahap.
+  const estimateNote = useMemo(() => {
+    if (!detail) return null;
+    const est = estimateMilestoneDays(detail.milestones ?? []);
+    if (est.total > 0) {
+      return `Estimasi waktu total: ±${est.total} hari kerja${est.parallelCount > 0 ? ` · ${est.parallelCount} tahap paralel` : ""}`;
+    }
+    if (detail.startDate && detail.dueDate) {
+      const s = new Date(detail.startDate).getTime();
+      const e = new Date(detail.dueDate).getTime();
+      const days = Number.isFinite(s) && Number.isFinite(e) ? Math.max(0, Math.round((e - s) / DAY_MS)) : null;
+      if (days !== null) {
+        return `Rentang: ${formatDate(detail.startDate)} → ${formatDate(detail.dueDate)} (${days} hari kalender)`;
+      }
+    }
+    return null;
+  }, [detail]);
+
   // Opsi brand untuk dialog Proyek Baru: store biasanya sudah terisi, fallback fetch saat dialog dibuka.
   const npBrands = storeBrands.length > 0 ? storeBrands : npBrandOptions;
   const detailId = detail?.id ?? null;
+
+  // Ronde 52-b — opsi PIC (nama user) utk datalist milestone & task: lazy fetch api.users() SEKALI
+  // saat dialog milestone pertama dibuka (atau sheet detail terbuka utk form tugas) — cache di state.
+  const [picOptions, setPicOptions] = useState<string[]>([]);
+  const picOptionsLoadedRef = useRef(false);
+  useEffect(() => {
+    if ((!msOpen && !detailId) || picOptionsLoadedRef.current) return;
+    picOptionsLoadedRef.current = true;
+    api.users()
+      .then((res) => setPicOptions(res.users.map((u) => u.name).filter((n): n is string => Boolean(n))))
+      .catch(() => { picOptionsLoadedRef.current = false; }); // gagal → boleh dicoba lagi lain waktu
+  }, [msOpen, detailId]);
 
   // Item aktif pada dialog jadwalkan ulang (lookup terkini dari state agar guard same-day akurat).
   // Untuk kind "project" item-nya adalah project itu sendiri; untuk milestone tetap milestone-nya.
@@ -1574,6 +1857,10 @@ export default function ProjectsModule() {
     setMsName(m?.name ?? "");
     setMsAchievement(m?.achievement ?? "");
     setMsDueDate(m?.dueDate ? toDateInputValue(new Date(m.dueDate)) : "");
+    // Ronde 52-b — prefill breakdown: PIC, estimasi hari kerja, paralel
+    setMsPic(m?.picName ?? "");
+    setMsDays(m?.durationDays != null ? String(m.durationDays) : "");
+    setMsParallel(!!m?.parallel);
     setMsOpen(true);
   }
 
@@ -1581,6 +1868,10 @@ export default function ProjectsModule() {
     if (!detail || !user) return;
     const name = msName.trim();
     if (!name) { toast.error("Nama milestone wajib diisi"); return; }
+    // Ronde 52-b — breakdown opsional: PIC (null bila kosong), estimasi hari (null bila kosong/NaN), paralel
+    const picName = msPic.trim() || null;
+    const parsedDays = msDays.trim() === "" ? null : Number(msDays);
+    const durationDays = parsedDays !== null && Number.isFinite(parsedDays) ? parsedDays : null;
     setMsSaving(true);
     try {
       if (msEditing) {
@@ -1589,6 +1880,9 @@ export default function ProjectsModule() {
           name,
           achievement: msAchievement.trim() || null,
           dueDate: msDueDate || null,
+          picName,
+          durationDays,
+          parallel: msParallel,
           actorName: user.name,
           actorRole: user.role,
         });
@@ -1599,6 +1893,9 @@ export default function ProjectsModule() {
           name,
           achievement: msAchievement.trim() || undefined,
           dueDate: msDueDate || null,
+          picName,
+          durationDays,
+          parallel: msParallel,
           actorName: user.name,
           actorRole: user.role,
         });
@@ -1610,6 +1907,49 @@ export default function ProjectsModule() {
       toast.error(err instanceof Error ? err.message : "Gagal menyimpan milestone");
     } finally {
       setMsSaving(false);
+    }
+  }
+
+  /** Ronde 52-b — tambah tugas produksi (dari section umum ATAU mini-form per milestone).
+   * Tugas dibuat type "production" & menempel project ini (milestoneId opsional). */
+  async function submitNewTask(fields: { title: string; pic: string; due: string; milestoneId: string }, fallbackMilestoneId?: string) {
+    if (!detail) return;
+    const title = fields.title.trim();
+    if (!title) { toast.error("Judul tugas wajib diisi"); return; }
+    const pic = fields.pic.trim();
+    const milestoneId = fields.milestoneId || fallbackMilestoneId || null;
+    setTaskSaving(true);
+    try {
+      await api.createTask({
+        title,
+        projectId: detail.id,
+        milestoneId,
+        type: "production",
+        priority: "medium",
+        assignees: pic ? [pic] : [],
+        dueDate: fields.due || null,
+      });
+      toast.success("Tugas ditambahkan");
+      setTaskAddFor(null);
+      await refreshDetail(); // tasks ikut embedded di GET /api/projects
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menambahkan tugas");
+    } finally {
+      setTaskSaving(false);
+    }
+  }
+
+  /** Ronde 52-b — toggle status tugas (open ⇄ done) lalu refresh detail (sama seperti alur milestone). */
+  async function toggleTaskStatus(t: TaskDTO) {
+    if (taskBusyId) return;
+    setTaskBusyId(t.id);
+    try {
+      await api.updateTask(t.id, { status: t.status === "done" ? "open" : "done" });
+      await refreshDetail();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memperbarui tugas");
+    } finally {
+      setTaskBusyId(null);
     }
   }
 
@@ -2346,6 +2686,52 @@ export default function ProjectsModule() {
                   </div>
                 </div>
 
+                {/* Ronde 52-b — Tugas Produksi: task bisa ditambahkan & di-assign ke user,
+                    opsional menempel milestone — list lengkap + form tambah di sini, SEBELUM timeline. */}
+                <div>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Tugas Produksi ({detailTasks.length})
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setTaskAddFor(taskAddFor === "project" ? null : "project")}
+                      aria-label="Tambah tugas produksi"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Tugas
+                    </Button>
+                  </div>
+                  {taskAddFor === "project" ? (
+                    <div className="mb-3">
+                      <TaskMiniForm
+                        picOptions={picOptions}
+                        milestones={detail.milestones ?? []}
+                        saving={taskSaving}
+                        onSubmit={(fields) => void submitNewTask(fields)}
+                        onCancel={() => setTaskAddFor(null)}
+                      />
+                    </div>
+                  ) : null}
+                  {detailTasks.length === 0 ? (
+                    <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
+                      Belum ada tugas produksi — tambahkan tugas dan assign ke tim.
+                    </div>
+                  ) : (
+                    <div className="max-h-72 space-y-1.5 overflow-y-auto crm-scroll" aria-label="Daftar tugas produksi project">
+                      {detailTasks.map((t) => (
+                        <TaskRow
+                          key={t.id}
+                          task={t}
+                          milestoneName={t.milestone?.name ?? (t.milestoneId ? (detail.milestones ?? []).find((m) => m.id === t.milestoneId)?.name ?? null : null)}
+                          busy={taskBusyId === t.id}
+                          onToggle={() => void toggleTaskStatus(t)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Ronde 35 — Timeline Milestone: urutan tahap, capaian per tahap,
                     deliverable terkait, dan aksi (selesaikan / kirim deliverable / tagih). */}
                 <div>
@@ -2362,6 +2748,9 @@ export default function ProjectsModule() {
                       <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Milestone
                     </Button>
                   </div>
+                  {estimateNote ? (
+                    <p className="mb-2 text-[11px] text-zinc-500">{estimateNote}</p>
+                  ) : null}
                   {(detail.milestones ?? []).length === 0 ? (
                     <div className="rounded-lg border border-dashed p-4 text-center text-xs text-zinc-400">
                       Belum ada milestone — tambahkan rencana kerja per tahap.
@@ -2375,6 +2764,8 @@ export default function ProjectsModule() {
                         const isCurrent = m.status === "in_progress";
                         const isLast = idx === (detail.milestones ?? []).length - 1;
                         const msDlv = (deliverables ?? []).filter((d) => d.milestoneId === m.id);
+                        // Ronde 52-b — tugas yang menempel tahap ini + estimasi run paralel utk badge
+                        const msTasks = detailTasks.filter((t) => t.milestoneId === m.id);
                         const overdue = !isDone && m.dueDate ? new Date(m.dueDate).getTime() < Date.now() : false;
                         return (
                           <li key={m.id} className="relative flex gap-3 pb-4 last:pb-0">
@@ -2416,6 +2807,37 @@ export default function ProjectsModule() {
                                 <span className={cn("text-[11px]", overdue ? "font-medium text-rose-600" : "text-zinc-400")}>
                                   {m.dueDate ? `due ${formatDate(m.dueDate)}` : "tanpa due date"}
                                 </span>
+                                {/* Ronde 52-b — badge breakdown: PIC, estimasi waktu, paralel */}
+                                {m.picName ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="shrink-0 border-transparent bg-zinc-100 px-1.5 text-[10px] text-zinc-600"
+                                    title="Penanggung jawab"
+                                  >
+                                    <UserRound className="mr-1 h-3 w-3 shrink-0" aria-hidden />
+                                    <span className="max-w-[10rem] truncate">{m.picName}</span>
+                                  </Badge>
+                                ) : null}
+                                {m.durationDays != null ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="shrink-0 border-transparent bg-zinc-100 px-1.5 text-[10px] text-zinc-600"
+                                    title="Estimasi waktu tahap ini"
+                                  >
+                                    <Clock3 className="mr-1 h-3 w-3 shrink-0" aria-hidden />
+                                    ±{m.durationDays} hari
+                                  </Badge>
+                                ) : null}
+                                {m.parallel ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="shrink-0 border-transparent bg-amber-100 px-1.5 text-[10px] text-amber-700"
+                                    title="Berjalan paralel dengan tahap sebelumnya"
+                                  >
+                                    <Zap className="mr-1 h-3 w-3 shrink-0" aria-hidden />
+                                    Paralel
+                                  </Badge>
+                                ) : null}
                               </div>
 
                               {/* Capaian — apa yang dicapai/diserahkan di tahap ini */}
@@ -2446,6 +2868,39 @@ export default function ProjectsModule() {
                                   ))}
                                 </div>
                               ) : null}
+
+                              {/* Ronde 52-b — tugas produksi yang menempel tahap ini + tambah tugas per tahap */}
+                              {(msTasks.length > 0 || taskAddFor === m.id) ? (
+                                <div className="mt-2 space-y-1.5" aria-label={`Tugas untuk milestone ${m.name}`}>
+                                  {msTasks.map((t) => (
+                                    <TaskRow
+                                      key={t.id}
+                                      task={t}
+                                      milestoneName={t.milestone?.name ?? null}
+                                      busy={taskBusyId === t.id}
+                                      onToggle={() => void toggleTaskStatus(t)}
+                                    />
+                                  ))}
+                                  {taskAddFor === m.id ? (
+                                    <TaskMiniForm
+                                      picOptions={picOptions}
+                                      fixedMilestoneId={m.id}
+                                      saving={taskSaving}
+                                      onSubmit={(fields) => void submitNewTask(fields, m.id)}
+                                      onCancel={() => setTaskAddFor(null)}
+                                    />
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-2 h-7 px-2 text-xs"
+                                onClick={() => setTaskAddFor(taskAddFor === m.id ? null : m.id)}
+                                aria-label={`Tambah tugas untuk milestone ${m.name}`}
+                              >
+                                <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Tugas
+                              </Button>
 
                               {/* Aksi per tahap */}
                               <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
@@ -3241,8 +3696,8 @@ export default function ProjectsModule() {
               <DialogTitle>{msEditing ? "Edit Milestone" : "Tambah Milestone"}</DialogTitle>
               <DialogDescription>
                 {msEditing
-                  ? "Perbarui nama, capaian, atau tenggat tahap kerja ini."
-                  : "Tambahkan tahap kerja baru ke timeline produksi. Isi capaian agar tim tahu apa yang harus selesai di tahap ini."}
+                  ? "Perbarui nama, capaian, PIC, estimasi waktu, atau tenggat tahap kerja ini."
+                  : "Tambahkan tahap kerja baru ke timeline produksi. Isi capaian, PIC & estimasi agar tim tahu apa yang harus selesai di tahap ini."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -3271,6 +3726,51 @@ export default function ProjectsModule() {
               <div className="grid gap-1.5">
                 <Label htmlFor="ms-due">Tenggat (opsional)</Label>
                 <Input id="ms-due" type="date" value={msDueDate} onChange={(e) => setMsDueDate(e.target.value)} aria-label="Tenggat milestone" />
+              </div>
+              {/* Ronde 52-b — breakdown pekerjaan: PIC, estimasi waktu, paralel */}
+              <div className="grid gap-1.5">
+                <Label htmlFor="ms-pic">PIC / Penanggung jawab</Label>
+                <Input
+                  id="ms-pic"
+                  list="ms-pic-options"
+                  value={msPic}
+                  onChange={(e) => setMsPic(e.target.value)}
+                  placeholder="Contoh: Budi M. Kurniawan"
+                  aria-label="PIC / penanggung jawab milestone"
+                />
+                <datalist id="ms-pic-options">
+                  {picOptions.map((n) => <option key={n} value={n} />)}
+                </datalist>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ms-days">Estimasi waktu (hari kerja)</Label>
+                  <Input
+                    id="ms-days"
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={msDays}
+                    onChange={(e) => setMsDays(e.target.value)}
+                    placeholder="mis. 5"
+                    aria-label="Estimasi waktu milestone dalam hari kerja"
+                  />
+                </div>
+                <Label
+                  htmlFor="ms-parallel"
+                  className="flex cursor-pointer items-center gap-2 self-end pb-1.5 text-xs font-normal text-zinc-600"
+                >
+                  <input
+                    id="ms-parallel"
+                    type="checkbox"
+                    checked={msParallel}
+                    onChange={(e) => setMsParallel(e.target.checked)}
+                    aria-label="Milestone paralel"
+                    className="h-4 w-4 shrink-0 accent-zinc-900"
+                  />
+                  Berjalan paralel dengan tahap sebelumnya
+                </Label>
               </div>
             </div>
             <DialogFooter className="gap-2">

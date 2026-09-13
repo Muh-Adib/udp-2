@@ -256,6 +256,11 @@ model Task {
   dueDate       DateTime?
   opportunityId String?
   opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  // Ronde 52 — task produksi: bisa menempel ke project & milestone timeline
+  projectId     String?
+  project       Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestoneId   String?
+  milestone     Milestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   completedAt   DateTime?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
@@ -263,6 +268,7 @@ model Task {
   // Ronde 36 (audit): index utk daftar follow-up & timeline opportunity
   @@index([opportunityId])
   @@index([status, dueDate])
+  @@index([projectId])
 }
 
 model Note {
@@ -366,6 +372,7 @@ model Project {
   invoices      Invoice[]
   changeRequests ChangeRequest[]
   deliverables  ProjectDeliverable[]
+  tasks         Task[]
   // Ronde 48 — brief klien yang menghasilkan project ini (alur Won).
   brief         ClientBrief?
 }
@@ -408,9 +415,14 @@ model Milestone {
   status      String    @default("pending") // pending, in_progress, done
   dueDate     DateTime?
   achievement String? // Ronde 35 — apa yang dicapai/diserahkan pada milestone ini
+  // Ronde 52 — breakdown pekerjaan dari estimasi: PIC, estimasi waktu, dan paralel
+  picName     String? // siapa yang bertanggung jawab atas tahap ini
+  durationDays Int?   // estimasi waktu tahap ini (hari kerja) — dasar hitung timeline
+  parallel    Boolean @default(false) // tahap berjalan paralel dgn tahap sebelumnya
   createdAt   DateTime  @default(now())
 
   deliverables ProjectDeliverable[]
+  tasks        Task[]
 }
 
 model ChangeRequest {
@@ -744,7 +756,8 @@ model Service {
   description String?
   unit        String? // satuan penjualan (video, episode, proyek, bulan)
   basePrice   Float? // harga acuan (opsional)
-  costItems   String? // JSON rincian biaya [{name, amount, note?}] — template harga marketing
+  costItems   String? // JSON rincian biaya LEGACY [{name, amount, note?}] — digantikan costCategories
+  costCategories String? // Ronde 52 — JSON kategori×item, struktur sama persis dgn RAB estimasi [{name, items:[{name,qty,unit,price,subtotal}], total}]
   targetMarginPct Float? // margin target % untuk saran harga (fallback 30)
   order       Int             @default(0)
   active      Boolean         @default(true)

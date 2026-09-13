@@ -9,7 +9,8 @@
  *                     penanda tangan, salam penutup, rekening bank)
  *  2. Layanan       — kategori & layanan khas brand + workflow produksi custom
  *                     (fase → langkah) + RINCIAN BIAYA per layanan (template harga
- *                     marketing: butir biaya → total, margin target, saran harga)
+ *                     marketing; Ronde 52: struktur kategori×item SAMA dgn RAB
+ *                     estimasi — total, margin target, saran harga)
  *  3. Surat         — kop/kaki surat umum + Ronde 50: kop per jenis surat
  *                     (quotation/invoice via brand.docAssets) + gaya template surat
  *  4. Penomoran     — Ronde 50: builder rule penomoran per jenis dokumen
@@ -49,8 +50,17 @@ import {
   type NumberingDocType,
 } from "@/lib/crm/numbering-core";
 import type {
-  Brand, BrandServiceCatalog, ChannelConfigDTO, NumberingRuleDTO, ServiceCategoryDTO, ServiceCostItem, ServiceDTO,
+  Brand, BrandServiceCatalog, ChannelConfigDTO, NumberingRuleDTO, ServiceCategoryDTO, ServiceDTO,
 } from "@/lib/crm/types";
+
+/**
+ * Ronde 52-a — payload kategori×item rincian biaya layanan: struktur PERSIS sama
+ * dgn RAB estimasi (EstimationCostCategory). Subtotal & total dihitung ulang server.
+ */
+type ServiceCostCategoryPayload = {
+  name: string;
+  items: { name: string; qty: number; unit: string; price: number }[];
+};
 
 // ============ Util ============
 
@@ -670,12 +680,14 @@ export default function BrandSettingsDialog({
     return okDone;
   }
 
-  // Ronde 29-b — simpan rincian biaya (template harga) satu layanan
-  async function saveServiceCost(serviceId: string, items: ServiceCostItem[], marginPct: number | null): Promise<boolean> {
+  // Ronde 29-b — simpan rincian biaya (template harga) satu layanan.
+  // Ronde 52-a — kini kategori×item (struktur sama dgn RAB estimasi); server menghitung
+  // ulang subtotal/total sehingga kedua sistem benar-benar saling terhubung.
+  async function saveServiceCost(serviceId: string, categories: ServiceCostCategoryPayload[], marginPct: number | null): Promise<boolean> {
     try {
       await api.brandServiceMutate(
         activeBrand.id,
-        { kind: "service", id: serviceId, costItems: items, targetMarginPct: marginPct },
+        { kind: "service", id: serviceId, costCategories: categories, targetMarginPct: marginPct },
         "PATCH"
       );
       await loadCatalog();
@@ -1612,7 +1624,8 @@ function CatalogEditor({
   onAddStage: (serviceId: string, phase: string, name: string, isMilestone: boolean) => Promise<boolean>;
   onToggleMilestone: (stage: { id: string; isMilestone: boolean; name: string }, serviceId: string) => Promise<boolean>;
   onRemove: (kind: "category" | "service" | "stage", id: string, label: string) => Promise<boolean>;
-  onSaveCost: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+  // Ronde 52-a — kategori×item (struktur sama dgn RAB estimasi)
+  onSaveCost: (serviceId: string, categories: ServiceCostCategoryPayload[], marginPct: number | null) => Promise<boolean>;
   onEditService: (serviceId: string, name: string, unit: string, basePrice: string) => Promise<boolean>;
   onEditStage: (stageId: string, serviceId: string, phase: string, name: string) => Promise<boolean>;
 }) {
@@ -1729,7 +1742,7 @@ function CatalogEditor({
                         </Button>
                       </div>
 
-                      {/* Rincian biaya (template harga) — Ronde 29-b */}
+                      {/* Rincian biaya (template harga) — Ronde 29-b; Ronde 52: kategori×item ala estimasi */}
                       <ServiceCostEditor service={svc} onSave={onSaveCost} />
 
                       {/* Workflow produksi — Ronde 43: section berheader + timeline langkah
@@ -1925,23 +1938,67 @@ function ServiceAddForm({
   );
 }
 
-// ============ Rincian biaya per layanan (template harga marketing) — Ronde 29-b ============
+// ============ Rincian biaya per layanan (template harga marketing) ============
+// Ronde 29-b: butir biaya flat → Ronde 52-a: kategori×item, struktur PERSIS sama
+// dgn editor RAB estimasi (opportunity-detail) agar kedua sistem saling terhubung.
 
-interface CostDraftItem {
+/** Draf 1 item biaya (string agar input bebas mengetik angka). */
+interface CostItemDraft {
   name: string;
-  /** String agar input bebas mengetik angka (separator diabaikan saat parse). */
-  amount: string;
-  note?: string | null;
+  qty: string;
+  unit: string;
+  price: string;
 }
 
-function costDraftFromService(svc: ServiceDTO): CostDraftItem[] {
-  return (svc.costItems ?? []).map((it) => ({ name: it.name, amount: String(it.amount ?? 0), note: it.note ?? null }));
+/** Draf 1 kategori biaya — mirror EstimationCostCategory pada RAB estimasi. */
+interface CostCategoryDraft {
+  name: string;
+  items: CostItemDraft[];
+}
+
+/**
+ * ServiceDTO → draf editor. Ronde 52-a: utamakan `costCategories` (kategori×item);
+ * fallback data legacy `costItems` (flat {name, amount, note}) → satu kategori
+ * "Biaya Umum" dengan 1 item per baris lama.
+ */
+function costDraftFromService(svc: ServiceDTO): CostCategoryDraft[] {
+  if (svc.costCategories && svc.costCategories.length > 0) {
+    return svc.costCategories.map((cat) => ({
+      name: cat.name ?? "",
+      items: (cat.items ?? []).map((it) => ({
+        name: it.name ?? "",
+        qty: String(it.qty ?? 1),
+        unit: it.unit ?? "unit",
+        price: String(it.price ?? 0),
+      })),
+    }));
+  }
+  const legacy = svc.costItems ?? [];
+  if (legacy.length === 0) return [];
+  return [
+    {
+      name: "Biaya Umum",
+      items: legacy.map((it) => ({ name: it.name, qty: "1", unit: "unit", price: String(it.amount ?? 0) })),
+    },
+  ];
+}
+
+/** Parse qty "2" / "1,5" → number; kosong/non-angka → 0 (negatif dibiarkan utk validasi). */
+function parseQty(raw: string): number {
+  const t = raw.trim().replace(",", ".");
+  const n = Number(t);
+  return t === "" || !Number.isFinite(n) ? 0 : n;
 }
 
 /** Parse nominal "28.000.000" / "28000000" → number (≥0); kosong/non-angka → 0. */
 function parseAmount(raw: string): number {
   const digits = raw.replace(/[^\d]/g, "");
   return digits === "" ? 0 : Number(digits);
+}
+
+/** True bila raw memuat angka negatif (mis. "-5") — dipakai pesan validasi harga. */
+function hasNegative(raw: string): boolean {
+  return /-\d/.test(raw);
 }
 
 /** Saran harga = total biaya × (1 + margin%) dibulatkan ke 100 ribu terdekat. */
@@ -1952,46 +2009,94 @@ function suggestedPriceOf(total: number, marginPct: number): number {
 /**
  * Blok "Rincian Biaya" per layanan — expand/collapse dgn state LOKAL
  * (mengetik di sini tidak me-render ulang seluruh dialog).
+ * Ronde 52-a — editor kategori×item yang menyamai editor RAB estimasi:
+ * lingkaran nomor kategori, grid Nama Item | Qty | Satuan | Harga | Total + hapus.
  */
 function ServiceCostEditor({
   service,
   onSave,
 }: {
   service: ServiceDTO;
-  onSave: (serviceId: string, items: ServiceCostItem[], marginPct: number | null) => Promise<boolean>;
+  onSave: (serviceId: string, categories: ServiceCostCategoryPayload[], marginPct: number | null) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<CostDraftItem[]>(() => costDraftFromService(service));
+  const [cats, setCats] = useState<CostCategoryDraft[]>(() => costDraftFromService(service));
   const [margin, setMargin] = useState<string>(() => (service.targetMarginPct != null ? String(service.targetMarginPct) : "30"));
   const [saving, setSaving] = useState(false);
 
   // Sinkronkan draf saat data server berubah (setelah simpan / katalog dimuat ulang)
   useEffect(() => {
-    setItems(costDraftFromService(service));
+    setCats(costDraftFromService(service));
     setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
   }, [service]);
 
-  const hasItems = (service.costItems ?? []).length > 0;
-  const serverTotal = service.costTotal ?? (service.costItems ?? []).reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  // Ringkasan data server: Ronde 52 (kategori×item) → fallback legacy (flat costItems)
+  const serverCats = Array.isArray(service.costCategories) ? service.costCategories : [];
+  const hasData = serverCats.length > 0 || (service.costItems ?? []).length > 0;
+  const serverItemCount = serverCats.reduce((n, c) => n + (c.items?.length ?? 0), 0);
+  const serverTotal =
+    service.costTotal ??
+    (serverCats.length > 0
+      ? serverCats.reduce((s, c) => s + (Number(c.total) || 0), 0)
+      : (service.costItems ?? []).reduce((sum, it) => sum + (Number(it.amount) || 0), 0));
   const serverSaran = service.suggestedPrice ?? suggestedPriceOf(serverTotal, service.targetMarginPct ?? 30);
 
+  // Draf → nilai numerik utk pratinjau live (nama di-trim)
   const parsed = useMemo(
-    () => items.map((it) => ({ name: it.name.trim(), amount: parseAmount(it.amount), note: it.note ?? null })),
-    [items]
+    () =>
+      cats.map((cat) => ({
+        name: cat.name.trim(),
+        items: cat.items.map((it) => ({
+          name: it.name.trim(),
+          qty: parseQty(it.qty),
+          unit: it.unit.trim() || "unit",
+          price: parseAmount(it.price),
+        })),
+      })),
+    [cats]
   );
-  const invalid = parsed.some((it) => it.name === "" || !Number.isFinite(it.amount) || it.amount < 0);
-  const total = parsed.reduce((sum, it) => sum + it.amount, 0);
+  // Validasi: kategori yg punya item wajib bernama; item wajib bernama; angka tak boleh negatif.
+  const invalid =
+    parsed.some((cat) => cat.items.length > 0 && cat.name === "") ||
+    cats.some((cat) => cat.items.some((it) => it.name.trim() === "" || parseQty(it.qty) < 0 || hasNegative(it.price)));
+  // Total live: hanya kategori bernama, hanya item bernama (selaras hitungan server).
+  const total = parsed
+    .filter((cat) => cat.name !== "")
+    .reduce(
+      (sum, cat) => sum + cat.items.filter((it) => it.name !== "").reduce((s, it) => s + Math.round(it.qty * it.price), 0),
+      0
+    );
   const marginNum = margin.trim() === "" ? 30 : Number(margin.replace(",", "."));
   const marginPct = Number.isFinite(marginNum) ? Math.min(95, Math.max(0, marginNum)) : 30;
   const saran = suggestedPriceOf(total, marginPct);
   const basePrice = service.basePrice ?? null;
 
-  function addItem() {
-    setItems((m) => [...m, { name: "", amount: "", note: null }]);
+  function addCategory() {
+    setCats((m) => [...m, { name: "", items: [{ name: "", qty: "1", unit: "unit", price: "" }] }]);
+  }
+
+  function removeCategory(ci: number) {
+    setCats((m) => m.filter((_, i) => i !== ci));
+  }
+
+  function addItem(ci: number) {
+    setCats((m) => m.map((c, i) => (i === ci ? { ...c, items: [...c.items, { name: "", qty: "1", unit: "unit", price: "" }] } : c)));
+  }
+
+  function removeItem(ci: number, ii: number) {
+    setCats((m) => m.map((c, i) => (i === ci ? { ...c, items: c.items.filter((_, j) => j !== ii) } : c)));
+  }
+
+  function setCatName(ci: number, name: string) {
+    setCats((m) => m.map((c, i) => (i === ci ? { ...c, name } : c)));
+  }
+
+  function patchItem(ci: number, ii: number, patch: Partial<CostItemDraft>) {
+    setCats((m) => m.map((c, i) => (i === ci ? { ...c, items: c.items.map((r, j) => (j === ii ? { ...r, ...patch } : r)) } : c)));
   }
 
   function resetDraft() {
-    setItems(costDraftFromService(service));
+    setCats(costDraftFromService(service));
     setMargin(service.targetMarginPct != null ? String(service.targetMarginPct) : "30");
   }
 
@@ -1999,7 +2104,13 @@ function ServiceCostEditor({
     if (invalid || saving) return;
     setSaving(true);
     try {
-      const payload: ServiceCostItem[] = parsed.map((it) => ({ name: it.name, amount: it.amount, note: it.note }));
+      // Buang kategori yang kosong total (tanpa nama & tanpa item); subtotal/total dihitung ulang server.
+      const payload: ServiceCostCategoryPayload[] = parsed
+        .filter((cat) => cat.name !== "" || cat.items.length > 0)
+        .map((cat) => ({
+          name: cat.name,
+          items: cat.items.map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, price: it.price })),
+        }));
       await onSave(service.id, payload, margin.trim() === "" ? null : marginPct);
       // Sukses → katalog dimuat ulang, draf direset otomatis via useEffect [service]
     } finally {
@@ -2025,9 +2136,10 @@ function ServiceCostEditor({
           <Calculator className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden />
           <span className="shrink-0 text-xs font-semibold text-zinc-700">Rincian Biaya &amp; Saran Harga</span>
           {!open ? (
-            hasItems ? (
+            hasData ? (
               <span className="flex min-w-0 flex-wrap items-center gap-1">
-                <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">{service.costItems?.length} butir</Badge>
+                <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">{serverCats.length} kategori</Badge>
+                <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">{serverItemCount} item</Badge>
                 <Badge variant="outline" className="border-zinc-200 bg-white px-1.5 py-0 text-[10px] font-medium text-zinc-600">Total {fmtIDR(serverTotal)}</Badge>
                 <Badge variant="outline" className="border-orange-200 bg-orange-50 px-1.5 py-0 text-[10px] font-medium text-orange-700">Saran {fmtIDR(serverSaran)}</Badge>
               </span>
@@ -2036,10 +2148,10 @@ function ServiceCostEditor({
             )
           ) : null}
         </button>
-        {!open && !hasItems ? (
+        {!open && !hasData ? (
           <Button
             type="button" variant="outline" className="h-7 shrink-0 px-2 text-[11px]"
-            onClick={() => { setOpen(true); if (items.length === 0) addItem(); }}
+            onClick={() => { setOpen(true); if (cats.length === 0) addCategory(); }}
           >
             <Plus className="h-3 w-3" aria-hidden /> Mulai isi
           </Button>
@@ -2048,44 +2160,145 @@ function ServiceCostEditor({
 
       {open ? (
         <div className="space-y-2.5 border-t px-3 py-3">
-          {items.length > 0 ? (
-            <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
-              {items.map((it, idx) => (
-                <div key={idx}>
-                  <div className="flex items-center gap-1.5">
-                    <Input
-                      aria-label={`Nama butir biaya ${idx + 1}`}
-                      className="h-8 min-w-0 flex-1 text-xs"
-                      placeholder="mis. Talenta / Sewa alat"
-                      value={it.name}
-                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, name: e.target.value } : row)))}
-                    />
-                    <Input
-                      aria-label={`Nominal butir biaya ${idx + 1} (rupiah)`}
-                      className="h-8 w-32 shrink-0 text-right font-mono text-xs"
-                      inputMode="numeric"
-                      placeholder="0"
-                      value={it.amount}
-                      onChange={(e) => setItems((m) => m.map((row, i) => (i === idx ? { ...row, amount: e.target.value } : row)))}
-                    />
-                    <Button
-                      type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
-                      aria-label={`Hapus butir ${it.name.trim() || idx + 1}`}
-                      onClick={() => setItems((m) => m.filter((_, i) => i !== idx))}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                    </Button>
+          {cats.length > 0 ? (
+            <div className="crm-scroll max-h-72 space-y-3 overflow-y-auto pr-1">
+              {cats.map((cat, ci) => {
+                // Total kategori live: hanya item bernama (selaras pola editor estimasi).
+                const catTotal = parsed[ci].items
+                  .filter((it) => it.name !== "")
+                  .reduce((s, it) => s + Math.round(it.qty * it.price), 0);
+                return (
+                  <div key={ci} className="rounded-lg border bg-white p-2.5">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-semibold text-white"
+                        aria-hidden
+                      >
+                        {ci + 1}
+                      </span>
+                      <Input
+                        aria-label={`Nama kategori ${ci + 1}`}
+                        className="h-8 min-w-0 flex-1 text-xs font-medium"
+                        placeholder={`Kategori ${ci + 1}, mis. Peralatan`}
+                        value={cat.name}
+                        onChange={(e) => setCatName(ci, e.target.value)}
+                      />
+                      <Button
+                        type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-zinc-400 hover:text-rose-600"
+                        aria-label={`Hapus kategori ${ci + 1}`}
+                        onClick={() => removeCategory(ci)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                      </Button>
+                    </div>
+
+                    {cat.items.length > 0 ? (
+                      <div className="mt-2 space-y-1.5">
+                        {/* Header kolom desktop — grid sama persis dgn editor RAB estimasi */}
+                        <div className="hidden gap-2 px-1 text-[10px] font-medium uppercase tracking-wide text-zinc-400 sm:grid sm:grid-cols-[minmax(0,1fr)_56px_76px_120px_110px_32px]">
+                          <span>Nama Item</span>
+                          <span>Qty</span>
+                          <span>Satuan</span>
+                          <span>Harga</span>
+                          <span className="text-right">Total</span>
+                          <span />
+                        </div>
+                        {cat.items.map((it, ii) => {
+                          const lineTotal = Math.round(parseQty(it.qty) * parseAmount(it.price));
+                          return (
+                            <div
+                              key={ii}
+                              className="grid grid-cols-2 gap-1.5 rounded-md border bg-zinc-50/60 p-2 sm:grid-cols-[minmax(0,1fr)_56px_76px_120px_110px_32px] sm:items-center sm:gap-2 sm:border-0 sm:bg-transparent sm:p-0"
+                            >
+                              <div className="col-span-2 sm:col-span-1">
+                                <Input
+                                  aria-label={`Nama item ${ii + 1} pada kategori ${ci + 1}`}
+                                  className="h-8 text-xs"
+                                  placeholder={`Item ${ii + 1}, mis. Sewa kamera`}
+                                  value={it.name}
+                                  onChange={(e) => patchItem(ci, ii, { name: e.target.value })}
+                                />
+                              </div>
+                              <Input
+                                type="number" min={0} step="any"
+                                aria-label={`Qty item ${ii + 1} pada kategori ${ci + 1}`}
+                                className="h-8 text-xs"
+                                placeholder="1"
+                                value={it.qty}
+                                onChange={(e) => patchItem(ci, ii, { qty: e.target.value })}
+                              />
+                              <Input
+                                aria-label={`Satuan item ${ii + 1} pada kategori ${ci + 1}`}
+                                className="h-8 text-xs"
+                                placeholder="unit"
+                                value={it.unit}
+                                onChange={(e) => patchItem(ci, ii, { unit: e.target.value })}
+                              />
+                              <div className="relative">
+                                <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-400" aria-hidden>Rp</span>
+                                <Input
+                                  type="number" min={0} inputMode="numeric"
+                                  aria-label={`Harga satuan item ${ii + 1} pada kategori ${ci + 1} (rupiah)`}
+                                  className="h-8 pl-7 text-right font-mono text-xs"
+                                  placeholder="0"
+                                  value={it.price}
+                                  onChange={(e) => patchItem(ci, ii, { price: e.target.value })}
+                                />
+                              </div>
+                              <div className="text-right">
+                                <span
+                                  className="block text-xs tabular-nums text-zinc-700"
+                                  aria-label={`Total item ${ii + 1} pada kategori ${ci + 1}`}
+                                >
+                                  {fmtIDR(lineTotal)}
+                                </span>
+                              </div>
+                              <Button
+                                type="button" variant="ghost" size="icon"
+                                className="h-8 w-8 justify-self-end text-zinc-300 hover:text-rose-600"
+                                aria-label={`Hapus item ${ii + 1} pada kategori ${ci + 1}`}
+                                onClick={() => removeItem(ci, ii)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-2 rounded-md border border-dashed px-3 py-2 text-[11px] text-zinc-400">
+                        Belum ada item pada kategori ini.
+                      </p>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-dashed border-zinc-200 pt-2">
+                      <Button
+                        type="button" size="sm" variant="ghost"
+                        className="h-7 px-2 text-xs text-zinc-500 hover:text-zinc-800"
+                        onClick={() => addItem(ci)}
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah item
+                      </Button>
+                      <div className="text-right">
+                        <p className="text-xs text-zinc-500">
+                          Total <span className="font-medium text-zinc-700">{cat.name.trim() || `Kategori ${ci + 1}`}</span>
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums text-zinc-900">{fmtIDR(catTotal)}</p>
+                      </div>
+                    </div>
                   </div>
-                  {it.note ? <p className="pl-1 text-[11px] italic text-zinc-400">{it.note}</p> : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <p className="text-xs italic text-zinc-400">Belum ada rincian biaya — tambahkan butir komponen biaya (talenta, sewa alat, transport, dsb.).</p>
+            <p className="text-xs italic text-zinc-400">
+              Belum ada rincian biaya — klik Tambah Kategori lalu isi item di dalamnya (mis. kategori
+              &ldquo;Peralatan&rdquo; berisi item &ldquo;Sewa kamera&rdquo; · 2 hari).
+            </p>
           )}
 
-          <Button type="button" variant="outline" className="h-8" onClick={addItem}>
-            <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah butir
+          <Button type="button" variant="outline" className="h-8" onClick={addCategory}>
+            <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah Kategori
           </Button>
 
           <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg border border-dashed bg-white px-3 py-2.5">
@@ -2120,7 +2333,7 @@ function ServiceCostEditor({
             ) : null}
             {basePrice != null ? <span className="text-[11px] text-zinc-500">Harga acuan: {fmtIDR(basePrice)}</span> : null}
             <div className="flex-1" />
-            {invalid ? <p className="text-[11px] text-rose-600">Nama butir wajib diisi &amp; nominal ≥ 0.</p> : null}
+            {invalid ? <p className="text-[11px] text-rose-600">Nama kategori &amp; nama item wajib diisi; qty/harga tidak boleh negatif.</p> : null}
             <Button type="button" variant="ghost" className="h-8" disabled={saving} onClick={resetDraft}>
               Batal
             </Button>
