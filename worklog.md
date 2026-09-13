@@ -2163,3 +2163,24 @@ Stage Summary:
 - LEAD/PELUANG → PROJECT: alur Won dan pembuatan project manual (dengan opportunityId) sama-sama membawa breakdown: apa saja pekerjaannya (kategori/item), siapa yang bertanggung jawab (PIC per tahap), bisa paralel (flag + lane gantt + due berantai), task bisa ditambah & di-assign ke user (per tahap atau project), semuanya terlihat di timeline produksi, dengan estimasi waktu (durasi per tahap + total ±hari kerja).
 - Layanan legacy otomatis termigrasi (tanpa kehilangan data); saran harga tetap konsisten (28jt → 36,4jt).
 - BACKLOG: RBAC enforcement lintas modul; kompresi attachment >1.1MB; WA/email kirim mode dev; A4 print uji fisik; estimasi direktur approve bug (lama).
+---
+Task ID: 53
+Agent: main (Z.ai Code)
+Task: Ronde 53 — user melapor "kirim email dengan file tidak masuk, apakah ada mekanisme spam?" (2x percobaan tidak ada yang masuk). Diagnosa + perbaikan alur email masuk/keluar end-to-end.
+
+Work Log:
+- DIAGNOSA (DB + IMAP probe dengan kredensial tersimpan): channel email REAL sales@unimasi.com (Hostinger SMTP 465 + IMAP 993) sudah connected & non-demo (user berhasil konek setelah Ronde 51); kedua email ujicoba user (13:19 "Ujicoba kirim email" + lampiran XLSX dari adib@udp.co.id, 13:26 "Uj" dari muhammad.17@students.amikom.ac.id) SAMPAI di INBOX mailbox — folder Junk/Trash kosong → BUKAN spam. Akar masalah: app TIDAK PERNAH menarik email (lastEmailSyncAt=null) karena sinkron IMAP hanya bisa manual (tombol Sinkron) — sweep=1 saat buka Inbox hanya menjalankan SLA sweep + auto-unify, TIDAK menyentuh IMAP.
+- FIX 1 (akar): lib baru src/lib/crm/email-sync.ts — inti sinkron IMAP diekstrak dari route manual + throttle berbasis lastEmailSyncAt (90 detik) + hanya kanal non-demo. GET /api/inbox kini memicu syncInboundEmails saat sweep=1 SEBELUM query leads (email baru langsung ikut di respons yang sama; gagal sync tidak menggagalkan inbox).
+- FIX 2: email tersinkron kini membawa daftar lampiran — nama file diekstrak dari bodyStructure (disposition/attachment + filename, rekursif) dan ditulis ke konten "[Lampiran: file.xlsx]" (dulu tampil generik "(isi email HTML/lampiran…)").
+- FIX 3: route manual POST /api/channels/email-sync di-refactor delegasi ke lib (gate role super_admin/director + pesan error presisi dipertahankan; throttle dinonaktifkan utk manual; audit "auto" hanya bila ada email baru agar tidak spam audit).
+- FIX 4 (kejujuran outbound): startContactConversation dulu hardcode deliveryStatus "sent" TANPA mencoba kirim — kini kirim NYATA via deliverEmailReply (status/note jujur). Jalur balas lead juga diperbarui.
+- FIX 5: deliverEmailReply kini menerima attachments (data URL → buffer SMTP, maks 5) — lampiran di composer Inbox RESPOND IKUT TERKIRIM via SMTP (dulu hanya tersimpan di CRM); pemilihan kanal sadar-brand: kanal email non-demo milik brand → non-demo lain → fallback demo ("simulated"). sendEmailViaSmtp diperluas opsi attachments.
+- FIX 6 (UX): api-client inbox typing + emailSync field; inbox-module loadLeads menampilkan toast "N email masuk ditarik otomatis" / error sinkron.
+- QA curl end-to-end (semua data QA dihapus bersih, email asli user dipertahankan): login director → POST email-sync → created=3 (2 email user + 1 welcome Hostinger) ✓; konten "Ujicoba kirim email" berisi "[Lampiran: 001-BAST.UNICAM-IX-2026.xlsx]" ✓; GET inbox sweep menampilkan kedua email + field emailSync ✓; kirim nyata via POST /api/interactions (self-test) → status=sent "Terkirim nyata via smtp.hostinger.com" ✓; re-sync menarik salinan self-test → mendarat di INBOX bukan Junk ✓; balas lead QA via /api/inbox/respond dengan lampiran → sent + "1 lampiran ikut terkirim" → sync menarik salinan dgn "[Lampiran: qa-attachment.txt]" ✓; home 200; dev.log bersih tanpa error.
+- VERIFIKASI: bunx tsc --noEmit (filter skills/examples) → 0 error; bun run lint → bersih; artefak QA (.tmp-audit) dihapus.
+
+Stage Summary:
+- JAWABAN ATAS LAPORAN USER: tidak ada mekanisme spam di app — kedua email ujicoba user justru SAMPAI di mailbox sales@unimasi.com (Junk kosong). Yang bermasalah: aplikasi belum pernah menarik email dari server IMAP karena sinkron hanya bisa manual. Kini membuka Inbox otomatis menarik email (throttle 90 detik) dan toast memberi tahu jumlah email baru.
+- Rantai email dua arah kini terverifikasi nyata end-to-end: IMAP masuk (dengan nama lampiran) dan SMTP keluar (dengan lampiran ikut terkirim), keduanya lewat kanal Hostinger sales@unimasi.com yang non-demo.
+- Perbaikan kejujuran tambahan: chat kontak outbound tidak lagi menampilkan "sent" palsu; balasan lead menyertakan lampiran sungguhan.
+- BACKLOG (mengikut): unduh lampiran email tersinkron (nama tampil, file belum disimpan); RBAC enforcement lintas modul; kompresi attachment >2MB; WA/IG kirim mode dev; estimasi direktur approve bug (lama); NextAuth dep tidak terpakai.

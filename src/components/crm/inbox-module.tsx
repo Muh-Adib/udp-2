@@ -2134,6 +2134,16 @@ export default function InboxModule() {
           description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
         });
       }
+      // Ronde 53 — auto-sync IMAP kini berjalan saat Inbox dibuka; beri tahu user
+      // bila ada email masuk nyata yang baru ditarik (dulu email tak pernah muncul
+      // karena sync hanya bisa manual → kasus "email ujicoba tidak masuk").
+      if (res.emailSync?.error) {
+        toast.error("Sinkron IMAP otomatis gagal", { description: res.emailSync.error });
+      } else if (res.emailSync && res.emailSync.created > 0) {
+        toast.success(`${res.emailSync.created} email masuk ditarik otomatis`, {
+          description: "Sinkron IMAP berjalan otomatis saat Inbox dibuka.",
+        });
+      }
       return res.leads; // Ronde 40-B — dipakai utk auto-fokus thread setelah pesan pertama
     } catch (err) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan tak terduga");

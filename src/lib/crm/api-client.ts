@@ -227,7 +227,12 @@ export const api = {
     if (params?.sweep) sp.set("sweep", "1");
     if (params?.view === "all") sp.set("view", "all");
     if (params?.contactId) sp.set("contactId", params.contactId);
-    return request<{ leads: InboxLeadDTO[]; autoEscalated?: number }>(`/api/inbox?${sp}`);
+    return request<{
+      leads: InboxLeadDTO[];
+      autoEscalated?: number;
+      /** Ronde 53 — hasil auto-sync IMAP yang di picu sweep (buka Inbox). */
+      emailSync?: { ran: boolean; created: number; skipped: number; error?: string } | null;
+    }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
     // Ronde 41 — briefCode: kode draft brief awal yang dibentuk otomatis saat konversi

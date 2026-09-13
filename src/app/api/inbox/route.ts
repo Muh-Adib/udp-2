@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, findMatchCandidates, loadMatchContacts, logAudit } from "@/lib/crm/server";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
+import { syncInboundEmails } from "@/lib/crm/email-sync";
 import { extractEmailFromText } from "@/lib/crm/utils";
 import { computeReplyChannels, inferBrandIdFromSource, senderTokens, serializeInteractionAttachments, threadKeyFor } from "@/lib/crm/thread";
 
@@ -138,6 +139,21 @@ export async function GET(req: NextRequest) {
       autoEscalated = await runSlaSweep(req);
     } catch {
       autoEscalated = 0; // sweep gagal tidak boleh menggagalkan inbox
+    }
+  }
+
+  // Ronde 53 — FIX akar: buka Inbox kini juga MENARIK email masuk nyata via IMAP
+  // (kanal email non-demo terhubung; throttle 90 detik berbasis lastEmailSyncAt).
+  // Dulu sync HANYA lewat tombol manual → email masuk tak pernah muncul otomatis
+  // (kasus nyata: 2 email ujicoba user terdiam di mailbox, app tak pernah menarik).
+  // Dijalankan SEBELUM query leads agar email baru langsung ikut di respons ini.
+  let emailSync: { ran: boolean; created: number; skipped: number; error?: string } | null = null;
+  if (sp.get("sweep") === "1") {
+    try {
+      const sync = await syncInboundEmails({ actorName: "Sistem (Auto-sync IMAP)", req, throttleMs: 90_000, auditMode: "auto" });
+      emailSync = { ran: sync.ran, created: sync.created, skipped: sync.skipped, error: sync.error };
+    } catch {
+      emailSync = null; // sync gagal tidak boleh menggagalkan inbox
     }
   }
 
@@ -312,7 +328,7 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  return ok({ leads: leadsWithThread, autoEscalated, autoUnified, brandInferred });
+  return ok({ leads: leadsWithThread, autoEscalated, autoUnified, brandInferred, emailSync });
 }
 
 

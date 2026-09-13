@@ -251,7 +251,14 @@ export function extractEmailAddress(raw: string | null | undefined): string | nu
 
 export async function sendEmailViaSmtp(
   creds: Record<string, string>,
-  options: { to: string; subject: string; text: string; from?: string }
+  options: {
+    to: string;
+    subject: string;
+    text: string;
+    from?: string;
+    /** Ronde 53 — lampiran ikut terkirim (dulu hanya tersimpan di CRM). */
+    attachments?: { filename: string; content: Buffer }[];
+  }
 ): Promise<SendEmailResult> {
   const host = (creds.smtpHost ?? "").trim();
   const user = (creds.smtpUser ?? "").trim();
@@ -279,6 +286,7 @@ export async function sendEmailViaSmtp(
         to: options.to,
         subject: options.subject,
         text: options.text,
+        ...(options.attachments && options.attachments.length > 0 ? { attachments: options.attachments } : {}),
       }),
       20_000,
       "SMTP send"

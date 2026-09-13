@@ -92,6 +92,25 @@ async function startContactConversation(
     brandId = brand?.id ?? null;
   }
 
+  // Ronde 53 — FIX kejujuran: outbound email mode kontak dulu DI-HARDCODE "sent"
+  // tanpa mencoba kirim → user mengira email terkirim padahal tidak pernah keluar.
+  // Kini kirim NYATA via SMTP (kanal email non-demo brand tsb), status jujur.
+  const contactDelivery = await (async (): Promise<{ status: string | null; note: string | null }> => {
+    if (channel !== "email") return { status: "sent", note: null };
+    const delivery = await deliverEmailReply({
+      recipientRaw: address,
+      subject: body.subject ? String(body.subject) : null,
+      content,
+      attachments,
+      brandId,
+    });
+    let note = delivery.note;
+    if (attachments.length > 0 && delivery.status !== "sent") {
+      note = `${note ?? ""}${note ? " · " : ""}Lampiran tersimpan di CRM (belum ikut terkirim via SMTP)`;
+    }
+    return { status: delivery.status, note };
+  })();
+
   const reply = await db.interaction.create({
     data: {
       channel,
@@ -102,7 +121,8 @@ async function startContactConversation(
       subject: body.subject ? String(body.subject) : null,
       content,
       attachments: attachments.length > 0 ? JSON.stringify(attachments) : null,
-      deliveryStatus: "sent",
+      deliveryStatus: contactDelivery.status,
+      deliveryNote: contactDelivery.note,
       contactId: contact.id,
       companyId: contact.companyId ?? null,
       externalId: `contact-chat:${contact.id}`,
@@ -209,11 +229,14 @@ export async function POST(req: NextRequest) {
       recipientRaw: replyAddress ?? lead.contact?.fullName ?? lead.senderName ?? null,
       subject,
       content,
+      attachments: att.list, // Ronde 53 — lampiran kini ikut terkirim via SMTP
+      brandId: lead.brandId,
     });
     deliveryStatus = delivery.status;
     deliveryNote = delivery.note;
-    // Ronde 34-b — jujur: lampiran tersimpan di CRM, belum ikut terkirim via SMTP
-    if (att.list.length > 0) {
+    // Ronde 34-b — lampiran tersimpan di CRM; bila kirim nyata GAGAL/simulasi,
+    // lampiran juga belum terkirim — catatan jujur diberikan.
+    if (att.list.length > 0 && delivery.status !== "sent") {
       deliveryNote = `${deliveryNote ?? ""}${deliveryNote ? " · " : ""}Lampiran tersimpan di CRM (belum ikut terkirim via SMTP)`;
     }
   }
