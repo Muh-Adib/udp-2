@@ -23,6 +23,8 @@ export interface DeliveryOutcome {
 export interface DeliveryAttachment {
   name: string;
   url: string; // data URL
+  /** Ronde 55 — ukuran byte (opsional, ikut tersimpan ke JSON attachments). */
+  size?: number;
 }
 
 function parseJsonObject(raw: string | null | undefined): Record<string, string> {

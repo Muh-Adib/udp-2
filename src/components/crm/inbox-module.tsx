@@ -892,7 +892,9 @@ function ThreadMessageBubble({ message, highlight, fallbackOutboundAuthor }: { m
               return (
                 <li key={`${a.name}-${i}`}>
                   <a
-                    href={a.url}
+                    // Ronde 55 — unduh via API terlindungi (payload list tak lagi
+                    // membawa data-URL; a.url hanya ada di echo respons kirim).
+                    href={a.url ?? `/api/interactions/${message.id}/attachments?index=${i}`}
                     download={a.name}
                     className={cn(
                       "flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
@@ -2120,6 +2122,13 @@ export default function InboxModule() {
     return () => { alive = false; };
   }, []);
 
+  // Ronde 55 — deteksi pesan baru via diff ID lead + dedupe memo sinkron IMAP.
+  // Dulu toast "N email ditarik" hanya dari emailSync.request-ini (sync inline);
+  // kini sync non-blocking → email baru terdeteksi dari perubahan daftar lead
+  // (mencakup SEMUA kanal), memo error sync tetap ditampilkan (sekali per event).
+  const seenLeadIdsRef = useRef<Set<string> | null>(null);
+  const lastSyncAtRef = useRef<string | null>(null);
+
   const loadLeads = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -2134,15 +2143,26 @@ export default function InboxModule() {
           description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
         });
       }
-      // Ronde 53 — auto-sync IMAP kini berjalan saat Inbox dibuka; beri tahu user
-      // bila ada email masuk nyata yang baru ditarik (dulu email tak pernah muncul
-      // karena sync hanya bisa manual → kasus "email ujicoba tidak masuk").
-      if (res.emailSync?.error) {
-        toast.error("Sinkron IMAP otomatis gagal", { description: res.emailSync.error });
-      } else if (res.emailSync && res.emailSync.created > 0) {
-        toast.success(`${res.emailSync.created} email masuk ditarik otomatis`, {
-          description: "Sinkron IMAP berjalan otomatis saat Inbox dibuka.",
-        });
+      // Ronde 55 — toast "pesan baru masuk" HANYA untuk polling senyap
+      // (bukan buka pertama / ganti filter → hindari false-positive).
+      const prevIds = seenLeadIdsRef.current;
+      seenLeadIdsRef.current = new Set(res.leads.map((l) => l.id));
+      if (silent && prevIds) {
+        const newMsgs = res.leads.filter((l) => l.direction === "inbound" && !prevIds.has(l.id));
+        if (newMsgs.length > 0) {
+          toast.success(`${newMsgs.length} pesan baru masuk`, {
+            description: "Inbox diperbarui otomatis — tanpa refresh manual.",
+          });
+        }
+      }
+      // Ronde 55 — error sync IMAP dari memo latar belakang: tampilkan SEKALI
+      // per kejadian (dedupe via memo.at), jangan di setiap poll.
+      if (res.emailSync?.at && res.emailSync.at !== lastSyncAtRef.current) {
+        const firstMemo = lastSyncAtRef.current === null;
+        lastSyncAtRef.current = res.emailSync.at;
+        if (!firstMemo && res.emailSync.error) {
+          toast.error("Sinkron IMAP otomatis gagal", { description: res.emailSync.error });
+        }
       }
       return res.leads; // Ronde 40-B — dipakai utk auto-fokus thread setelah pesan pertama
     } catch (err) {

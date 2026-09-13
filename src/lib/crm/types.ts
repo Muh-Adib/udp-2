@@ -151,8 +151,12 @@ export interface TaxDTO {
 /** Ronde 34-b — lampiran pesan chat (dokumen/gambar) — data URL kecil (≤2 MB per file). */
 export interface InteractionAttachment {
   name: string;
-  /** Data URL (data:...;base64,...) — bisa langsung diunduh dari bubble chat. */
-  url: string;
+  /**
+   * Ronde 55 — opsional: respons list/poll TIDAK lagi membawa URL base64
+   * (payload ringan); unduhan lewat GET /api/interactions/[id]/attachments?index=N.
+   * Data URL hanya ada di draft lokal composer & echo respons kirim.
+   */
+  url?: string;
   /** Ukuran file dalam byte (opsional). */
   size?: number;
 }

@@ -1,21 +1,21 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody, logAudit, unsafeAttachmentReason } from "@/lib/crm/server";
-import { deliverEmailReply } from "@/lib/crm/email-delivery";
+import { deliverEmailReply, type DeliveryAttachment } from "@/lib/crm/email-delivery";
 import { computeReplyChannels, REPLY_CHANNELS, reachableAddress, serializeInteractionAttachments } from "@/lib/crm/thread";
 import { resolveActor } from "@/lib/crm/auth";
-import type { InteractionAttachment } from "@/lib/crm/types";
 
 /** Ronde 34-b — batas lampiran per pesan chat. */
 const MAX_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2 MB per file (data URL)
 const DATA_URL_RE = /^data:[\w.+-]+\/[\w.+-]+;base64,/;
 
-/** Ronde 34-b — parse & validasi lampiran dari body (data URL saja, ada batas ukuran/jumlah). */
-function parseAttachments(input: unknown): { list: InteractionAttachment[]; error: string | null } {
+/** Ronde 34-b — parse & validasi lampiran dari body (data URL saja, ada batas ukuran/jumlah).
+ * Ronde 55 — hasil bertipe DeliveryAttachment[] (url DIJAMIN ada — baris guard `!url`). */
+function parseAttachments(input: unknown): { list: DeliveryAttachment[]; error: string | null } {
   if (input == null) return { list: [], error: null };
   if (!Array.isArray(input)) return { list: [], error: "Format lampiran tidak valid" };
-  const list: InteractionAttachment[] = [];
+  const list: DeliveryAttachment[] = [];
   for (const raw of input.slice(0, MAX_ATTACHMENTS)) {
     const item = raw as { name?: unknown; url?: unknown };
     const name = String(item?.name ?? "").trim().slice(0, 200);
@@ -49,7 +49,7 @@ async function startContactConversation(
   actor: { name: string; role: string | null },
   contactId: string,
   content: string,
-  attachments: InteractionAttachment[],
+  attachments: DeliveryAttachment[],
 ) {
   const contact = await db.contact.findUnique({
     where: { id: contactId },

@@ -1,10 +1,10 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { db } from "@/lib/db";
 import { ok, findMatchCandidates, loadMatchContacts, logAudit } from "@/lib/crm/server";
 import { runSlaSweep } from "@/lib/crm/sla-sweep";
-import { syncInboundEmails } from "@/lib/crm/email-sync";
+import { getEmailSyncMemo, startBackgroundEmailSync } from "@/lib/crm/email-sync";
 import { extractEmailFromText } from "@/lib/crm/utils";
-import { computeReplyChannels, inferBrandIdFromSource, senderTokens, serializeInteractionAttachments, threadKeyFor } from "@/lib/crm/thread";
+import { computeReplyChannels, inferBrandIdFromSource, senderTokens, serializeAttachmentRefs, threadKeyFor } from "@/lib/crm/thread";
 
 /**
  * Unified Lead Inbox: pesan inbound yang belum ditautkan ke opportunity
@@ -40,7 +40,7 @@ function serializeThreadMessage(i: {
     deliveryStatus: i.deliveryStatus,
     externalId: i.externalId,
     // Ronde 34-b — lampiran dokumen/gambar ikut tampil di bubble chat
-    attachments: serializeInteractionAttachments(i.attachments ?? null),
+    attachments: serializeAttachmentRefs(i.attachments ?? null),
     createdAt: i.createdAt.toISOString(),
   };
 }
@@ -142,20 +142,25 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Ronde 53 — FIX akar: buka Inbox kini juga MENARIK email masuk nyata via IMAP
-  // (kanal email non-demo terhubung; throttle 30 detik berbasis lastEmailSyncAt —
-  // Ronde 54 menurunkan dari 90 detik agar email tampil mendekati real-time).
-  // Dulu sync HANYA lewat tombol manual → email masuk tak pernah muncul otomatis
-  // (kasus nyata: 2 email ujicoba user terdiam di mailbox, app tak pernah menarik).
-  // Dijalankan SEBELUM query leads agar email baru langsung ikut di respons ini.
-  let emailSync: { ran: boolean; created: number; skipped: number; error?: string } | null = null;
+  // Ronde 53 — buka Inbox kini juga MENARIK email masuk nyata via IMAP
+  // (kanal email non-demo terhubung).
+  // Ronde 55 — FIX PERLAMBATAN: sync TIDAK lagi di-await inline (dulu request
+  // inbox menunggu round-trip IMAP penuh 2–30 detik tiap kali throttle 30 detik
+  // kedaluwarsa — terukur 2,86 s vs 0,03 s). Kini sync dipicu DI LATAR BELAKANG
+  // via after() setelah respons terkirim: respons inbox selalu ~30 ms, email
+  // baru muncul di poll berikutnya (≤25 s) + toast, tanpa refresh manual.
+  // Guard anti-paralel + memo hasil ada di lib (startBackgroundEmailSync).
+  const syncMemo = getEmailSyncMemo();
+  const emailSync: { ran: boolean; created: number; skipped: number; error?: string; at?: string } | null = syncMemo
+    ? { ran: true, created: syncMemo.created, skipped: syncMemo.skipped, error: syncMemo.error, at: syncMemo.at }
+    : null;
   if (sp.get("sweep") === "1") {
-    try {
-      const sync = await syncInboundEmails({ actorName: "Sistem (Auto-sync IMAP)", req, throttleMs: 30_000, auditMode: "auto" });
-      emailSync = { ran: sync.ran, created: sync.created, skipped: sync.skipped, error: sync.error };
-    } catch {
-      emailSync = null; // sync gagal tidak boleh menggagalkan inbox
-    }
+    const bg = startBackgroundEmailSync({ actorName: "Sistem (Auto-sync IMAP)", req, throttleMs: 30_000, auditMode: "auto" });
+    // after(): runtime menahan proses sampai sync latar belakang selesai,
+    // memo hasilnya dibaca poll berikutnya (≤25 s) → email baru tampil otomatis.
+    after(async () => {
+      await bg.promise;
+    });
   }
 
   const leads = await db.interaction.findMany({

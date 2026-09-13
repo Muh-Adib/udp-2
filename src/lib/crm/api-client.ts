@@ -230,8 +230,12 @@ export const api = {
     return request<{
       leads: InboxLeadDTO[];
       autoEscalated?: number;
-      /** Ronde 53 — hasil auto-sync IMAP yang di picu sweep (buka Inbox). */
-      emailSync?: { ran: boolean; created: number; skipped: number; error?: string } | null;
+      /**
+       * Ronde 55 — memo hasil sync IMAP latar belakang TERAKHIR (bukan sync
+       * request ini — sync kini non-blocking via after()). `at` = kunci dedupe
+       * toast di klien; email baru terdeteksi via diff ID lead di klien.
+       */
+      emailSync?: { ran: boolean; created: number; skipped: number; error?: string; at?: string } | null;
     }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>

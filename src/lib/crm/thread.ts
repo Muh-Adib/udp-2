@@ -25,6 +25,35 @@ export function serializeInteractionAttachments(raw: string | null): Interaction
   }
 }
 
+/**
+ * Ronde 55 — versi RINGAN utk respons list/poll: HANYA {name, size} tanpa URL.
+ * Dulu data-URL base64 (hingga 2 MB/file) ikut terkirim di SETIAP respons
+ * GET /api/inbox (dipoll tiap 25 detik × hingga 400 pesan riwayat) → payload
+ * membengkak. Unduhan kini lewat GET /api/interactions/[id]/attachments?index=N
+ * (diautentikasi + header Content-Disposition: attachment — lebih aman pula).
+ */
+export interface InteractionAttachmentRef {
+  name: string;
+  size?: number;
+}
+
+export function serializeAttachmentRefs(raw: string | null): InteractionAttachmentRef[] | null {
+  if (!raw) return null;
+  try {
+    const arr: unknown = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const refs: InteractionAttachmentRef[] = arr
+      .filter((a): a is { name?: unknown; size?: unknown } => Boolean(a) && typeof a === "object")
+      .map((a) => ({
+        name: typeof a.name === "string" && a.name.trim() ? a.name.trim().slice(0, 200) : "lampiran",
+        ...(typeof a.size === "number" && a.size > 0 ? { size: a.size } : {}),
+      }));
+    return refs.length > 0 ? refs : null;
+  } catch {
+    return null;
+  }
+}
+
 export function digitsOnly(v: string): string {
   return v.replace(/\D+/g, "");
 }

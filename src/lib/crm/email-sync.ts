@@ -28,6 +28,77 @@ export interface EmailSyncResult {
   since?: string;
 }
 
+/**
+ * Ronde 55 — memo hasil sinkron terakhir + guard anti-paralel.
+ * Dulu sync IMAP di-await inline di GET /api/inbox → request inbox menunggu
+ * round-trip IMAP penuh (2–30 detik) tiap kali throttle kedaluwarsa → buka
+ * Inbox terasa lambat. Kini sync berjalan DI LATAR BELAKANG (after response),
+ * hasilnya diingat di memo agar UI bisa menampilkan toast di poll berikutnya.
+ */
+export interface EmailSyncMemo {
+  /** Waktu memo ditulis (ISO) — kunci dedupe toast di klien. */
+  at: string;
+  created: number;
+  skipped: number;
+  scanned: number;
+  ok: boolean;
+  error?: string;
+}
+
+let lastSyncMemo: EmailSyncMemo | null = null;
+let syncInFlight = false;
+
+export function getEmailSyncMemo(): EmailSyncMemo | null {
+  return lastSyncMemo;
+}
+
+/**
+ * Ronde 55 — picu sync IMAP tanpa menunggu (fire-and-forget).
+ * - Guard in-flight: polling 25 detik + visibilitychange + tombol manual tidak
+ *   akan pernah menjalankan DUA sync IMAP bersamaan (dulu bisa — server IMAP
+ *   melambat / menolak koneksi ganda).
+ * - Throttle tetap ditegakkan oleh syncInboundEmails (30 detik).
+ * - Mengembalikan `promise` agar pemanggil bisa mendaftarkannya ke after()
+ *   (Next.js) supaya runtime menahan proses hidup sampai sync selesai.
+ */
+export function startBackgroundEmailSync(options: {
+  actorName: string;
+  req?: NextRequest;
+  throttleMs?: number | null;
+  auditMode?: "manual" | "auto";
+}): { started: boolean; reason?: "in_progress"; promise: Promise<void> } {
+  if (syncInFlight) return { started: false, reason: "in_progress", promise: Promise.resolve() };
+  syncInFlight = true;
+  const promise = (async () => {
+    try {
+      const res = await syncInboundEmails(options);
+      // Memo hanya diperbarui bila sync benar-benar mencoba IMAP (bukan throttled/no_channel)
+      if (res.ran || res.error) {
+        lastSyncMemo = {
+          at: new Date().toISOString(),
+          created: res.created,
+          skipped: res.skipped,
+          scanned: res.scanned,
+          ok: !res.error,
+          error: res.error,
+        };
+      }
+    } catch (err) {
+      lastSyncMemo = {
+        at: new Date().toISOString(),
+        created: 0,
+        skipped: 0,
+        scanned: 0,
+        ok: false,
+        error: err instanceof Error ? err.message : "kesalahan tak terduga",
+      };
+    } finally {
+      syncInFlight = false;
+    }
+  })();
+  return { started: true, promise };
+}
+
 function parseJsonObject(raw: string | null | undefined): Record<string, string> {
   if (!raw) return {};
   try {
