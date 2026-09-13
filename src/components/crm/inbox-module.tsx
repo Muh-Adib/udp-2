@@ -2157,6 +2157,27 @@ export default function InboxModule() {
     void loadLeads();
   }, [loadLeads]);
 
+  // Ronde 54 — polling real-time: email masuk muncul OTOMATIS tanpa refresh manual.
+  // Setiap 25 detik loadLeads(silent) → sweep=1 memicu auto-sync IMAP server
+  // (throttle 30 detik di lib) → email baru muncul + toast, tanpa klik apa pun.
+  // Polling berhenti saat tab tidak aktif (hemat koneksi) dan langsung menyegarkan
+  // begitu tab kembali aktif.
+  useEffect(() => {
+    const POLL_MS = 25_000;
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void loadLeads(true);
+    }, POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadLeads(true);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [loadLeads]);
+
   // Ronde 21 — tarik email masuk nyata via IMAP (kanal email terhubung & non-demo).
   const [emailSyncing, setEmailSyncing] = useState(false);
   async function handleEmailSync() {

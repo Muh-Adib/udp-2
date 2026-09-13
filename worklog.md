@@ -2184,3 +2184,21 @@ Stage Summary:
 - Rantai email dua arah kini terverifikasi nyata end-to-end: IMAP masuk (dengan nama lampiran) dan SMTP keluar (dengan lampiran ikut terkirim), keduanya lewat kanal Hostinger sales@unimasi.com yang non-demo.
 - Perbaikan kejujuran tambahan: chat kontak outbound tidak lagi menampilkan "sent" palsu; balasan lead menyertakan lampiran sungguhan.
 - BACKLOG (mengikut): unduh lampiran email tersinkron (nama tampil, file belum disimpan); RBAC enforcement lintas modul; kompresi attachment >2MB; WA/IG kirim mode dev; estimasi direktur approve bug (lama); NextAuth dep tidak terpakai.
+---
+Task ID: 54
+Agent: main (Z.ai Code)
+Task: Ronde 54 — user melanjutkan: (1) "terima event tidak terjadi real time dan user harus melakukan refresh email seharusnya tidak", (2) "untuk attachment bagaimana cara user mendownloadnya serta memastikan attachment tersebut aman".
+
+Work Log:
+- R54-a REAL-TIME: polling inbox tiap 25 detik (silent loadLeads → sweep=1 → auto-sync IMAP) di inbox-module; berhenti saat tab tidak aktif (visibilityState) dan langsung refresh saat tab kembali aktif; throttle auto-sync diturunkan 90s → 30s (lib default + parameter route inbox) sehingga email baru muncul ≤ ±30 detik TANPA refresh manual; toast "N email masuk ditarik otomatis" tetap sebagai notifikasi.
+- R54-b UNDUH LAMPIRAN MASUK: collectAttachmentParts (part path + filename + mime + size dari bodyStructure) → lampiran email masuk DIUNDUH dari server IMAP saat sync dan disimpan sebagai data URL di interaction.attachments (bentuk identik dgn lampiran outbound) → chip lampiran di thread Inbox (sudah ada sejak Ronde 34-b) otomatis jadi tombol unduh: klik nama file → tersimpan ke perangkat. Kuota: maks 5 file/email, 2 MB/file (sizeHint server dulu, verifikasi byte sesudah unduh).
+- R54-c KEAMANAN LAMPIRAN: setiap part divalidasi unsafeAttachmentReason (mime + ekstensi: html/htm/xhtml/svg/js/mjs/exe/msi/bat/cmd/ps1/sh/vbs/scr/com/jar/lnk diblokir) SEBELUM diunduh; file >2 MB tidak disimpan; semua penolakan dicatat transparan di konten "[Blokir lampiran: evil.html (diblokir — tipe text/html...); evil.exe (...)]" sehingga user tahu email punya lampiran tapi CRM menolak menyimpannya; lampiran tersimpan berupa data URL inert (tidak dieksekusi server; unduhan via <a download>).
+- RE-SYNC DATA: record lama email user dihapus + lastEmailSyncAt direset 3 hari → sinkron ulang menarik 7 email; lampiran "001-BAST.UNICAM-IX-2026.xlsx" (99.531 byte) kini tersimpan & bisa diunduh dari thread; email uji baru user ("Ujicoba 2", "Re: Ujicoba kirim email") ikut tersinkron.
+- QA end-to-end (data QA dibersihkan dari DB dan mailbox — email self-sent ditandai \Deleted via IMAP): email berlampiran bahaya dikirim via raw SMTP mensimulasikan pengirim eksternal → sync → evil.html + evil.exe DIBLOKIR dgn catatan jelas, attachments tersimpan KOSONG ✓; XLSX user tersimpan dataURL-ok ✓; sync final created=0 (tidak ada re-import) ✓; email asli user utuh 5 buah ✓; lint bersih; tsc 0 error (fix: properti imapflow `size` bukan `sizeHint`); dev.log bersih; home 200.
+- Artefak QA (.tmp-audit, cookies) dihapus.
+
+Stage Summary:
+- Email masuk kini REAL-TIME (tanpa refresh): polling 25 detik di UI + auto-sync IMAP 30 detik di server; email baru muncul sendiri dengan toast notifikasi.
+- Lampiran email masuk kini BISA DIUNDUH langsung dari thread Inbox (klik chip lampiran), termasuk XLSX ujicoba user yang sudah terpasang.
+- Keamanan lampiran berlapis: blokir tipe/ekstensi berbahaya, batas 2MB/5 file, catatan blokir transparan di pesan, penyimpanan data URL inert.
+- BACKLOG (mengikut): lampiran >2MB tidak disimpan CRM (petunjuk unduh dari klien email tampil); RBAC lintas modul; WA/IG kirim mode dev; estimasi direktur approve bug (lama); NextAuth dep tidak terpakai.

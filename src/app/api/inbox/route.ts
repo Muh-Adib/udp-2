@@ -143,14 +143,15 @@ export async function GET(req: NextRequest) {
   }
 
   // Ronde 53 — FIX akar: buka Inbox kini juga MENARIK email masuk nyata via IMAP
-  // (kanal email non-demo terhubung; throttle 90 detik berbasis lastEmailSyncAt).
+  // (kanal email non-demo terhubung; throttle 30 detik berbasis lastEmailSyncAt —
+  // Ronde 54 menurunkan dari 90 detik agar email tampil mendekati real-time).
   // Dulu sync HANYA lewat tombol manual → email masuk tak pernah muncul otomatis
   // (kasus nyata: 2 email ujicoba user terdiam di mailbox, app tak pernah menarik).
   // Dijalankan SEBELUM query leads agar email baru langsung ikut di respons ini.
   let emailSync: { ran: boolean; created: number; skipped: number; error?: string } | null = null;
   if (sp.get("sweep") === "1") {
     try {
-      const sync = await syncInboundEmails({ actorName: "Sistem (Auto-sync IMAP)", req, throttleMs: 90_000, auditMode: "auto" });
+      const sync = await syncInboundEmails({ actorName: "Sistem (Auto-sync IMAP)", req, throttleMs: 30_000, auditMode: "auto" });
       emailSync = { ran: sync.ran, created: sync.created, skipped: sync.skipped, error: sync.error };
     } catch {
       emailSync = null; // sync gagal tidak boleh menggagalkan inbox

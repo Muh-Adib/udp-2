@@ -11,7 +11,7 @@
 
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { logAudit } from "@/lib/crm/server";
+import { logAudit, unsafeAttachmentReason } from "@/lib/crm/server";
 import { friendlyVerifyError } from "@/lib/crm/channel-verify";
 import { ImapFlow, type FetchMessageObject, type MessageStructureObject } from "imapflow";
 
@@ -62,22 +62,30 @@ function findTextPart(node: MessageStructureObject | null | undefined, type = "t
 }
 
 /**
- * Ronde 53 — kumpulkan nama lampiran dari bodyStructure (rekursif).
+ * Ronde 54 — metadata part lampiran dari bodyStructure (rekursif).
  * Attachment = disposition "attachment" ATAU punya filename/name.
  */
-function collectAttachmentNames(node: MessageStructureObject | null | undefined, out: string[] = []): string[] {
+interface AttachmentPart {
+  part: string;
+  filename: string;
+  mime: string;
+  sizeHint: number | null;
+}
+
+function collectAttachmentParts(node: MessageStructureObject | null | undefined, out: AttachmentPart[] = []): AttachmentPart[] {
   if (!node) return out;
   const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
   const disp = typeof node.disposition === "string" ? node.disposition.toLowerCase() : "";
   const dispParams = node.dispositionParameters as { filename?: string } | undefined;
   const params = node.parameters as { name?: string } | undefined;
-  const filename = (dispParams?.filename ?? params?.name ?? "").trim();
+  const filename = (dispParams?.filename ?? params?.name ?? "").trim().slice(0, 200);
   if (!type.startsWith("multipart/") && (disp === "attachment" || filename)) {
-    out.push(filename || type || "lampiran");
+    const sizeHint = typeof node.size === "number" && node.size > 0 ? node.size : null;
+    out.push({ part: node.part || "1", filename: filename || "lampiran", mime: type || "application/octet-stream", sizeHint });
   }
   const childNodes = node.childNodes as MessageStructureObject[] | undefined;
   if (Array.isArray(childNodes)) {
-    for (const child of childNodes) collectAttachmentNames(child, out);
+    for (const child of childNodes) collectAttachmentParts(child, out);
   }
   return out;
 }
@@ -101,13 +109,14 @@ function htmlToText(html: string): string {
 export async function syncInboundEmails(options: {
   actorName: string;
   req?: NextRequest;
-  /** null = tanpa throttle (tombol manual). Default 90_000 ms saat auto. */
+  /** null = tanpa throttle (tombol manual). Default 30_000 ms saat auto — Ronde 54
+   * menurunkan 90s → 30s agar email masuk tampil mendekati real-time tanpa refresh. */
   throttleMs?: number | null;
   /** manual = audit selalu; auto = audit hanya bila ada email baru / gagal. */
   auditMode?: "manual" | "auto";
 }): Promise<EmailSyncResult> {
   const auditMode = options.auditMode ?? "manual";
-  const throttleMs = options.throttleMs === undefined ? 90_000 : options.throttleMs;
+  const throttleMs = options.throttleMs === undefined ? 30_000 : options.throttleMs;
   const idle: EmailSyncResult = { ran: false, throttled: false, created: 0, skipped: 0, scanned: 0, linked: 0 };
 
   // Ronde 53 — HANYA kanal email NON-DEMO yang disinkron (kanal demo tidak punya
@@ -194,12 +203,61 @@ export async function syncInboundEmails(options: {
         }
         if (!text.trim()) text = "(isi email berupa HTML/lampiran — lihat klien email untuk lengkapnya)";
 
-        // Ronde 53 — daftar nama lampiran ikut tersimpan agar email berlampiran
-        // tidak lagi tampak seperti email kosong di CRM.
-        const attachments = collectAttachmentNames(msg.bodyStructure);
-        if (attachments.length > 0) {
-          const unique = Array.from(new Set(attachments)).slice(0, 10);
-          text = `${text}\n\n[Lampiran: ${unique.join(", ")}]`;
+        // Ronde 54 — lampiran email masuk DIUNDUH dan disimpan sebagai data URL
+        // (bentuk sama dgn lampiran outbound) sehingga bisa diunduh langsung dari
+        // thread Inbox. Keamanan: tipe berbahaya diblokir (html/svg/js/exe…),
+        // batas 2 MB/file (sama dgn composer), maks 5 file per email.
+        const parts = collectAttachmentParts(msg.bodyStructure).slice(0, 8);
+        const stored: { name: string; url: string; size: number }[] = [];
+        const blockedNotes: string[] = [];
+        const MAX_FILE_BYTES = 2 * 1024 * 1024;
+        for (const p of parts) {
+          if (stored.length >= 5) {
+            blockedNotes.push(`${p.filename} (melebihi kuota 5 lampiran)`);
+            continue;
+          }
+          const dataUrlProbe = `data:${p.mime};base64,x`;
+          const unsafe = unsafeAttachmentReason(p.filename, dataUrlProbe);
+          if (unsafe) {
+            blockedNotes.push(`${p.filename} (diblokir — ${unsafe})`);
+            continue;
+          }
+          if (p.sizeHint !== null && p.sizeHint > MAX_FILE_BYTES) {
+            blockedNotes.push(`${p.filename} (${Math.ceil(p.sizeHint / 1024)} KB — >2 MB, unduh dari klien email)`);
+            continue;
+          }
+          try {
+            const dl = await client.download(String(msg.uid), p.part, { uid: true });
+            if (!dl?.content) {
+              blockedNotes.push(`${p.filename} (gagal diunduh)`);
+              continue;
+            }
+            const chunks: Buffer[] = [];
+            for await (const chunk of dl.content) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+            }
+            const buf = Buffer.concat(chunks);
+            if (buf.length === 0) {
+              blockedNotes.push(`${p.filename} (gagal diunduh)`);
+              continue;
+            }
+            if (buf.length > MAX_FILE_BYTES) {
+              blockedNotes.push(`${p.filename} (${Math.ceil(buf.length / 1024)} KB — >2 MB, unduh dari klien email)`);
+              continue;
+            }
+            stored.push({ name: p.filename, url: `data:${p.mime};base64,${buf.toString("base64")}`, size: buf.length });
+          } catch {
+            blockedNotes.push(`${p.filename} (gagal diunduh)`);
+          }
+        }
+        // Catat daftar lampiran di konten: tersimpan (bisa diunduh) + yang diblokir.
+        const allNames = [...stored.map((s) => s.name), ...parts.filter((p) => !stored.some((s) => s.name === p.filename) && !blockedNotes.some((b) => b.startsWith(p.filename))).map((p) => p.filename)];
+        const uniqueNames = Array.from(new Set(allNames)).slice(0, 10);
+        if (uniqueNames.length > 0) {
+          text = `${text}\n\n[Lampiran: ${uniqueNames.join(", ")}]`;
+        }
+        if (blockedNotes.length > 0) {
+          text = `${text}\n[Blokir lampiran: ${Array.from(new Set(blockedNotes)).slice(0, 5).join("; ")}]`;
         }
 
         const fromAddr = msg.envelope?.from?.[0];
@@ -215,6 +273,8 @@ export async function syncInboundEmails(options: {
             recipientName: creds.smtpUser ?? config.accountRef,
             subject: msg.envelope?.subject ?? "(tanpa subjek)",
             content: text.slice(0, 8000),
+            // Ronde 54 — lampiran tersimpan sbg data URL → bisa diunduh dari thread.
+            attachments: stored.length > 0 ? JSON.stringify(stored) : null,
             deliveryStatus: null,
           },
         });
