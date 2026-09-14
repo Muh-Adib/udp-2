@@ -37,6 +37,9 @@ const ALLOWED_MUTATION_REGEXES = [
   // Ronde 56 — tanda tangan & request kode baru quotation via link aman:
   // auth berlapis = token rahasia 40-hex di URL + magic key / password (server-side).
   /^\/api\/public\/quotation\/[^/]+$/,
+  // Ronde 57 — submit form intake publik (lead baru): auth = token rahasia 48-hex di URL;
+  // anti-abuse via rate limit in-memory di route (10 submit / 5 menit / token).
+  /^\/api\/public\/intake\/[^/]+$/,
 ];
 
 // Ronde 46 — mutasi yang tetap boleh SAAT layar terkunci:
@@ -62,6 +65,9 @@ const ALLOWED_GET_REGEXES = [
   // Ronde 56 — lihat/unduh PDF quotation via link aman (token 40-hex + magic
   // key/password divalidasi di route; penghitung buka server-side).
   /^\/api\/public\/quotation\/[^/]+$/,
+  // Ronde 57 — metainfo form intake publik (brand + saran autocomplete);
+  // tidak membocorkan data CRM, hanya identitas brand & daftar saran.
+  /^\/api\/public\/intake\/[^/]+$/,
 ];
 
 export async function proxy(req: NextRequest) {

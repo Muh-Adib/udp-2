@@ -43,6 +43,8 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
+// Ronde 57 — autocomplete jenis industri (semua form)
+import IndustryCombobox from "@/components/crm/industry-combobox";
 import { api } from "@/lib/crm/api-client";
 import { useCrmStore } from "@/lib/crm/store";
 import { COUNTRIES } from "@/lib/crm/countries";
@@ -535,7 +537,8 @@ export function CompanyDetailModal({
               <Input value={values.name} onChange={(e) => setField("name")(e.target.value)} placeholder="cth. PT Maju Jaya Abadi" disabled={saving} />
             </CrmField>
             <CrmField label="Industri">
-              <Input value={values.industry} onChange={(e) => setField("industry")(e.target.value)} placeholder="cth. Perbankan" disabled={saving} />
+              {/* Ronde 57 — autocomplete jenis industri (saran konstanta + data nyata DB) */}
+              <IndustryCombobox value={values.industry} onChange={setField("industry")} disabled={saving} />
             </CrmField>
             <CrmField label="Website">
               <Input value={values.website} onChange={(e) => setField("website")(e.target.value)} placeholder="cth. majujaya.co.id" disabled={saving} />

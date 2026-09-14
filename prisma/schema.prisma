@@ -57,6 +57,33 @@ model Brand {
   serviceCategories ServiceCategory[]
   services          Service[]
   numberingRules    NumberingRule[]
+  intakeLinks       LeadIntakeLink[]
+}
+
+/**
+ * Ronde 57 — Shareable intake link per brand (Sales Pipeline).
+ * Staf membuat link publik (tanpa login) — calon lead mengisi form request:
+ * data perusahaan (dgn alamat) + kontak + judul project + deadline + brief awal.
+ * Server otomatis membuat/duplikasi-dedupe Company+Contact, membuat Opportunity
+ * (stage new, expected close: deadline-3 minggu / +1 hari bila mepet) dan draft
+ * ClientBrief. URL = {origin}/?intake=<token>.
+ */
+model LeadIntakeLink {
+  id               String    @id @default(cuid())
+  token            String    @unique // 48 hex acak — rahasia, kunci akses publik
+  brandId          String
+  brand            Brand     @relation(fields: [brandId], references: [id])
+  label            String?   // mis. "Iklan IG Mei 2026", "Follow-up event"
+  active           Boolean   @default(true) // false = link dimatikan
+  createdByName    String?
+  submissionCount  Int       @default(0)
+  lastSubmissionAt DateTime?
+  lastAccessedAt   DateTime? // terakhir dibuka form-nya (meta analitik ringan)
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([brandId])
 }
 
 /**
@@ -698,6 +725,7 @@ model ClientBrief {
   objectives      String?
   targetAudience  String?
   keyMessages     String?
+  keywords        String? // Ronde 57 — kata kunci brief dari form intake (bebas teks)
   deliverables    String      @default("[]") // JSON array [{name, qty, notes}]
   timelineStart   DateTime?
   timelineEnd     DateTime?

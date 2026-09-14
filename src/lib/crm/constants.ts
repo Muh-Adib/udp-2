@@ -183,3 +183,47 @@ export const TASK_TYPES: { key: string; label: string; hint: string }[] = [
 export function taskTypeLabel(type?: string | null): string {
   return TASK_TYPES.find((t) => t.key === type)?.label ?? type ?? "Task";
 }
+
+// ============ Ronde 57 — Autocomplete "Jenis Industri" (SEMUA form) ============
+// Saran bawaan, digabung dgn nilai unik nyata dari DB (distinct Company.industry).
+// Dipakai IndustryCombobox: form perusahaan, form intake publik, modal konversi, dst.
+export const INDUSTRY_SUGGESTIONS: string[] = [
+  "Perbankan & Jasa Keuangan",
+  "Asuransi",
+  "Manufaktur",
+  "Retail & E-Commerce",
+  "Teknologi Informasi",
+  "Media & Kreatif",
+  "Pendidikan",
+  "Kesehatan",
+  "Properti",
+  "Konstruksi",
+  "Pemerintahan / BUMN",
+  "Transportasi & Logistik",
+  "Pariwisata & Perhotelan",
+  "F&B / Restoran",
+  "Energi & Pertambangan",
+  "Pertanian",
+  "Olahraga & Hiburan",
+  "Organisasi Non-Profit",
+  "Konsultan",
+  "Lainnya",
+];
+
+// ============ Ronde 57 — "Dari mana Anda tahu [brand]?" (form intake publik) ============
+// Nilai tersimpan ke opportunity.leadSource (field bebas) agar muncul di tabel pipeline
+// & statistik sumber; key slug-angan, label tampil di form. "other" menampung teks bebas.
+export const KNOW_FROM_SUGGESTIONS: { key: string; label: string }[] = [
+  { key: "instagram", label: "Instagram" },
+  { key: "google", label: "Google / Pencarian" },
+  { key: "website", label: "Website Brand" },
+  { key: "referral", label: "Rekomendasi Kenalan / Klien" },
+  { key: "linkedin", label: "LinkedIn" },
+  { key: "tiktok", label: "TikTok" },
+  { key: "facebook", label: "Facebook" },
+  { key: "event", label: "Pameran / Event / Seminar" },
+  { key: "email", label: "Email / Newsletter" },
+  { key: "whatsapp", label: "WhatsApp" },
+  { key: "cold_outreach", label: "Tim Kami Menghubungi Anda" },
+  { key: "other", label: "Lainnya (tulis sendiri)" },
+];

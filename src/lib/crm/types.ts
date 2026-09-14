@@ -914,6 +914,7 @@ export interface ClientBriefDTO {
   objectives?: string | null;
   targetAudience?: string | null;
   keyMessages?: string | null;
+  keywords?: string | null; // Ronde 57 — kata kunci dari form intake
   deliverables: BriefDeliverable[];
   timelineStart?: string | null;
   timelineEnd?: string | null;
@@ -928,6 +929,22 @@ export interface ClientBriefDTO {
   approvedAt?: string | null;
   approvedBy?: string | null;
   createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Ronde 57 — shareable intake link (Sales Pipeline → Formulir Lead publik). */
+export interface IntakeLinkDTO {
+  id: string;
+  token: string;
+  brandId: string;
+  brand?: { id: string; name: string; slug: string; color: string } | null;
+  label?: string | null;
+  active: boolean;
+  createdByName?: string | null;
+  submissionCount: number;
+  lastSubmissionAt?: string | null;
+  expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

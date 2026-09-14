@@ -3,7 +3,7 @@
 import type {
   OpportunityDTO, InteractionDTO, TaskDTO, ContactRef, CompanyRef,
   DashboardData, MatchCandidateDTO, ProjectDTO, InvoiceDTO, AuditLogDTO, Brand,
-  InboxLeadDTO, NumberingRuleDTO,
+  InboxLeadDTO, NumberingRuleDTO, IntakeLinkDTO,
 } from "@/lib/crm/types";
 
 /** Satu entri hasil global search (ronde 26) — module = modul tujuan navigasi. */
@@ -50,6 +50,24 @@ export type UserAdminRow = {
 export const api = {
   // Bootstrap
   bootstrap: () => request<{ ready: boolean }>("/api/bootstrap"),
+
+  // Ronde 57 — shareable intake links (Sales Pipeline → form lead publik)
+  intakeLinks: (brandId?: string) =>
+    request<{ links: IntakeLinkDTO[] }>(`/api/pipeline/intake-links${brandId ? `?brandId=${encodeURIComponent(brandId)}` : ""}`),
+  createIntakeLink: (payload: { brandId: string; label?: string; expiresAt?: string }) =>
+    request<{ link: IntakeLinkDTO }>("/api/pipeline/intake-links", { method: "POST", body: JSON.stringify(payload) }),
+  updateIntakeLink: (id: string, payload: { active?: boolean; label?: string | null }) =>
+    request<{ link: IntakeLinkDTO }>(`/api/pipeline/intake-links/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteIntakeLink: (id: string) =>
+    request<{ deleted: boolean }>(`/api/pipeline/intake-links/${id}`, { method: "DELETE" }),
+  industries: () => request<{ industries: string[] }>("/api/industries"),
+
+  /** Ronde 57 — akses publik metainfo form intake (tanpa login). */
+  intakeMeta: (token: string) =>
+    request<{ intake: { brand: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; tagline?: string | null; website?: string | null; primaryCurrency: string }; label: string | null; expiresAt: string | null; industries: string[]; knowFrom: { key: string; label: string }[]; submissionCount: number } }>(`/api/public/intake/${token}`),
+  /** Ronde 57 — submit form intake publik (tanpa login). */
+  intakeSubmit: (token: string, payload: Record<string, unknown>) =>
+    request<{ submitted: boolean; opportunity: { id: string; title: string }; briefCode: string; expectedCloseDate: string }>(`/api/public/intake/${token}`, { method: "POST", body: JSON.stringify(payload) }),
   // Ronde 46 — login dengan PASSWORD (PIN khusus kunci layar; legacy pin masih diterima server utk akun lama)
   login: (email: string, password: string) =>
     request<{ user: SessionUserResponse; legacyPin?: boolean }>(

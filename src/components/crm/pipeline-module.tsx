@@ -24,6 +24,7 @@ import {
   Inbox,
   Info,
   KanbanSquare,
+  Link2,
   Loader2,
   Plus,
   Search,
@@ -63,6 +64,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import OpportunityDetail from "@/components/crm/opportunity-detail";
 import OpportunityFormDialog from "@/components/crm/opportunity-form-dialog";
+// Ronde 57 — shareable intake link (form lead publik per brand)
+import IntakeLinksDialog from "@/components/crm/intake-links-dialog";
 import { api } from "@/lib/crm/api-client";
 import { LOST_REASONS, NURTURE_SEGMENTS, OPEN_STAGES, PIPELINE_STAGES, stageColor, stageLabel } from "@/lib/crm/constants";
 import { scoreTier } from "@/lib/crm/scoring";
@@ -1215,6 +1218,8 @@ export default function PipelineModule() {
   const [importOpen, setImportOpen] = useState(false);
   // Ronde 35 — tombol "Peluang Baru" dengan form opportunity bersama
   const [newOpen, setNewOpen] = useState(false);
+  // Ronde 57 — dialog kelola shareable intake link
+  const [intakeOpen, setIntakeOpen] = useState(false);
 
   const oppsRef = useRef<OpportunityDTO[]>([]);
   const draggedRecentlyRef = useRef(false);
@@ -1511,6 +1516,16 @@ export default function PipelineModule() {
           <Button
             variant="outline"
             size="sm"
+            aria-label="Kelola link formulir lead publik"
+            title="Formulir Lead Publik — shareable link per brand"
+            onClick={() => setIntakeOpen(true)}
+          >
+            <Link2 className="size-4" aria-hidden="true" />
+            <span className="hidden sm:inline">Formulir Lead</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             aria-label="Impor opportunity dari CSV"
             title="Impor opportunity dari CSV"
             onClick={() => setImportOpen(true)}
@@ -1698,6 +1713,13 @@ export default function PipelineModule() {
         open={newOpen}
         onOpenChange={setNewOpen}
         onSaved={() => void load({ silent: true })}
+      />
+
+      {/* Ronde 57 — kelola shareable intake link (form lead publik per brand) */}
+      <IntakeLinksDialog
+        open={intakeOpen}
+        onOpenChange={setIntakeOpen}
+        onChanged={() => void load({ silent: true })}
       />
     </div>
   );

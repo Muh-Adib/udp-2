@@ -8,6 +8,8 @@ import LoginScreen from "@/components/crm/login-screen";
 import AppShell from "@/components/crm/app-shell";
 import ClientTokenPortal from "@/components/crm/client-token-portal";
 import QuotationShareView from "@/components/crm/quotation-share-view";
+// Ronde 57 — form intake publik utk shareable link lead per brand
+import LeadIntakeForm from "@/components/crm/lead-intake-form";
 import { Toaster } from "@/components/ui/sonner";
 
 /**
@@ -21,6 +23,8 @@ function PortalGate() {
   // Ronde 56 — mode link aman quotation: /?quote=<token>&key=<magic> (publik)
   const quoteToken = sp.get("quote");
   const quoteKey = sp.get("key");
+  // Ronde 57 — form intake publik: /?intake=<token> (tanpa login)
+  const intakeToken = sp.get("intake");
   const user = useCrmStore((s) => s.user);
   const setUser = useCrmStore((s) => s.setUser);
   const setBrands = useCrmStore((s) => s.setBrands);
@@ -33,16 +37,16 @@ function PortalGate() {
   // Ronde 39 — deep-link modul dari Web Push: /?modul=projects → buka modul itu
   // (divalidasi terhadap akses role; URL lalu dibersihkan agar refresh tetap normal).
   useEffect(() => {
-    if (portal || quoteToken || !user) return;
+    if (portal || quoteToken || intakeToken || !user) return;
     const modul = sp.get("modul");
     if (!modul || !(modul in MODULE_META)) return;
     if (!canAccess(modul as ModuleKey, user.role)) return;
     setActiveModule(modul as ModuleKey);
     window.history.replaceState({}, "", "/");
-  }, [portal, user, sp, setActiveModule]);
+  }, [portal, quoteToken, intakeToken, user, sp, setActiveModule]);
 
   useEffect(() => {
-    if (portal || quoteToken) return; // mode publik klien — bootstrap CRM tidak diperlukan
+    if (portal || quoteToken || intakeToken) return; // mode publik klien — bootstrap CRM tidak diperlukan
     let alive = true;
     (async () => {
       try {
@@ -64,10 +68,11 @@ function PortalGate() {
       if (alive) setSessionChecked(true);
     })();
     return () => { alive = false; };
-  }, [portal, quoteToken, setBrands, setUser, loadPermissions]);
+  }, [portal, quoteToken, intakeToken, setBrands, setUser, loadPermissions]);
 
   if (portal) return <ClientTokenPortal token={portal} />;
   if (quoteToken) return <QuotationShareView token={quoteToken} magicKey={quoteKey} />;
+  if (intakeToken) return <LeadIntakeForm token={intakeToken} />;
   if (!sessionChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-100" role="status" aria-label="Memuat aplikasi">
