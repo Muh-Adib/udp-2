@@ -4,6 +4,7 @@ import { ok, fail, readBody, logAudit, dateOrNull, isUniqueViolation, clampNum }
 import { resolveActor } from "@/lib/crm/auth";
 import { nextDocumentNumber, revisionDocumentNumber } from "@/lib/crm/numbering";
 import { stripRevisionSuffix } from "@/lib/crm/numbering-core";
+import { parsePaymentTerms, formatTermOfPaymentText } from "@/lib/crm/payment-terms";
 
 interface QuotationItem {
   description: string;
@@ -57,6 +58,18 @@ function letterFields(body: Record<string, unknown>): Record<string, unknown> {
   if ("timeline" in body) out.timeline = shortText(body.timeline, 400);
   if ("revisionNotes" in body) out.revisionNotes = shortText(body.revisionNotes, 1200);
   if ("termOfPayment" in body) out.termOfPayment = shortText(body.termOfPayment, 1200);
+  // Ronde 57 — TOP terstruktur: jadwal termin disimpan + teks termOfPayment otomatis
+  // di-generate dlm format standar (EN) agar dokumen & halaman share konsisten.
+  // Jadwal kosong → mode teks bebas (terms dinolkan, teks manual tetap dipakai).
+  if ("terms" in body) {
+    const rows = parsePaymentTerms(body.terms);
+    if (rows.length > 0) {
+      out.terms = JSON.stringify(rows);
+      out.termOfPayment = formatTermOfPaymentText(rows);
+    } else {
+      out.terms = null;
+    }
+  }
   return out;
 }
 

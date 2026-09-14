@@ -16,6 +16,8 @@
 import { jsPDF } from "jspdf";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+// Ronde 57 — deskripsi jatuh tempo termin kini di lib bersama payment-terms (sinkron quotation ↔ invoice)
+import { describeDueEn as describeDue } from "@/lib/crm/payment-terms";
 
 // ============ Bentuk input (longgar — dari Prisma object apa adanya) ============
 
@@ -800,18 +802,8 @@ export function buildInvoicePdf(inv: PdfInvoice, brand: PdfBrand, company: PdfCo
   return new Uint8Array(doc.output("arraybuffer"));
 }
 
-/** Deskripsi jatuh tempo termin (EN — dokumen Inggris). */
-export function describeDue(event: string | undefined, dueDays: number | undefined): string {
-  const days = Math.max(0, Math.round(Number(dueDays) || 0));
-  const dayTxt = days > 0 ? `${days} day${days > 1 ? "s" : ""}` : "same day";
-  switch ((event ?? "invoice").toLowerCase()) {
-    case "down_payment": return `${dayTxt} after down payment received`;
-    case "bastp": return `${dayTxt} after BASTP (project handover) is signed`;
-    case "handover": return `${dayTxt} after project handover`;
-    case "delivery": return `${dayTxt} after final delivery`;
-    default: return `${dayTxt} after invoice date`;
-  }
-}
+/** Deskripsi jatuh tempo termin (EN — dokumen Inggris). Ronde 57: pindah ke payment-terms.ts (dipakai bersama quotation & invoice). */
+export { describeDue };
 
 /** Nama file PDF yang aman. */
 export function pdfFileName(kind: "Quotation" | "Invoice", number_: string): string {

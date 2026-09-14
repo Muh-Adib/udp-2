@@ -547,6 +547,8 @@ export interface QuotationDTO {
   timeline?: string | null;
   revisionNotes?: string | null;
   termOfPayment?: string | null;
+  /** Ronde 57 — JSON jadwal TOP terstruktur [{label,pct,dueDays,dueEvent}]; diwarisi invoice saat convert. */
+  terms?: string | null;
   validUntil?: string | null;
   notes?: string | null;
   sentAt?: string | null;

@@ -8,6 +8,7 @@ import { nextDocumentNumber } from "@/lib/crm/numbering";
 // Ronde 56 — pengiriman nyata: PDF + email brand terhubung + link aman
 import { buildQuotationPdf, pdfFileName } from "@/lib/crm/doc-pdf";
 import { sendDocumentEmail, pdfAttachment, isDelivered, sha256, randomToken, baseUrlFromReq } from "@/lib/crm/doc-send";
+import { parsePaymentTerms, parseTermsJson, formatTermOfPaymentText, defaultPaymentTerms } from "@/lib/crm/payment-terms";
 
 /** Ronde 50 — item quotation → item faktur (deskripsi/qty/unitPrice; unit "1" default). */
 function parseQuotationItemsToInvoiceItems(raw: string): Array<{ description: string; qty: number; unit: string; unitPrice: number; total: number }> {
@@ -56,6 +57,17 @@ function letterFields(body: Record<string, unknown>): Record<string, unknown> {
   if ("timeline" in body) out.timeline = shortText(body.timeline, 400);
   if ("revisionNotes" in body) out.revisionNotes = shortText(body.revisionNotes, 1200);
   if ("termOfPayment" in body) out.termOfPayment = shortText(body.termOfPayment, 1200);
+  // Ronde 57 — TOP terstruktur: jadwal termin disimpan + teks termOfPayment otomatis
+  // di-generate dlm format standar (EN); jadwal kosong → mode teks bebas.
+  if ("terms" in body) {
+    const rows = parsePaymentTerms(body.terms);
+    if (rows.length > 0) {
+      out.terms = JSON.stringify(rows);
+      out.termOfPayment = formatTermOfPaymentText(rows);
+    } else {
+      out.terms = null;
+    }
+  }
   return out;
 }
 
@@ -351,12 +363,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             taxAmount: quotation.taxAmount,
             total: quotation.total,
             taxMode: "add",
-            // Ronde 56 — default jadwal termin (mengikuti contoh: DP 50% sebelum
-            // mulai + Final 50% setelah BASTP); bisa diedit di draft invoice.
-            terms: JSON.stringify([
-              { label: "Down Payment", pct: 50, dueDays: 0, dueEvent: "invoice" },
-              { label: "Final Payment", pct: 50, dueDays: 3, dueEvent: "bastp" },
-            ]),
+            // Ronde 57 — SINKRON FINANCE: jadwal termin diwarisi PENUH dari Term of
+            // Payment quotation (dulu default hardcoded DP50%+Final50% — jatuh tempo
+            // tidak pernah sinkron dgn yang dijanjikan ke klien di penawaran).
+            terms: JSON.stringify(
+              (() => {
+                const inherited = parseTermsJson(quotation.terms);
+                return inherited.length > 0 ? inherited : defaultPaymentTerms();
+              })(),
+            ),
             // Ronde 50 — item baris faktur = item quotation (deskripsi/qty/harga)
             items: JSON.stringify(
               parseQuotationItemsToInvoiceItems(quotation.items),
@@ -366,7 +381,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             clientAddress: quotation.clientAddress,
             currency: quotation.currency,
             status: "draft",
-            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+            // Ronde 57 — jatuh tempo invoice mengikuti termin pertama bila momennya
+            // "invoice terbit" (H+N); selain itu fallback 14 hari spt sebelumnya.
+            dueDate: (() => {
+              const first = parseTermsJson(quotation.terms)[0];
+              const offset = first && first.dueEvent === "invoice" ? first.dueDays : 14;
+              return new Date(Date.now() + offset * 24 * 60 * 60 * 1000);
+            })(),
             notes: `Dikonversi dari quotation ${quotation.number} oleh ${actorName}`,
           },
         });

@@ -95,6 +95,9 @@ import type { Brand, BriefStatus, EstimationCostCategory, EstimationCostItem, Es
 import { QuotationPrintArea } from "@/components/crm/quotation-print";
 import BriefPanel from "@/components/crm/brief-panel";
 import { formatCurrency, formatCurrencyFull, formatDate, formatDateTime, initials, parseJsonArray } from "@/lib/crm/utils";
+// Ronde 57 — TOP terstruktur sinkron quotation ↔ finance (jadwal termin + format EN)
+import { PaymentTermsEditor, defaultTermRowsUI, termRowsFromTerms, termRowsToPayload, type PaymentTermRowUI } from "@/components/crm/payment-terms-editor";
+import { parseTermsJson, termPctSum } from "@/lib/crm/payment-terms";
 import { cn } from "@/lib/utils";
 
 // ---------- Types ----------
@@ -1950,6 +1953,9 @@ function QuotationFormDialog({
   const [timeline, setTimeline] = useState("");
   const [revisionNotes, setRevisionNotes] = useState("");
   const [termOfPayment, setTermOfPayment] = useState("");
+  // Ronde 57 — TOP terstruktur: mode editor jadwal termin (default) vs teks bebas (legacy).
+  const [topMode, setTopMode] = useState<"structured" | "custom">("structured");
+  const [termRows, setTermRows] = useState<PaymentTermRowUI[]>(defaultTermRowsUI());
   const [letterBody, setLetterBody] = useState("");
   const [letterClosing, setLetterClosing] = useState("");
   /** Ronde 50 — isi & penutup surat custom opsional: bagian dilipat secara default. */
@@ -2003,6 +2009,18 @@ function QuotationFormDialog({
       setTimeline(editing.timeline ?? "");
       setRevisionNotes(editing.revisionNotes ?? "");
       setTermOfPayment(editing.termOfPayment ?? "");
+      // Ronde 57 — TOP: jadwal tersimpan → editor terstruktur; tanpa jadwal →
+      // teks bebas bila ada teks lama, selain itu default termin (Unicam).
+      {
+        const savedTerms = parseTermsJson(editing.terms);
+        if (savedTerms.length > 0) {
+          setTopMode("structured");
+          setTermRows(termRowsFromTerms(savedTerms));
+        } else {
+          setTopMode((editing.termOfPayment ?? "").trim() ? "custom" : "structured");
+          setTermRows(defaultTermRowsUI());
+        }
+      }
       // Ronde 50 — buka lipatan otomatis bila isi/penutup custom sudah tersimpan (agar terlihat)
       setLetterCustomOpen(Boolean((editing.letterBody ?? "").trim() || (editing.letterClosing ?? "").trim()));
     } else if (reviseOf) {
@@ -2031,6 +2049,17 @@ function QuotationFormDialog({
       setTimeline(reviseOf.timeline ?? "");
       setRevisionNotes(reviseOf.revisionNotes ?? "");
       setTermOfPayment(reviseOf.termOfPayment ?? "");
+      // Ronde 57 — TOP revisi: salin jadwal/teks dari quotation sumber (konsisten).
+      {
+        const srcTerms = parseTermsJson(reviseOf.terms);
+        if (srcTerms.length > 0) {
+          setTopMode("structured");
+          setTermRows(termRowsFromTerms(srcTerms));
+        } else {
+          setTopMode((reviseOf.termOfPayment ?? "").trim() ? "custom" : "structured");
+          setTermRows(defaultTermRowsUI());
+        }
+      }
       setLetterCustomOpen(Boolean((reviseOf.letterBody ?? "").trim() || (reviseOf.letterClosing ?? "").trim()));
     } else {
       // Ronde 49 — estimasi detail (approved/pending) sebagai sumber prefill item:
@@ -2094,6 +2123,9 @@ function QuotationFormDialog({
       setTimeline("");
       setRevisionNotes("");
       setTermOfPayment("");
+      // Ronde 57 — quotation baru mulai dgn editor TOP terstruktur (default Unicam).
+      setTopMode("structured");
+      setTermRows(defaultTermRowsUI());
       setLetterCustomOpen(false);
     }
   }, [open, editing, reviseOf, estimation, serviceName, attnPrefill, addressPrefill]);
@@ -2153,6 +2185,18 @@ function QuotationFormDialog({
       toast.error("Diskon & PPN harus angka antara 0–100");
       return;
     }
+    // Ronde 57 — validasi TOP terstruktur: minimal 1 termin dgn label & total % = 100.
+    if (topMode === "structured") {
+      const termsPayload = termRowsToPayload(termRows);
+      if (termsPayload.length === 0) {
+        toast.error("Isi minimal satu termin Term of Payment — atau pindah ke mode teks bebas");
+        return;
+      }
+      if (termPctSum(termsPayload) !== 100) {
+        toast.error(`Total persentase termin harus 100% (saat ini ${termPctSum(termsPayload)}%)`);
+        return;
+      }
+    }
     setSaving(true);
     try {
       if (editing) {
@@ -2174,7 +2218,11 @@ function QuotationFormDialog({
           letterClosing: letterClosing.trim() || null,
           timeline: timeline.trim() || null,
           revisionNotes: revisionNotes.trim() || null,
-          termOfPayment: termOfPayment.trim() || null,
+          // Ronde 57 — TOP: mode terstruktur kirim jadwal (server generate teks format
+          // EN); teks bebas kirim teks manual + kosongkan jadwal agar tak dobel.
+          ...(topMode === "structured"
+            ? { terms: termRowsToPayload(termRows), termOfPayment: null }
+            : { termOfPayment: termOfPayment.trim() || null, terms: [] }),
           actorName,
           actorRole,
         });
@@ -2199,7 +2247,10 @@ function QuotationFormDialog({
           letterClosing: letterClosing.trim() || null,
           timeline: timeline.trim() || null,
           revisionNotes: revisionNotes.trim() || null,
-          termOfPayment: termOfPayment.trim() || null,
+          // Ronde 57 — TOP terstruktur/teks bebas (paritas dgn jalur update di atas)
+          ...(topMode === "structured"
+            ? { terms: termRowsToPayload(termRows), termOfPayment: null }
+            : { termOfPayment: termOfPayment.trim() || null, terms: [] }),
           actorName,
           actorRole,
         });
@@ -2457,19 +2508,60 @@ function QuotationFormDialog({
                   aria-label="Ketentuan revisi pada surat penawaran"
                 />
               </div>
-              <div className="space-y-1 sm:col-span-2">
-                <label htmlFor="q-top" className="text-xs font-medium text-zinc-600">
-                  Term of Payment
-                </label>
-                <Textarea
-                  id="q-top"
-                  rows={3}
-                  value={termOfPayment}
-                  onChange={(e) => setTermOfPayment(e.target.value)}
-                  disabled={saving}
-                  placeholder={"1. Down Payment: 50% (Before project started)\n2. Second Payment: 30% ..."}
-                  aria-label="Term of payment pada surat penawaran"
-                />
+              <div className="space-y-1.5 sm:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-1">
+                  <label htmlFor="q-top" className="text-xs font-medium text-zinc-600">
+                    Term of Payment
+                  </label>
+                  {/* Ronde 57 — mode input TOP: editor termin terstruktur (sinkron finance)
+                      atau teks bebas gaya lama. */}
+                  <div className="flex items-center gap-1" role="group" aria-label="Mode input Term of Payment">
+                    <button
+                      type="button"
+                      onClick={() => setTopMode("structured")}
+                      disabled={saving}
+                      aria-pressed={topMode === "structured"}
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
+                        topMode === "structured" ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500 hover:text-zinc-800",
+                      )}
+                    >
+                      Termin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTopMode("custom")}
+                      disabled={saving}
+                      aria-pressed={topMode === "custom"}
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
+                        topMode === "custom" ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500 hover:text-zinc-800",
+                      )}
+                    >
+                      Teks bebas
+                    </button>
+                  </div>
+                </div>
+                {topMode === "structured" ? (
+                  <PaymentTermsEditor
+                    rows={termRows}
+                    onChange={setTermRows}
+                    idPrefix="q-top"
+                    disabled={saving}
+                    currency={currency}
+                    amountBase={totals.subtotal - totals.discountAmount}
+                  />
+                ) : (
+                  <Textarea
+                    id="q-top"
+                    rows={3}
+                    value={termOfPayment}
+                    onChange={(e) => setTermOfPayment(e.target.value)}
+                    disabled={saving}
+                    placeholder={"1. Down Payment: 50% (Before project started)\n2. Second Payment: 30% ..."}
+                    aria-label="Term of payment pada surat penawaran"
+                  />
+                )}
               </div>
             </div>
             <button

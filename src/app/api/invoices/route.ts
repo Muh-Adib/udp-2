@@ -7,6 +7,7 @@ import { sendPushToRoles } from "@/lib/crm/push";
 import { nextDocumentNumber, revisionDocumentNumber } from "@/lib/crm/numbering";
 // Ronde 56 — pengiriman nyata: PDF faktur + email brand terhubung
 import { buildInvoicePdf, pdfFileName } from "@/lib/crm/doc-pdf";
+import { parsePaymentTerms } from "@/lib/crm/payment-terms";
 import { sendDocumentEmail, pdfAttachment, isDelivered } from "@/lib/crm/doc-send";
 
 // ============ Ronde 50 — helper faktur gaya Unicam (item baris, DP, pajak potong) ============
@@ -104,7 +105,7 @@ function unicamFields(body: Record<string, unknown>): Record<string, unknown> {
   if ("clientAddress" in body) out.clientAddress = shortText(body.clientAddress, 400);
   // Ronde 56 — jadwal termin (Term of Payment terstruktur)
   if ("terms" in body) {
-    const terms = parseInvoiceTerms(body.terms);
+    const terms = parsePaymentTerms(body.terms);
     out.terms = terms.length > 0 ? JSON.stringify(terms) : null;
   }
   // Ronde 56 — diskon nominal (gaya contoh faktur Unicam)
@@ -115,23 +116,10 @@ function unicamFields(body: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-/** Ronde 56 — validasi jadwal termin: [{label, pct, dueDays, dueEvent}] maks 6 baris. */
-const TERM_EVENTS = ["invoice", "down_payment", "bastp", "handover", "delivery"] as const;
-export function parseInvoiceTerms(raw: unknown): Array<{ label: string; pct: number; dueDays: number; dueEvent: string }> {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((t) => t && typeof t === "object")
-    .slice(0, 6)
-    .map((t) => {
-      const term = t as { label?: unknown; pct?: unknown; dueDays?: unknown; dueEvent?: unknown };
-      const label = String(term.label ?? "").trim().slice(0, 80) || "Payment";
-      const pct = Math.min(100, Math.max(0, Number(term.pct) || 0));
-      const dueDays = Math.min(365, Math.max(0, Math.round(Number(term.dueDays) || 0)));
-      const dueEvent = TERM_EVENTS.includes(String(term.dueEvent) as (typeof TERM_EVENTS)[number])
-        ? String(term.dueEvent)
-        : "invoice";
-      return { label, pct, dueDays, dueEvent };
-    });
+/** Ronde 57 — validasi jadwal termin [{label,pct,dueDays,dueEvent}] pindah ke lib bersama
+ * payment-terms.ts (dipakai quotation & invoice agar TOP selalu sinkron); wrapper utk kompatibilitas. */
+export function parseInvoiceTerms(raw: unknown) {
+  return parsePaymentTerms(raw);
 }
 
 /**

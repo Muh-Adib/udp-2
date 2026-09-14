@@ -9,6 +9,9 @@ import {
 } from "lucide-react";
 import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { MoneyInput } from "@/components/crm/money-input";
+// Ronde 57 — editor TOP terstruktur bersama (quotation & invoice) + mesin jadwal jatuh tempo
+import { PaymentTermsEditor, defaultTermRowsUI, termRowsToPayload, type PaymentTermRowUI } from "@/components/crm/payment-terms-editor";
+import { parseTermsJson, type PaymentTerm } from "@/lib/crm/payment-terms";
 import { toast } from "sonner";
 
 import {
@@ -347,43 +350,42 @@ function buildItemsPayload(rows: ItemRow[]): Array<{ description: string; qty: n
     .filter((r) => r.description !== "");
 }
 
-// ============ Ronde 56 — Term of Payment (termin) pada faktur ============
+// ============ Ronde 56/57 — Term of Payment (termin) pada faktur ============
 
-/** Baris editor termin — state string agar input bebas diketik. */
-interface TermRow {
-  label: string;
-  pct: string;
-  dueDays: string;
-  dueEvent: "invoice" | "down_payment" | "bastp" | "handover" | "delivery";
-}
-
-/** Opsi momen jatuh tempo termin (dueEvent) — label bahasa Indonesia. */
-const TERM_DUE_EVENTS: Array<{ value: TermRow["dueEvent"]; label: string }> = [
-  { value: "invoice", label: "Setelah invoice terbit" },
-  { value: "down_payment", label: "Setelah DP diterima" },
-  { value: "bastp", label: "Setelah BASTP ditandatangani" },
-  { value: "handover", label: "Setelah serah terima project" },
-  { value: "delivery", label: "Setelah final delivery" },
-];
+/** Ronde 57 — editor & validasi TOP pindah ke komponen bersama payment-terms-editor
+ * (dipakai quotation & invoice) agar format hasil dan validasi 100% identik. */
+type TermRow = PaymentTermRowUI;
 
 /** Termin default tiap form dibuka: DP 50% (invoice terbit) + Final 50% (H+3 setelah BASTP). */
 function defaultTermRows(): TermRow[] {
-  return [
-    { label: "Down Payment", pct: "50", dueDays: "0", dueEvent: "invoice" },
-    { label: "Final Payment", pct: "50", dueDays: "3", dueEvent: "bastp" },
-  ];
+  return defaultTermRowsUI();
 }
 
-/** Baris termin → payload terms: buang baris tanpa label; pct 0-100, dueDays >= 0. */
+/** Baris termin → payload terms (validasi di komponen/lib bersama). */
 function buildTermsPayload(rows: TermRow[]): Array<{ label: string; pct: number; dueDays: number; dueEvent: string }> {
-  return rows
-    .filter((r) => r.label.trim() !== "")
-    .map((r) => ({
-      label: r.label.trim(),
-      pct: Math.min(100, Math.max(0, Number(r.pct) || 0)),
-      dueDays: Math.max(0, Math.round(Number(r.dueDays) || 0)),
-      dueEvent: r.dueEvent,
-    }));
+  return termRowsToPayload(rows);
+}
+
+/** Ronde 57 — deskripsi jatuh tempo termin utk UI internal (bahasa Indonesia). */
+function dueDescriptionID(t: PaymentTerm): string {
+  const days = Math.max(0, Math.round(t.dueDays));
+  const suffix = days > 0 ? `H+${days}` : "H+0";
+  switch (t.dueEvent) {
+    case "down_payment": return `${suffix} setelah DP diterima`;
+    case "bastp": return `${suffix} setelah BASTP ditandatangani`;
+    case "handover": return `${suffix} setelah serah terima project`;
+    case "delivery": return `${suffix} setelah final delivery`;
+    default: return `${suffix} setelah invoice terbit`;
+  }
+}
+
+/** Ronde 57 — tanggal jatuh tempo termin: hanya terhitung bila momennya "invoice terbit"
+ * (issueDate + H+N); momen lain (BASTP/handover/delivery/DP) menunggu trigger terjadi. */
+function termDueDate(t: PaymentTerm, issueDate: string | null | undefined): Date | null {
+  if (t.dueEvent !== "invoice" || !issueDate) return null;
+  const base = new Date(issueDate);
+  if (Number.isNaN(base.getTime())) return null;
+  return new Date(base.getTime() + Math.max(0, Math.round(t.dueDays)) * 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -683,89 +685,6 @@ function InvoiceItemsSection({ open, onToggle, rows, onRowsChange, idPrefix, dis
           <ItemRowsEditor rows={rows} onChange={onRowsChange} idPrefix={idPrefix} disabled={disabled} />
         </div>
       ) : null}
-    </div>
-  );
-}
-
-// ============ Ronde 56 — editor "Term of Payment (termin)" ============
-
-/** Editor termin: label, persen, H+N, dan momen jatuh tempo (dueEvent) per baris + tambah/hapus. */
-function TermRowsEditor({ rows, onChange, idPrefix, disabled }: {
-  rows: TermRow[];
-  onChange: (rows: TermRow[]) => void;
-  idPrefix: string;
-  disabled?: boolean;
-}) {
-  function updateRow(idx: number, patch: Partial<TermRow>) {
-    onChange(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-  }
-  return (
-    <div className="space-y-2">
-      {rows.map((row, idx) => (
-        <div key={idx} className="rounded-lg border bg-zinc-50/50 p-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              id={`${idPrefix}-term-label-${idx}`}
-              value={row.label}
-              onChange={(e) => updateRow(idx, { label: e.target.value })}
-              placeholder={`Label termin ${idx + 1} (mis. Down Payment)`}
-              aria-label={`Label termin ${idx + 1}`}
-              className="h-8 min-w-[150px] flex-1 text-sm"
-              disabled={disabled}
-            />
-            <div className="flex items-center gap-1">
-              <Input
-                id={`${idPrefix}-term-pct-${idx}`} type="number" min={0} max={100}
-                value={row.pct}
-                onChange={(e) => updateRow(idx, { pct: e.target.value })}
-                aria-label={`Persentase termin ${idx + 1}`}
-                className="h-8 w-16 text-sm" disabled={disabled}
-              />
-              <span className="text-xs text-zinc-400">%</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Input
-                id={`${idPrefix}-term-days-${idx}`} type="number" min={0}
-                value={row.dueDays}
-                onChange={(e) => updateRow(idx, { dueDays: e.target.value })}
-                aria-label={`Hari jatuh tempo termin ${idx + 1}`}
-                className="h-8 w-16 text-sm" disabled={disabled}
-              />
-              <span className="text-xs text-zinc-400">hari</span>
-            </div>
-            <Button
-              type="button" variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-rose-600"
-              onClick={() => onChange(rows.filter((_, i) => i !== idx))}
-              disabled={disabled}
-              aria-label={`Hapus termin ${idx + 1}`}
-              title="Hapus termin"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            </Button>
-          </div>
-          <Select
-            value={row.dueEvent}
-            onValueChange={(v) => updateRow(idx, { dueEvent: v as TermRow["dueEvent"] })}
-          >
-            <SelectTrigger className="mt-2 h-8 text-sm" aria-label={`Momen jatuh tempo termin ${idx + 1}`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TERM_DUE_EVENTS.map((ev) => (
-                <SelectItem key={ev.value} value={ev.value}>{ev.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      ))}
-      <Button
-        type="button" variant="outline" size="sm"
-        onClick={() => onChange([...rows, { label: "", pct: "0", dueDays: "0", dueEvent: "invoice" }])}
-        disabled={disabled}
-        aria-label="Tambah termin"
-      >
-        <Plus className="h-3.5 w-3.5" aria-hidden /> Tambah termin
-      </Button>
     </div>
   );
 }
@@ -1798,6 +1717,56 @@ export default function FinanceModule() {
                       </div>
                     </div>
 
+                    {/* Ronde 57 — Jadwal Termin & Jatuh Tempo (warisan TOP quotation):
+                        nominal per termin = % × (subtotal − diskon); tanggal jatuh tempo
+                        terhitung bila momennya "invoice terbit", selain itu menunggu trigger
+                        (BASTP/serah terima/delivery/DP) → status "menunggu". */}
+                    {(() => {
+                      const invTerms = parseTermsJson(detail.terms);
+                      if (invTerms.length === 0) return null;
+                      const termBase = Math.max(0, detail.amount - (detail.discountAmount ?? 0));
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                            Jadwal Termin &amp; Jatuh Tempo
+                          </p>
+                          <div className="overflow-hidden rounded-lg border">
+                            <table className="w-full text-xs">
+                              <tbody>
+                                {invTerms.map((t, i) => {
+                                  const due = termDueDate(t, detail.issueDate);
+                                  const nominal = Math.round((termBase * (Number(t.pct) || 0)) / 100);
+                                  return (
+                                    <tr key={i} className={i % 2 === 1 ? "bg-zinc-50/60" : ""}>
+                                      <td className="px-2.5 py-2 align-top">
+                                        <p className="font-medium text-zinc-800">{t.label}</p>
+                                        <p className="mt-0.5 text-zinc-500">{dueDescriptionID(t)}</p>
+                                      </td>
+                                      <td className="px-2.5 py-2 text-right align-top tabular-nums">
+                                        <p className="font-medium text-zinc-800">{Math.round(Number(t.pct) || 0)}%</p>
+                                        <p className="mt-0.5 text-zinc-500">{formatCurrencyFull(nominal, detail.currency)}</p>
+                                      </td>
+                                      <td className="w-28 px-2.5 py-2 text-right align-top">
+                                        {due ? (
+                                          <span className="inline-block rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700">
+                                            {formatDate(due.toISOString())}
+                                          </span>
+                                        ) : (
+                                          <span className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                                            menunggu trigger
+                                          </span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {detail.revisionReason ? (
                       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
                         <p className="font-semibold text-amber-800">Alasan Revisi</p>
@@ -2116,7 +2085,15 @@ export default function FinanceModule() {
                     <span className="text-[11px] text-zinc-400">Jadwal tagihan per tahap</span>
                   </div>
                   <div className="px-3 py-3">
-                    <TermRowsEditor rows={createTerms} onChange={setCreateTerms} idPrefix="inv-create" disabled={creating} />
+                    {/* Ronde 57 — editor bersama dgn quotation: badge total % + preview format EN */}
+                    <PaymentTermsEditor
+                      rows={createTerms}
+                      onChange={setCreateTerms}
+                      idPrefix="inv-create"
+                      disabled={creating}
+                      currency={createCurrency}
+                      amountBase={createTotals.afterDiscount}
+                    />
                   </div>
                 </div>
                 {/* Ronde 50 — referensi PO & nama project pada faktur */}

@@ -575,7 +575,8 @@ model Quotation {
   letterClosing  String? // paragraf penutup custom; null = default otomatis dari brand
   timeline       String? // kolom Timeline (mis. "1 Month after down payment")
   revisionNotes  String? // kolom Revision — periode revisi hasil (mis. "Result Video: x2 per Video")
-  termOfPayment  String? // kolom Term of Payment (mis. "1. Down Payment: 50%…")
+  termOfPayment  String? // kolom Term of Payment (mis. "1. Down Payment: 50%…"); otomatis di-generate dari terms bila jadwal terstruktur terisi
+  terms          String? // Ronde 57 — JSON jadwal TOP terstruktur [{label,pct,dueDays,dueEvent}] (invoice|down_payment|bastp|handover|delivery); diwarisi Invoice.terms saat convert → jatuh tempo finance sinkron
   validUntil     DateTime?
   notes          String?
   sentAt         DateTime?
