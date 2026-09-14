@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody } from "@/lib/crm/server";
-import { extractDomain } from "@/lib/crm/utils";
+import { extractDomain, normalizeEmail, normalizePhone } from "@/lib/crm/utils";
 import { INDUSTRY_SUGGESTIONS, KNOW_FROM_SUGGESTIONS } from "@/lib/crm/constants";
 
 /**
@@ -51,6 +51,65 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
   } catch {
     return [];
   }
+}
+
+/** Parse budget seperti form brief internal: ambil digit saja ("50 jt" → 50). */
+function parseBudget(v: unknown): number | null {
+  const digits = String(v ?? "").replace(/[^\d]/g, "");
+  if (!digits) return null;
+  const n = Number(digits);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+interface DelivInput { name: string; qty: number }
+interface RefInput { label: string; url: string }
+
+/**
+ * Deliverables: array [{name, qty}] dari form brief-style ATAU teks per baris
+ * (fallback backward-compat form lama). Maks 20 item.
+ */
+function parseDeliverables(body: Record<string, unknown>): DelivInput[] {
+  const raw = body.deliverables;
+  if (Array.isArray(raw)) {
+    return raw
+      .slice(0, 20)
+      .map((d) => {
+        const row = (d ?? {}) as Record<string, unknown>;
+        const name = String(row.name ?? "").trim().slice(0, 160);
+        const qtyNum = Number(row.qty);
+        const qty = Number.isFinite(qtyNum) && qtyNum >= 1 ? Math.min(999, Math.floor(qtyNum)) : 1;
+        return { name, qty };
+      })
+      .filter((d) => d.name);
+  }
+  return String(raw ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 20)
+    .map((name) => ({ name: name.slice(0, 160), qty: 1 }));
+}
+
+/** Referensi: array [{label, url}] ATAU teks per baris (fallback). Maks 10 item. */
+function parseReferences(body: Record<string, unknown>): RefInput[] {
+  const raw = body.references;
+  if (Array.isArray(raw)) {
+    return raw
+      .slice(0, 10)
+      .map((r) => {
+        const row = (r ?? {}) as Record<string, unknown>;
+        const url = String(row.url ?? "").trim().slice(0, 500);
+        const label = (String(row.label ?? "").trim() || url.replace(/^https?:\/\//, "")).slice(0, 80);
+        return { label, url };
+      })
+      .filter((r) => r.url);
+  }
+  return String(raw ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 10)
+    .map((url) => ({ label: url.replace(/^https?:\/\//, "").slice(0, 80), url: url.slice(0, 500) }));
 }
 
 type Params = { params: Promise<{ token: string }> };
@@ -107,22 +166,29 @@ export async function POST(req: NextRequest, { params }: Params) {
     return fail("Link ini sudah kedaluwarsa — hubungi tim kami", 410);
   }
 
-  // ===== Validasi =====
+  // ===== Validasi (Ronde 58: email & WA WAJIB + alamat/kota/negara wajib) =====
   const fullName = String(body.fullName ?? "").trim();
   if (!fullName) return fail("Nama lengkap wajib diisi");
-  const email = String(body.email ?? "").trim().toLowerCase();
+  const email = normalizeEmail(String(body.email ?? ""));
+  if (!email) return fail("Email wajib diisi dengan format valid — contoh: nama@perusahaan.co.id");
+  // WhatsApp wajib — dinormalisasi dgn aturan sistem (08xx → 628xx, +62 → 62).
   const whatsappRaw = String(body.whatsapp ?? "").trim();
-  if (!email && !whatsappRaw) return fail("Isi minimal salah satu: email atau WhatsApp");
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Format email tidak valid");
-  const waDigits = whatsappRaw.replace(/\D/g, "");
-  if (whatsappRaw && waDigits.length < 8) return fail("Nomor WhatsApp tidak valid");
+  if (!whatsappRaw) return fail("Nomor WhatsApp wajib diisi");
+  const waDigits = normalizePhone(whatsappRaw) ?? "";
+  if (!waDigits) return fail("Nomor WhatsApp tidak valid");
+  if (waDigits.length < 8 || waDigits.length > 15) {
+    return fail("Nomor WhatsApp tidak valid — harus 8–15 digit (standar E.164, cth. 628123456789)");
+  }
 
   const companyName = String(body.companyName ?? "").trim();
   if (!companyName) return fail("Nama perusahaan wajib diisi");
-  const companyAddress = String(body.companyAddress ?? "").trim() || null;
+  const companyAddress = String(body.companyAddress ?? "").trim();
+  if (!companyAddress) return fail("Alamat perusahaan wajib diisi (dipakai untuk surat)");
+  const companyCity = String(body.companyCity ?? "").trim();
+  if (!companyCity) return fail("Kota wajib diisi");
+  const companyCountry = String(body.companyCountry ?? "").trim();
+  if (!companyCountry) return fail("Negara wajib diisi");
   const companyIndustry = String(body.industry ?? "").trim() || null;
-  const companyCity = String(body.companyCity ?? "").trim() || null;
-  const companyCountry = String(body.companyCountry ?? "").trim() || null;
   const companyWebsite = String(body.companyWebsite ?? "").trim() || null;
 
   const title = String(body.projectTitle ?? "").trim();
@@ -148,22 +214,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const objectives = String(body.objectives ?? "").trim() || null;
   const targetAudience = String(body.targetAudience ?? "").trim() || null;
   const keywords = String(body.keywords ?? "").trim() || null;
-  const deliverablesText = String(body.deliverables ?? "").trim();
-  const deliverables = deliverablesText
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .slice(0, 20)
-    .map((name) => ({ name: name.slice(0, 160), qty: 1, notes: "" }));
-  const budgetMin = Number(body.budgetMin);
-  const budgetMax = Number(body.budgetMax);
-  const referencesText = String(body.references ?? "").trim();
-  const references = referencesText
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .slice(0, 10)
-    .map((url) => ({ label: url.replace(/^https?:\/\//, "").slice(0, 80), url: url.slice(0, 500) }));
+  const deliverables = parseDeliverables(body);
+  const budgetMin = parseBudget(body.budgetMin);
+  const budgetMax = parseBudget(body.budgetMax);
+  const references = parseReferences(body);
   const catatan = String(body.catatan ?? "").trim() || null;
   // Timeline pengerjaan: bagian tim produksi (bukan form) — end otomatis = deadline − 1 hari.
   const timelineEnd = new Date(deadline.getTime() - 24 * 60 * 60 * 1000);
@@ -264,8 +318,8 @@ export async function POST(req: NextRequest, { params }: Params) {
           deliverables: JSON.stringify(deliverables),
           timelineStart: now, // timeline pengerjaan diatur tim produksi — start = hari ini
           timelineEnd,
-          budgetMin: Number.isFinite(budgetMin) && budgetMin > 0 ? budgetMin : null,
-          budgetMax: Number.isFinite(budgetMax) && budgetMax > 0 ? budgetMax : null,
+          budgetMin,
+          budgetMax,
           currency: brand.primaryCurrency,
           references: JSON.stringify(references),
           attachmentsNote: catatan,
@@ -279,7 +333,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       const ringkasan = [
         objectives ? `Tujuan: ${objectives}` : "",
         deliverables.length ? `Deliverables: ${deliverables.map((d) => d.name).join(", ")}` : "",
-        budgetMin > 0 || budgetMax > 0 ? `Budget: ${budgetMin > 0 ? budgetMin : "?"} – ${budgetMax > 0 ? budgetMax : "?"} ${brand.primaryCurrency}` : "",
+        budgetMin || budgetMax ? `Budget: ${budgetMin ?? "?"} – ${budgetMax ?? "?"} ${brand.primaryCurrency}` : "",
         catatan ? `Catatan: ${catatan}` : "",
       ].filter(Boolean).join("\n");
       await tx.interaction.create({

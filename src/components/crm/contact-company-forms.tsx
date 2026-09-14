@@ -20,17 +20,9 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Building2, Check, ChevronDown, Loader2, Pencil, Plus } from "lucide-react";
+import { Building2, Check, Loader2, Pencil, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -40,8 +32,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+// Ronde 58 — combobox kode dial dipindah ke file sendiri (dipakai juga form intake publik)
+import { DialCodeCombobox } from "@/components/crm/dial-code-combobox";
 import { CountryCombobox, CurrencySelect } from "@/components/crm/country-combobox";
 // Ronde 57 — autocomplete jenis industri (semua form)
 import IndustryCombobox from "@/components/crm/industry-combobox";
@@ -254,75 +247,8 @@ function SectionTitle({ children }: { children: ReactNode }) {
   );
 }
 
-// ============ Combobox kode dial negara ============
-
-/** Combobox kode negara (dial) utk nomor WhatsApp/Telepon. Value = "+62" | "" (tanpa kode). */
-export function DialCodeCombobox({
-  value,
-  onSelect,
-  disabled,
-}: {
-  value: string;
-  onSelect: (dial: string) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Kode negara nomor telepon"
-          disabled={disabled}
-          className={cn("w-full justify-between px-2.5 font-normal", !value && "text-zinc-400")}
-        >
-          <span className="min-w-0 truncate text-left">{value || "Kode"}</span>
-          <ChevronDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[min(18rem,calc(100vw-2rem))] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Cari kode/negara…" />
-          <CommandList className="crm-scroll max-h-64">
-            <CommandEmpty>Tidak ditemukan.</CommandEmpty>
-            <CommandGroup>
-              <CommandItem
-                value="tanpa kode negara"
-                onSelect={() => {
-                  onSelect("");
-                  setOpen(false);
-                }}
-              >
-                <Check className={cn("size-4 shrink-0", !value ? "opacity-100" : "opacity-0")} aria-hidden="true" />
-                <span className="text-zinc-500">Tanpa kode negara</span>
-              </CommandItem>
-              {COUNTRIES.map((c) => (
-                <CommandItem
-                  key={c.iso2}
-                  value={`${c.name} ${c.dial} ${c.currency}`}
-                  onSelect={() => {
-                    onSelect(c.dial);
-                    setOpen(false);
-                  }}
-                >
-                  <Check
-                    className={cn("size-4 shrink-0", value === c.dial ? "opacity-100" : "opacity-0")}
-                    aria-hidden="true"
-                  />
-                  <span className="w-12 shrink-0 font-medium tabular-nums">{c.dial}</span>
-                  <span className="min-w-0 flex-1 truncate text-zinc-500">{c.name}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
+// Ronde 58 — DialCodeCombobox kini di @/components/crm/dial-code-combobox (re-export utk kompatibilitas).
+export { DialCodeCombobox };
 
 // ============ Modal Detail Perusahaan ============
 

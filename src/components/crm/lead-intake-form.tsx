@@ -1,35 +1,47 @@
 "use client";
 
 /**
- * Ronde 57 — FORM INTAKE PUBLIK (tanpa login) via shareable link.
+ * Ronde 57/58 — FORM INTAKE PUBLIK (tanpa login) via shareable link.
  * URL: /?intake=<token> → dirender PortalGate (page.tsx), TANPA shell CRM.
  *
- * Alur: calon lead mengisi data perusahaan (nama, alamat utk surat, industri dgn
- * autocomplete, kota/negara/website) + kontak + judul project + deadline +
- * "Dari mana tahu [brand]?" (autocomplete) + brief awal (target audience, tujuan,
- * keyword, deliverables, budget min-max, referensi, catatan).
- * Nama brief = judul project (tidak diminta), layanan disembunyikan, timeline
- * pengerjaan otomatis (end = deadline − 1 hari) — diatur server.
- * Estimasi close otomatis: deadline − 3 minggu; bila mepet (<3 minggu) → besok.
+ * Ronde 58 (masukan user):
+ *  - Email & nomor WhatsApp WAJIB diisi + divalidasi "sesuai sistem": combobox
+ *    kode dial negara + aturan nasional (5–15 digit) + preview E.164 — sama
+ *    persis dengan form Kontak internal (Ronde 42/44).
+ *  - Alamat, kota, negara perusahaan WAJIB diisi (dipakai untuk surat).
+ *  - Format input Brief Awal disamakan dgn form brief internal (brief-panel):
+ *    deliverables & referensi berupa BARIS DINAMIS (nama+qty / label+url),
+ *    label & placeholder identik, budget parsing digit.
+ *  - "Estimasi tanggal penawaran/disepakati" jadi field read-only otomatis:
+ *    pilih deadline dulu → dihitung (deadline − 3 minggu; bila mepet — maks
+ *    besok). Catatan panjang dihapus, kode form internal tidak ditampilkan.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Building2, CalendarDays, Check, CheckCircle2, ChevronsUpDown, ClipboardList,
-  ExternalLink, Loader2, Send, Target, User,
+  AlertTriangle, Building2, Check, CheckCircle2, ChevronsUpDown, ClipboardList,
+  ExternalLink, Loader2, Plus, Send, Target, Trash2, User,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import IndustryCombobox from "@/components/crm/industry-combobox";
+import { DialCodeCombobox } from "@/components/crm/dial-code-combobox";
 import { api } from "@/lib/crm/api-client";
+import { normalizePhone } from "@/lib/crm/utils";
+import { emailError, nationalPhoneError } from "@/lib/crm/validate";
 import { cn } from "@/lib/utils";
 
 type IntakeMeta = Awaited<ReturnType<typeof api.intakeMeta>>["intake"];
+
+/** Baris deliverable — format sama dgn form brief internal (nama + jumlah). */
+interface DelivRow { name: string; qty: string }
+/** Baris referensi — format sama dgn form brief internal (label + url). */
+interface RefRow { label: string; url: string }
 
 const EMPTY = {
   companyName: "",
@@ -40,6 +52,7 @@ const EMPTY = {
   companyWebsite: "",
   fullName: "",
   email: "",
+  whatsappDial: "+62", // default Indonesia — konsisten dgn form kontak internal
   whatsapp: "",
   projectTitle: "",
   deadline: "",
@@ -48,15 +61,16 @@ const EMPTY = {
   targetAudience: "",
   objectives: "",
   keywords: "",
-  deliverables: "",
   budgetMin: "",
   budgetMax: "",
-  references: "",
   catatan: "",
 };
 
-/** Info estimasi close (mirror aturan server): deadline − 3 minggu, mepet → besok. */
-function closeHint(deadline: string): string | null {
+/**
+ * Estimasi tanggal penawaran/disepakati (mirror aturan server):
+ * deadline − 3 minggu; bila mepet (<3 minggu dari sekarang) → maksimal besok.
+ */
+function closeEstimate(deadline: string): string | null {
   if (!deadline) return null;
   const d = new Date(deadline);
   if (Number.isNaN(d.getTime())) return null;
@@ -72,6 +86,14 @@ function fmtDate(iso?: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+}
+
+/** Parse budget seperti form brief internal: ambil digit saja ("50 jt" → 50). */
+function parseBudget(v: string): number | null {
+  const digits = v.replace(/[^\d]/g, "");
+  if (!digits) return null;
+  const n = Number(digits);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 // ============ Elemen kecil ============
@@ -99,10 +121,11 @@ function SectionCard({ icon: Icon, title, subtitle, children, accent }: {
   );
 }
 
-function Field({ label, required, hint, children, htmlFor }: {
+function Field({ label, required, hint, error, children, htmlFor }: {
   label: string;
   required?: boolean;
   hint?: string;
+  error?: string;
   children: React.ReactNode;
   htmlFor?: string;
 }) {
@@ -112,7 +135,31 @@ function Field({ label, required, hint, children, htmlFor }: {
         {label} {required ? <span className="text-rose-600">*</span> : null}
       </Label>
       {children}
-      {hint ? <p className="text-[11px] leading-snug text-zinc-500">{hint}</p> : null}
+      {hint && !error ? <p className="text-[11px] leading-snug text-zinc-500">{hint}</p> : null}
+      {error ? <p className="text-[11px] font-medium leading-snug text-rose-600" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
+/** Baris dinamis dgn tombol hapus — pola sama dgn form brief internal. */
+function RowList({ ariaLabel, children, onRemove }: {
+  ariaLabel: string;
+  children: React.ReactNode;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {children}
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-8 shrink-0 text-zinc-400 hover:bg-red-50 hover:text-red-600"
+        aria-label={ariaLabel}
+        onClick={onRemove}
+      >
+        <Trash2 className="size-3.5" aria-hidden="true" />
+      </Button>
     </div>
   );
 }
@@ -124,7 +171,10 @@ export default function LeadIntakeForm({ token }: { token: string }) {
   const [loadState, setLoadState] = useState<"loading" | "ok" | "error">("loading");
   const [loadError, setLoadError] = useState("");
   const [values, setValues] = useState({ ...EMPTY });
+  const [deliverables, setDeliverables] = useState<DelivRow[]>([{ name: "", qty: "1" }]);
+  const [references, setReferences] = useState<RefRow[]>([{ label: "", url: "" }]);
   const [knowFromOpen, setKnowFromOpen] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [done, setDone] = useState<{ title: string; briefCode: string; expectedCloseDate: string } | null>(null);
@@ -147,22 +197,72 @@ export default function LeadIntakeForm({ token }: { token: string }) {
 
   const brand = meta?.brand;
   const accent = brand?.color ?? "#18181b";
-  const set = (k: keyof typeof EMPTY) => (v: string) => setValues((s) => ({ ...s, [k]: v }));
-  const hint = useMemo(() => closeHint(values.deadline), [values.deadline]);
+  const set = (k: keyof typeof EMPTY) => (v: string) => {
+    setValues((s) => ({ ...s, [k]: v }));
+    setErrors((e) => (e[k] ? { ...e, [k]: "" } : e)); // hapus error saat mengetik
+  };
+
+  const estimate = useMemo(() => closeEstimate(values.deadline), [values.deadline]);
+
+  /** Preview E.164 di bawah input WA — identik dgn form kontak internal. */
+  const waPreview = useMemo(() => {
+    const raw = values.whatsapp.trim();
+    if (!raw) return null;
+    if (values.whatsappDial) {
+      const n = normalizePhone(raw, values.whatsappDial);
+      return n ? `+${n}` : null;
+    }
+    if (raw.replace(/\D/g, "").startsWith("0")) {
+      const n = normalizePhone(raw);
+      return n ? `+${n}` : null;
+    }
+    return null;
+  }, [values.whatsapp, values.whatsappDial]);
 
   const submit = async () => {
     setFormError("");
-    if (!values.fullName.trim()) { setFormError("Nama lengkap wajib diisi"); return; }
-    if (!values.companyName.trim()) { setFormError("Nama perusahaan wajib diisi"); return; }
-    if (!values.projectTitle.trim()) { setFormError("Judul project wajib diisi"); return; }
-    if (!values.deadline) { setFormError("Target deadline wajib diisi"); return; }
-    if (!values.email.trim() && !values.whatsapp.trim()) { setFormError("Isi minimal salah satu: email atau WhatsApp"); return; }
+    // ===== Validasi "sesuai sistem" (pola Ronde 42/44) — semua wajib =====
+    const e: Record<string, string> = {};
+    if (!values.fullName.trim()) e.fullName = "Nama lengkap wajib diisi";
+    if (!values.companyName.trim()) e.companyName = "Nama perusahaan wajib diisi";
+    if (!values.companyAddress.trim()) e.companyAddress = "Alamat perusahaan wajib diisi (dipakai untuk surat)";
+    if (!values.companyCity.trim()) e.companyCity = "Kota wajib diisi";
+    if (!values.companyCountry.trim()) e.companyCountry = "Negara wajib diisi";
+    if (!values.projectTitle.trim()) e.projectTitle = "Judul project wajib diisi";
+    if (!values.deadline) e.deadline = "Target deadline wajib diisi";
+    // Email: wajib + format valid (validator sistem).
+    const vEmail = emailError(values.email);
+    if (!values.email.trim()) e.email = "Email wajib diisi";
+    else if (vEmail) e.email = vEmail;
+    // WhatsApp: wajib + aturan nomor nasional sistem (5–15 digit, tanpa 0 di depan bila pakai kode negara).
+    const wa = values.whatsapp.trim();
+    if (!wa) e.whatsapp = "Nomor WhatsApp wajib diisi";
+    else {
+      const vWa = nationalPhoneError(wa, !values.whatsappDial);
+      if (vWa) e.whatsapp = vWa;
+    }
+    setErrors(e);
+    if (Object.values(e).some(Boolean)) {
+      setFormError("Periksa kembali kolom yang bertanda merah.");
+      return;
+    }
 
     setSaving(true);
     try {
+      // Payload WhatsApp: gabung kode dial + nomor (pola buildWhatsappPayload internal).
+      const whatsappPayload = values.whatsappDial
+        ? (normalizePhone(values.whatsapp.trim(), values.whatsappDial) ?? values.whatsapp.trim())
+        : values.whatsapp.trim();
       const res = await api.intakeSubmit(token, {
         ...values,
+        whatsapp: whatsappPayload,
         knowFrom: values.knowFrom === "other" ? (values.knowFromOther.trim() || "other") : values.knowFrom,
+        deliverables: deliverables
+          .filter((d) => d.name.trim())
+          .map((d) => ({ name: d.name.trim().slice(0, 160), qty: Math.max(1, Math.min(999, Number(d.qty) || 1)) })),
+        references: references
+          .filter((r) => r.url.trim())
+          .map((r) => ({ label: (r.label.trim() || r.url.trim()).slice(0, 80), url: r.url.trim().slice(0, 500) })),
       });
       setDone({ title: res.opportunity.title, briefCode: res.briefCode, expectedCloseDate: res.expectedCloseDate });
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -230,6 +330,7 @@ export default function LeadIntakeForm({ token }: { token: string }) {
 
   const knowFromLabel = meta.knowFrom.find((k) => k.key === values.knowFrom)?.label
     ?? (values.knowFrom ? values.knowFrom : "");
+  const currency = brand?.primaryCurrency ?? "IDR";
 
   return (
     <main className="min-h-screen bg-zinc-100 pb-16">
@@ -251,7 +352,6 @@ export default function LeadIntakeForm({ token }: { token: string }) {
           </div>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-600">
             Formulir request project — isi data di bawah, tim kami akan menindaklanjuti Anda.
-            {meta.label ? <span className="mt-1 block text-xs text-zinc-400">Kode form: {meta.label}</span> : null}
           </p>
         </div>
       </header>
@@ -267,22 +367,22 @@ export default function LeadIntakeForm({ token }: { token: string }) {
         {/* 1 — Data perusahaan */}
         <SectionCard icon={Building2} title="Data Perusahaan" subtitle="Alamat dipakai untuk dokumen resmi (surat, kontrak, invoice)." accent={accent}>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Nama Perusahaan" required htmlFor="int-company">
-              <Input id="int-company" value={values.companyName} onChange={(e) => set("companyName")(e.target.value)} placeholder="PT Nusantara Kreatif" autoComplete="organization" />
+            <Field label="Nama Perusahaan" required error={errors.companyName} htmlFor="int-company">
+              <Input id="int-company" value={values.companyName} onChange={(e) => set("companyName")(e.target.value)} placeholder="PT Nusantara Kreatif" autoComplete="organization" aria-invalid={!!errors.companyName} />
             </Field>
             <Field label="Jenis Industri" hint="Ketik untuk mencari — boleh tulis industri baru.">
               <IndustryCombobox value={values.industry} onChange={set("industry")} suggestions={meta.industries} />
             </Field>
           </div>
-          <Field label="Alamat Perusahaan" hint="Alamat lengkap kantor (jalan, nomor, kota/kabupaten, kode pos)." htmlFor="int-address">
-            <Textarea id="int-address" value={values.companyAddress} onChange={(e) => set("companyAddress")(e.target.value)} rows={2} placeholder="Jl. Sudirman No. 12, Jakarta Pusat, 10220" />
+          <Field label="Alamat Perusahaan" required hint="Alamat lengkap kantor (jalan, nomor, kota/kabupaten, kode pos)." error={errors.companyAddress} htmlFor="int-address">
+            <Textarea id="int-address" value={values.companyAddress} onChange={(e) => set("companyAddress")(e.target.value)} rows={2} placeholder="Jl. Sudirman No. 12, Jakarta Pusat, 10220" aria-invalid={!!errors.companyAddress} />
           </Field>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-            <Field label="Kota" htmlFor="int-city">
-              <Input id="int-city" value={values.companyCity} onChange={(e) => set("companyCity")(e.target.value)} placeholder="Jakarta" />
+            <Field label="Kota" required error={errors.companyCity} htmlFor="int-city">
+              <Input id="int-city" value={values.companyCity} onChange={(e) => set("companyCity")(e.target.value)} placeholder="Jakarta" aria-invalid={!!errors.companyCity} />
             </Field>
-            <Field label="Negara" htmlFor="int-country">
-              <Input id="int-country" value={values.companyCountry} onChange={(e) => set("companyCountry")(e.target.value)} placeholder="Indonesia" />
+            <Field label="Negara" required error={errors.companyCountry} htmlFor="int-country">
+              <Input id="int-country" value={values.companyCountry} onChange={(e) => set("companyCountry")(e.target.value)} placeholder="Indonesia" aria-invalid={!!errors.companyCountry} />
             </Field>
             <Field label="Website" htmlFor="int-web">
               <Input id="int-web" value={values.companyWebsite} onChange={(e) => set("companyWebsite")(e.target.value)} placeholder="perusahaan.co.id" />
@@ -290,29 +390,43 @@ export default function LeadIntakeForm({ token }: { token: string }) {
           </div>
         </SectionCard>
 
-        {/* 2 — Kontak */}
-        <SectionCard icon={User} title="Data Kontak Anda" subtitle="Minimal salah satu: email atau WhatsApp." accent={accent}>
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-            <Field label="Nama Lengkap" required htmlFor="int-name">
-              <Input id="int-name" value={values.fullName} onChange={(e) => set("fullName")(e.target.value)} placeholder="Budi Santoso" autoComplete="name" />
+        {/* 2 — Kontak: email + WA wajib & validasi sistem */}
+        <SectionCard icon={User} title="Data Kontak Anda" subtitle="Email dan WhatsApp wajib diisi — kami menghubungi Anda via salah satunya." accent={accent}>
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <Field label="Nama Lengkap" required error={errors.fullName} htmlFor="int-name">
+              <Input id="int-name" value={values.fullName} onChange={(e) => set("fullName")(e.target.value)} placeholder="Budi Santoso" autoComplete="name" aria-invalid={!!errors.fullName} />
             </Field>
-            <Field label="Email" htmlFor="int-email">
-              <Input id="int-email" type="email" value={values.email} onChange={(e) => set("email")(e.target.value)} placeholder="budi@perusahaan.co.id" autoComplete="email" />
-            </Field>
-            <Field label="WhatsApp" htmlFor="int-wa">
-              <Input id="int-wa" type="tel" value={values.whatsapp} onChange={(e) => set("whatsapp")(e.target.value)} placeholder="0812xxxxxxx" autoComplete="tel" />
+            <Field label="Email" required error={errors.email} htmlFor="int-email">
+              <Input id="int-email" type="email" value={values.email} onChange={(e) => set("email")(e.target.value)} placeholder="budi@perusahaan.co.id" autoComplete="email" aria-invalid={!!errors.email} />
             </Field>
           </div>
+          <Field label="WhatsApp" required error={errors.whatsapp} hint="Pilih kode negara, lalu tulis nomor langsung tanpa awalan 0 (cth. 81234567890).">
+            <div className="flex gap-2">
+              <div className="w-[122px] shrink-0 sm:w-[150px]">
+                <DialCodeCombobox value={values.whatsappDial} onSelect={set("whatsappDial")} />
+              </div>
+              <Input
+                type="tel"
+                value={values.whatsapp}
+                onChange={(e) => set("whatsapp")(e.target.value)}
+                placeholder="81234567890"
+                inputMode="tel"
+                aria-label="Nomor WhatsApp (tanpa kode negara)"
+                aria-invalid={!!errors.whatsapp}
+              />
+            </div>
+            {waPreview && !errors.whatsapp ? <p className="text-[11px] text-zinc-400">Tersimpan sebagai {waPreview}</p> : null}
+          </Field>
         </SectionCard>
 
         {/* 3 — Detail project */}
         <SectionCard icon={Target} title="Detail Project" accent={accent}>
-          <Field label="Judul Project" required hint="Contoh: Animasi Company Profile 2 Menit" htmlFor="int-title">
-            <Input id="int-title" value={values.projectTitle} onChange={(e) => set("projectTitle")(e.target.value)} placeholder="Tulis judul kebutuhan Anda" />
+          <Field label="Judul Project" required hint="Contoh: Animasi Company Profile 2 Menit" error={errors.projectTitle} htmlFor="int-title">
+            <Input id="int-title" value={values.projectTitle} onChange={(e) => set("projectTitle")(e.target.value)} placeholder="Tulis judul kebutuhan Anda" aria-invalid={!!errors.projectTitle} />
           </Field>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Target Deadline" required htmlFor="int-deadline">
-              <Input id="int-deadline" type="date" value={values.deadline} onChange={(e) => set("deadline")(e.target.value)} min={new Date().toISOString().slice(0, 10)} />
+            <Field label="Target Deadline" required error={errors.deadline} htmlFor="int-deadline">
+              <Input id="int-deadline" type="date" value={values.deadline} onChange={(e) => set("deadline")(e.target.value)} min={new Date().toISOString().slice(0, 10)} aria-invalid={!!errors.deadline} />
             </Field>
             <Field label={`Dari mana Anda tahu ${brand?.name ?? "brand kami"}?`}>
               <Popover open={knowFromOpen} onOpenChange={setKnowFromOpen}>
@@ -346,45 +460,105 @@ export default function LeadIntakeForm({ token }: { token: string }) {
               <Input id="int-knowother" value={values.knowFromOther} onChange={(e) => set("knowFromOther")(e.target.value)} placeholder="Mis. brosur, radio, banner jalan…" />
             </Field>
           ) : null}
-          <div className="flex items-start gap-2 rounded-lg border bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600" role="note">
-            <ClipboardList className="mt-0.5 size-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
-            <span>
-              Estimasi tanggal penawaran/disepakati dihitung otomatis:{" "}
-              {hint ? <strong className="text-zinc-900">{hint}</strong> : "pilih deadline terlebih dahulu"}{" "}
-              (3 minggu sebelum deadline; bila deadline mepet — maksimal besok).
-            </span>
-          </div>
+          {/* Estimasi otomatis — field read-only, tidak bisa diubah */}
+          <Field
+            label="Estimasi Tanggal Penawaran/Disepakati"
+            hint="Dihitung otomatis — 3 minggu sebelum deadline; bila deadline mepet, maksimal besok."
+          >
+            <Input
+              readOnly
+              disabled
+              value={estimate ?? ""}
+              placeholder="Pilih deadline terlebih dahulu"
+              aria-label="Estimasi tanggal penawaran/disepakati (otomatis)"
+              className="cursor-not-allowed bg-zinc-50 font-medium text-zinc-700"
+            />
+          </Field>
         </SectionCard>
 
-        {/* 4 — Brief awal */}
+        {/* 4 — Brief awal: format input = persis form brief internal (brief-panel) */}
         <SectionCard icon={ClipboardList} title="Brief Awal" subtitle="Semakin lengkap, semakin cepat penawaran kami tepat sasaran." accent={accent}>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Target Audience" htmlFor="int-audience">
-              <Input id="int-audience" value={values.targetAudience} onChange={(e) => set("targetAudience")(e.target.value)} placeholder="Mis. calon investor, pelajar, ibu rumah tangga…" />
+            <Field label="Audiens Sasaran" htmlFor="int-audience">
+              <Input id="int-audience" value={values.targetAudience} onChange={(e) => set("targetAudience")(e.target.value)} placeholder="Mis. HRD BUMN, usia 30-45" />
             </Field>
             <Field label="Keyword" htmlFor="int-keyword">
               <Input id="int-keyword" value={values.keywords} onChange={(e) => set("keywords")(e.target.value)} placeholder="Kata kunci utama, pisahkan koma" />
             </Field>
           </div>
-          <Field label="Tujuan / Objective" htmlFor="int-objective" hint="Apa yang ingin dicapai dari project ini?">
-            <Textarea id="int-objective" value={values.objectives} onChange={(e) => set("objectives")(e.target.value)} rows={3} placeholder="Mis. meningkatkan awareness produk baru ke audiens usia 20–35…" />
+          <Field label="Tujuan Kampanye" htmlFor="int-objective">
+            <Textarea id="int-objective" value={values.objectives} onChange={(e) => set("objectives")(e.target.value)} rows={2} placeholder="Tujuan & target terukur (awareness, leads, launch produk…)" />
           </Field>
-          <Field label="Deliverables" hint="Satu item per baris." htmlFor="int-deliverables">
-            <Textarea id="int-deliverables" value={values.deliverables} onChange={(e) => set("deliverables")(e.target.value)} rows={3} placeholder={"Video animasi 2D 60 detik\nScript + voice over\nSubtitle Indonesia & Inggris"} />
-          </Field>
+          {/* Deliverables — baris dinamis (nama + jumlah), sama dgn brief internal */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+            <div className="space-y-1.5">
+              {deliverables.map((d, i) => (
+                <RowList key={i} ariaLabel={`Hapus deliverable ${i + 1}`} onRemove={() => setDeliverables((rows) => rows.filter((_, j) => j !== i))}>
+                  <Input
+                    value={d.name}
+                    onChange={(e) => setDeliverables((rows) => rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                    placeholder="Mis. Video animasi 60 detik"
+                    aria-label={`Nama deliverable ${i + 1}`}
+                  />
+                  <Input
+                    type="number"
+                    min={1}
+                    value={d.qty}
+                    onChange={(e) => setDeliverables((rows) => rows.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))}
+                    className="w-16 shrink-0"
+                    aria-label={`Jumlah deliverable ${i + 1}`}
+                  />
+                </RowList>
+              ))}
+            </div>
+            <div>
+              <Button type="button" size="sm" variant="outline" onClick={() => setDeliverables((rows) => [...rows, { name: "", qty: "1" }])}>
+                <Plus className="size-3.5" aria-hidden="true" />
+                Tambah deliverable
+              </Button>
+            </div>
+          </div>
+          {/* Budget — label & placeholder sama dgn brief internal (digit diparse saat kirim) */}
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label={`Budget Minimum (${brand?.primaryCurrency ?? "IDR"})`} htmlFor="int-bmin">
-              <Input id="int-bmin" inputMode="numeric" value={values.budgetMin} onChange={(e) => set("budgetMin")(e.target.value.replace(/[^\d.]/g, ""))} placeholder="Mis. 10000000" />
+            <Field label={`Budget Minimum (${currency})`} htmlFor="int-bmin">
+              <Input id="int-bmin" inputMode="numeric" value={values.budgetMin} onChange={(e) => set("budgetMin")(e.target.value)} placeholder="Mis. 50000000" />
             </Field>
-            <Field label={`Budget Maksimum (${brand?.primaryCurrency ?? "IDR"})`} htmlFor="int-bmax">
-              <Input id="int-bmax" inputMode="numeric" value={values.budgetMax} onChange={(e) => set("budgetMax")(e.target.value.replace(/[^\d.]/g, ""))} placeholder="Mis. 25000000" />
+            <Field label={`Budget Maksimum (${currency})`} htmlFor="int-bmax">
+              <Input id="int-bmax" inputMode="numeric" value={values.budgetMax} onChange={(e) => set("budgetMax")(e.target.value)} placeholder="Mis. 80000000" />
             </Field>
           </div>
-          <Field label="Referensi / Tautan" hint="Satu tautan per baris — contoh video/design yang Anda suka." htmlFor="int-refs">
-            <Textarea id="int-refs" value={values.references} onChange={(e) => set("references")(e.target.value)} rows={2} placeholder={"https://youtube.com/watch?v=xxx\nhttps://behance.net/gallery/xxx"} />
-          </Field>
-          <Field label="Catatan Tambahan" htmlFor="int-notes">
-            <Textarea id="int-notes" value={values.catatan} onChange={(e) => set("catatan")(e.target.value)} rows={2} placeholder="Hal lain yang ingin kami ketahui…" />
+          {/* Referensi — baris dinamis (label + url), sama dgn brief internal */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-medium text-zinc-600">Referensi / Tautan</p>
+            <div className="space-y-1.5">
+              {references.map((r, i) => (
+                <RowList key={i} ariaLabel={`Hapus referensi ${i + 1}`} onRemove={() => setReferences((rows) => rows.filter((_, j) => j !== i))}>
+                  <Input
+                    value={r.label}
+                    onChange={(e) => setReferences((rows) => rows.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))}
+                    placeholder="Label (mis. Contoh style)"
+                    className="w-2/5 shrink-0"
+                    aria-label={`Label referensi ${i + 1}`}
+                  />
+                  <Input
+                    value={r.url}
+                    onChange={(e) => setReferences((rows) => rows.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))}
+                    placeholder="https://…"
+                    aria-label={`URL referensi ${i + 1}`}
+                  />
+                </RowList>
+              ))}
+            </div>
+            <div>
+              <Button type="button" size="sm" variant="outline" onClick={() => setReferences((rows) => [...rows, { label: "", url: "" }])}>
+                <Plus className="size-3.5" aria-hidden="true" />
+                Tambah referensi
+              </Button>
+            </div>
+          </div>
+          <Field label="Catatan Lampiran" htmlFor="int-notes">
+            <Input id="int-notes" value={values.catatan} onChange={(e) => set("catatan")(e.target.value)} placeholder="Mis. Logo & footage tersedia di Drive — link dikirim via WA" />
           </Field>
         </SectionCard>
 
@@ -402,4 +576,3 @@ export default function LeadIntakeForm({ token }: { token: string }) {
     </main>
   );
 }
-
