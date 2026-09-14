@@ -184,6 +184,8 @@ export interface InteractionDTO {
   brand?: Brand | null;
   /** Ronde 34-b — lampiran pesan (JSON di DB, diparse di API). */
   attachments?: InteractionAttachment[] | null;
+  /** Ronde 61 — soft-delete inbox: terisi = pesan berada di Arsip. */
+  archivedAt?: string | null;
 }
 
 export interface TaskDTO {

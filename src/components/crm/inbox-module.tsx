@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import {
-  AlarmClock, AlertTriangle, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
+  AlarmClock, AlertTriangle, Archive, ArrowLeft, Building2, Check, CheckCheck, CheckCircle2, CircleDashed, Clock, Copy,
   Fingerprint, File, FileArchive, FileImage, FileText, FolderKanban, GitMerge, Globe, Inbox, Instagram, LayoutDashboard, Loader2, Mail,
-  MessagesSquare, Paperclip, Phone, PlugZap, RefreshCw, Reply, Send, ShieldAlert, Sparkles, Timer, TimerOff, User, UserPlus, UserPen, Video, X,
+  MessagesSquare, Paperclip, Phone, PlugZap, RefreshCw, Reply, RotateCcw, Send, ShieldAlert, Sparkles, Timer, TimerOff, Trash2, User, UserPlus, UserPen, Video, X,
 } from "lucide-react";
 import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import { toast } from "sonner";
@@ -44,6 +44,10 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 // ============ Tipe lokal ============
@@ -521,10 +525,13 @@ interface ThreadGroup {
   opportunity: { id: string; title: string; stage: string } | null;
 }
 
-function ThreadCard({ group, selected, onSelect }: {
+function ThreadCard({ group, selected, onSelect, onDelete }: {
   group: ThreadGroup;
   selected: boolean;
   onSelect: (lead: InboxLead) => void;
+  /** Ronde 61 — tombol hapus (arsip) anti spam; tanpa handler = tombol disembunyikan.
+   *  Menerima SELURUH grup (thread) supaya semua pesan percakapan ikut diarsipkan. */
+  onDelete?: (group: ThreadGroup) => void;
 }) {
   const { newest, thread } = group;
   const name = threadDisplayName(newest);
@@ -567,6 +574,23 @@ function ThreadCard({ group, selected, onSelect }: {
           <div className="flex items-baseline gap-2">
             <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{name}</span>
             <span className="shrink-0 text-xs text-zinc-400">{timeAgo(thread.lastMessageAt)}</span>
+            {/* Ronde 61 — hapus dari inbox (anti spam): thread terkonversi tidak boleh dihapus */}
+            {onDelete && !group.converted ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0 text-zinc-400 hover:bg-rose-50 hover:text-rose-600"
+                aria-label={`Hapus percakapan dengan ${name} dari inbox`}
+                title="Hapus dari Inbox (arsipkan)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(group);
+                }}
+              >
+                <Trash2 className="size-3.5" aria-hidden="true" />
+              </Button>
+            ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {thread.channels.map((ch) => {
@@ -630,6 +654,156 @@ function ThreadCard({ group, selected, onSelect }: {
       </div>
     </div>
   );
+}
+
+/**
+ * Ronde 61 — kartu pesan di tab Arsip: aksi Pulihkan (kembali ke inbox) &
+ * Hapus Permanen (hard delete — dialog konfirmasi terpisah).
+ */
+function ArchivedThreadCard({ group, restoring, onRestore, onDeletePermanent }: {
+  group: ThreadGroup;
+  restoring: boolean;
+  onRestore: () => void;
+  onDeletePermanent: () => void;
+}) {
+  const { newest, thread } = group;
+  const name = threadDisplayName(newest);
+  const preview = (lastThreadMessage(thread)?.content ?? newest.content).trim();
+  const avatarMeta = channelMeta(dominantChannelOf(thread, newest.channel));
+  return (
+    <div
+      className={cn(
+        "w-full rounded-xl border border-zinc-200 bg-white p-4 text-left shadow-sm opacity-95 transition-all hover:shadow-md",
+        "border-dashed"
+      )}
+      aria-label={`Pesan terarsip dari ${name}`}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn("flex size-10 shrink-0 items-center justify-center rounded-full text-xs font-bold opacity-80", avatarMeta.circle)}
+          aria-hidden="true"
+        >
+          {initials(name.replace(/^@+/, ""))}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900">{name}</span>
+            <span className="shrink-0 text-xs text-zinc-400">
+              {newest.archivedAt ? `Diarsipkan ${timeAgo(newest.archivedAt)}` : timeAgo(thread.lastMessageAt)}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {thread.channels.slice(0, 4).map((ch) => {
+              const ChMeta = channelMeta(ch);
+              const ChIcon = ChMeta.icon;
+              return (
+                <span
+                  key={ch}
+                  role="img"
+                  aria-label={`Kanal ${channelLabel(ch)}`}
+                  title={channelLabel(ch)}
+                  className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-full", ChMeta.circle)}
+                >
+                  <ChIcon className="size-3" aria-hidden="true" />
+                </span>
+              );
+            })}
+            {thread.messageCount > 1 ? (
+              <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">{`${thread.messageCount} pesan`}</Badge>
+            ) : null}
+            {newest.brand ? <BrandChip name={newest.brand.name} color={newest.brand.color} /> : null}
+            <Badge variant="outline" className="border-zinc-300 bg-zinc-100 text-zinc-500">
+              <Archive aria-hidden="true" />
+              Diarsipkan
+            </Badge>
+          </div>
+          <p className="mt-1.5 line-clamp-1 text-sm leading-relaxed text-zinc-500">{preview}</p>
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 px-2.5 text-xs"
+              disabled={restoring}
+              onClick={onRestore}
+              aria-label={`Pulihkan pesan dari ${name} ke inbox`}
+            >
+              {restoring ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="size-3.5" aria-hidden="true" />
+              )}
+              Pulihkan
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 border-rose-200 px-2.5 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              onClick={onDeletePermanent}
+              aria-label={`Hapus permanen pesan dari ${name}`}
+            >
+              <Trash2 className="size-3.5" aria-hidden="true" />
+              Hapus Permanen
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Ronde 61 — grouping leads by threadKey → ThreadGroup (dipakai tab normal & tab Arsip). */
+function buildThreadGroups(list: InboxLead[], sortBy: "newest" | "late"): ThreadGroup[] {
+  const map = new Map<string, InboxLead[]>();
+  for (const lead of list) {
+    const key = lead.threadKey || `lead:${lead.id}`;
+    const arr = map.get(key);
+    if (arr) arr.push(lead);
+    else map.set(key, [lead]);
+  }
+  const groups: ThreadGroup[] = [];
+  for (const [key, members] of map) {
+    const byNewest = [...members].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const newest = byNewest[0];
+    const thread = threadOf(newest);
+    const pending = byNewest.filter((l) => !isResponded(l));
+    let worstPending: InboxLead | null = null;
+    let worstRemaining: number | null = null;
+    for (const l of pending) {
+      const remaining = (l.brand?.slaHours ?? 24) - l.slaHours;
+      if (worstRemaining === null || remaining < worstRemaining) {
+        worstPending = l;
+        worstRemaining = remaining;
+      }
+    }
+    groups.push({
+      key,
+      members: byNewest,
+      newest,
+      thread,
+      worstPending,
+      worstRemaining,
+      maxCandidates: byNewest.reduce((acc, l) => Math.max(acc, l.candidates.length), 0),
+      allResponded: pending.length === 0,
+      // Ronde 32 — thread terkonversi bila SEMUA anggota sudah tertaut opportunity.
+      converted: byNewest.length > 0 && byNewest.every((l) => Boolean(l.opportunityId)),
+      opportunity: newest.opportunity ?? byNewest.find((l) => l.opportunity)?.opportunity ?? null,
+    });
+  }
+  if (sortBy === "late") {
+    // Ronde 32 — thread terkonversi selalu di bawah (bukan lagi beban SLA)
+    groups.sort((a, b) => {
+      if (a.converted !== b.converted) return a.converted ? 1 : -1;
+      const ra = a.worstRemaining ?? Number.POSITIVE_INFINITY;
+      const rb = b.worstRemaining ?? Number.POSITIVE_INFINITY;
+      if (ra !== rb) return ra - rb;
+      return new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime();
+    });
+  } else {
+    groups.sort((a, b) => new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime());
+  }
+  return groups;
 }
 
 function CandidateCard({ candidate, selected, onToggle }: { candidate: MatchCandidateDTO; selected: boolean; onToggle: () => void }) {
@@ -2074,7 +2248,18 @@ export default function InboxModule() {
 
   // Ronde 32 — tab percakapan: "open" = perlu tindakan (belum dikonversi),
   // "all" = termasuk thread terkonversi (chat lanjutan dgn klien aktif).
-  const [view, setView] = useState<"open" | "all">("open");
+  // Ronde 61 — "archived" = pesan terarsip (hasil hapus anti spam) — pulihkan/hapus permanen.
+  const [view, setView] = useState<"open" | "all" | "archived">("open");
+
+  // Ronde 61 — arsip inbox (hapus anti spam): daftar terpisah dari leads utama;
+  // archivedCount dari fetch utama (badge tab tanpa memuat daftar arsip).
+  const [archivedLeads, setArchivedLeads] = useState<InboxLead[] | null>(null);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedError, setArchivedError] = useState<string | null>(null);
+  const [archivedCount, setArchivedCount] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ mode: "archive" | "permanent"; lead: InboxLead; ids: string[] } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   // Ronde 32 — setelah konversi: pilih otomatis thread yang kini tertaut opportunity ini.
   const [pendingSelectOppId, setPendingSelectOppId] = useState<string | null>(null);
 
@@ -2138,6 +2323,7 @@ export default function InboxModule() {
       const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, sweep: true, view: "all" });
       setLeads(res.leads);
       setError(null);
+      setArchivedCount(typeof res.archivedCount === "number" ? res.archivedCount : null);
       if (res.autoEscalated && res.autoEscalated > 0) {
         toast.warning(`${res.autoEscalated} lead dieskalasi otomatis`, {
           description: "Sweep SLA menemukan lead melewati SLA + grace 4 jam — task urgent dibuat untuk Direktur.",
@@ -2177,6 +2363,27 @@ export default function InboxModule() {
     void loadLeads();
   }, [loadLeads]);
 
+  // Ronde 61 — muat daftar arsip saat tab Arsip dibuka (daftar terpisah dari leads utama).
+  const loadArchived = useCallback(async (silent = false) => {
+    if (!silent) setArchivedLoading(true);
+    try {
+      const res = await api.inbox({ channel: channelFilter, brandId: activeBrandFilter, view: "archived" });
+      setArchivedLeads(res.leads);
+      setArchivedError(null);
+      return res.leads;
+    } catch (err) {
+      setArchivedError(err instanceof Error ? err.message : "Terjadi kesalahan tak terduga");
+      if (!silent) toast.error("Gagal memuat arsip inbox");
+      return null;
+    } finally {
+      setArchivedLoading(false);
+    }
+  }, [channelFilter, activeBrandFilter]);
+
+  useEffect(() => {
+    if (view === "archived" && archivedLeads === null) void loadArchived();
+  }, [view, archivedLeads, loadArchived]);
+
   // Ronde 54 — polling real-time: email masuk muncul OTOMATIS tanpa refresh manual.
   // Setiap 25 detik loadLeads(silent) → sweep=1 memicu auto-sync IMAP server
   // (throttle 30 detik di lib) → email baru muncul + toast, tanpa klik apa pun.
@@ -2186,17 +2393,22 @@ export default function InboxModule() {
     const POLL_MS = 25_000;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      void loadLeads(true);
+      // Ronde 61 — polling mengikuti tab aktif: Arsip mem-poll daftar arsipnya sendiri.
+      if (view === "archived") void loadArchived(true);
+      else void loadLeads(true);
     }, POLL_MS);
     const onVisibility = () => {
-      if (document.visibilityState === "visible") void loadLeads(true);
+      if (document.visibilityState === "visible") {
+        if (view === "archived") void loadArchived(true);
+        else void loadLeads(true);
+      }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [loadLeads]);
+  }, [loadLeads, loadArchived, view]);
 
   // Ronde 21 — tarik email masuk nyata via IMAP (kanal email terhubung & non-demo).
   const [emailSyncing, setEmailSyncing] = useState(false);
@@ -2257,57 +2469,20 @@ export default function InboxModule() {
   }, [leads, sortBy, view]);
 
   // Grouping leads by threadKey → ThreadGroup, diurut sesuai sortBy
-  const threadGroups = useMemo<ThreadGroup[]>(() => {
-    const map = new Map<string, InboxLead[]>();
-    for (const lead of sortedLeads) {
-      const key = lead.threadKey || `lead:${lead.id}`;
-      const arr = map.get(key);
-      if (arr) arr.push(lead);
-      else map.set(key, [lead]);
-    }
-    const groups: ThreadGroup[] = [];
-    for (const [key, members] of map) {
-      const byNewest = [...members].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      const newest = byNewest[0];
-      const thread = threadOf(newest);
-      const pending = byNewest.filter((l) => !isResponded(l));
-      let worstPending: InboxLead | null = null;
-      let worstRemaining: number | null = null;
-      for (const l of pending) {
-        const remaining = (l.brand?.slaHours ?? 24) - l.slaHours;
-        if (worstRemaining === null || remaining < worstRemaining) {
-          worstPending = l;
-          worstRemaining = remaining;
-        }
-      }
-      groups.push({
-        key,
-        members: byNewest,
-        newest,
-        thread,
-        worstPending,
-        worstRemaining,
-        maxCandidates: byNewest.reduce((acc, l) => Math.max(acc, l.candidates.length), 0),
-        allResponded: pending.length === 0,
-        // Ronde 32 — thread terkonversi bila SEMUA anggota sudah tertaut opportunity.
-        converted: byNewest.length > 0 && byNewest.every((l) => Boolean(l.opportunityId)),
-        opportunity: newest.opportunity ?? byNewest.find((l) => l.opportunity)?.opportunity ?? null,
-      });
-    }
-    if (sortBy === "late") {
-      // Ronde 32 — thread terkonversi selalu di bawah (bukan lagi beban SLA)
-      groups.sort((a, b) => {
-        if (a.converted !== b.converted) return a.converted ? 1 : -1;
-        const ra = a.worstRemaining ?? Number.POSITIVE_INFINITY;
-        const rb = b.worstRemaining ?? Number.POSITIVE_INFINITY;
-        if (ra !== rb) return ra - rb;
-        return new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime();
-      });
-    } else {
-      groups.sort((a, b) => new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime());
-    }
-    return groups;
-  }, [sortedLeads, sortBy]);
+  // Ronde 61 — logika grouping diekstrak ke buildThreadGroups (dipakai juga tab Arsip)
+  const threadGroups = useMemo<ThreadGroup[]>(
+    () => buildThreadGroups(sortedLeads, sortBy),
+    [sortedLeads, sortBy]
+  );
+
+  // Ronde 61 — grup percakapan di tab Arsip (urut pesan terakhir; abaikan sortBy SLA —
+  // arsip bukan beban SLA, jadi selalu urut waktu arsip/pesan terakhir).
+  const archivedGroups = useMemo<ThreadGroup[]>(() => {
+    const list = [...(archivedLeads ?? [])].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    return buildThreadGroups(list, "newest");
+  }, [archivedLeads]);
 
   const selectedLead = useMemo(
     () => leads?.find((l) => l.id === selectedId) ?? null,
@@ -2797,6 +2972,72 @@ export default function InboxModule() {
     }
   }
 
+  // ===== Ronde 61 — hapus dari inbox (anti spam / bukan lead) =====
+
+  /** Arsipkan percakapan (soft delete): hilang dari inbox, pulihable dari tab Arsip.
+   *  target.ids = seluruh pesan inbound dalam thread (kartu = thread utuh). */
+  async function handleArchiveLead(target: { lead: InboxLead; ids: string[] }) {
+    if (!user || deleting) return;
+    setDeleting(true);
+    try {
+      await api.inboxDelete(target.lead.id, { mode: "archive", ids: target.ids, actorName: user.name, actorRole: user.role });
+      const n = Math.max(1, target.ids.length);
+      toast.success("Percakapan diarsipkan", {
+        description: `${threadDisplayName(target.lead)}${n > 1 ? ` (${n} pesan)` : ""} disembunyikan dari Inbox — pulihkan kapan saja dari tab Arsip.`,
+      });
+      // Hapus dari daftar utama (semua tab) + sisipkan ke daftar arsip yang sudah termuat.
+      const removed = (leads ?? []).filter((l) => target.ids.includes(l.id))
+        .map((l) => ({ ...l, archivedAt: new Date().toISOString() }));
+      setLeads((prev) => (prev ?? []).filter((l) => !target.ids.includes(l.id)));
+      setArchivedLeads((prev) => (prev === null ? null : [...removed, ...prev]));
+      setArchivedCount((c) => (c ?? 0) + removed.length);
+      if (selectedId && target.ids.includes(selectedId)) setSelectedId(null);
+      setDeleteTarget(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal mengarsipkan percakapan.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  /** Pulihkan pesan dari Arsip → kembali tampil di Perlu Tindakan / Semua Percakapan. */
+  async function handleRestoreLead(target: { lead: InboxLead; ids: string[] }) {
+    if (!user || restoringId) return;
+    setRestoringId(target.lead.id);
+    try {
+      await api.inboxRestore(target.lead.id, { ids: target.ids, actorName: user.name, actorRole: user.role });
+      toast.success("Percakapan dipulihkan", {
+        description: "Pesan kembali tampil di Inbox — cek tab Perlu Tindakan / Semua Percakapan.",
+      });
+      setArchivedLeads((prev) => (prev ?? []).filter((l) => !target.ids.includes(l.id)));
+      setArchivedCount((c) => Math.max(0, (c ?? 1) - Math.max(1, target.ids.filter((id) => (archivedLeads ?? []).some((l) => l.id === id)).length)));
+      await loadLeads(true); // segarkan daftar utama agar pesan langsung muncul
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal memulihkan percakapan.");
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  /** Hapus permanen (hard delete) — hanya untuk pesan di Arsip, konfirmasi dua langkah. */
+  async function handlePermanentDeleteLead(target: { lead: InboxLead; ids: string[] }) {
+    if (!user || deleting) return;
+    setDeleting(true);
+    try {
+      await api.inboxDelete(target.lead.id, { mode: "permanent", ids: target.ids, actorName: user.name, actorRole: user.role });
+      toast.success("Percakapan dihapus permanen", {
+        description: `Pesan dari ${threadDisplayName(target.lead)} sudah dihapus selamanya bersama seluruh isinya.`,
+      });
+      setArchivedLeads((prev) => (prev ?? []).filter((l) => !target.ids.includes(l.id)));
+      setArchivedCount((c) => Math.max(0, (c ?? 1) - Math.max(1, target.ids.filter((id) => (archivedLeads ?? []).some((l) => l.id === id)).length)));
+      setDeleteTarget(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus permanen.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const firstLoad = loading && leads === null;
   const escalateSla = escalateTarget
     ? slaBadgeInfo(escalateTarget.brand?.slaHours ?? 24, escalateTarget.slaHours)
@@ -2858,6 +3099,11 @@ export default function InboxModule() {
   // Ronde 32 — thread terkonversi: sembunyikan tool konversi/eskalasi, tampilkan
   // identitas opportunity + pintasan ke Pipeline.
   const selectedOpp = selectedLead?.opportunity ?? null;
+  // Ronde 61 — seluruh pesan inbound dalam thread terpilih (utk hapus batch thread utuh).
+  const selectedThreadIds = useMemo(
+    () => (selectedLead ? (leads ?? []).filter((l) => l.threadKey === selectedLead.threadKey).map((l) => l.id) : []),
+    [leads, selectedLead]
+  );
 
   return (
     <div className="space-y-4">
@@ -2910,6 +3156,20 @@ export default function InboxModule() {
               >
                 <MessagesSquare className="size-3.5" aria-hidden="true" />
                 Semua Percakapan{leads ? ` (${stats.total})` : ""}
+              </button>
+              {/* Ronde 61 — tab Arsip: pesan yang dihapus dari inbox (anti spam), pulihable */}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "archived"}
+                onClick={() => { if (view !== "archived") { setView("archived"); setSelectedId(null); } }}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors",
+                  view === "archived" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Archive className="size-3.5" aria-hidden="true" />
+                Arsip{archivedCount !== null ? ` (${archivedCount})` : ""}
               </button>
             </div>
           </div>
@@ -3031,6 +3291,44 @@ export default function InboxModule() {
               <p className="text-xs text-zinc-400">{error}</p>
               <Button type="button" variant="outline" size="sm" onClick={() => void loadLeads()}>Coba Lagi</Button>
             </div>
+          ) : view === "archived" ? (
+            /* ===== Ronde 61 — daftar Arsip: pesan hasil hapus (pulihkan / hapus permanen) ===== */
+            archivedLoading ? (
+              <div className="crm-scroll min-h-0 flex-1 overflow-y-auto p-3">
+                <ListSkeleton />
+              </div>
+            ) : archivedError ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                <span className="flex size-12 items-center justify-center rounded-full bg-rose-100" aria-hidden="true">
+                  <AlertTriangle className="size-6 text-rose-600" />
+                </span>
+                <p className="text-sm font-medium text-zinc-700">Gagal memuat arsip</p>
+                <p className="text-xs text-zinc-400">{archivedError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadArchived()}>Coba Lagi</Button>
+              </div>
+            ) : archivedLeads && archivedLeads.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
+                  <Archive className="size-6 text-zinc-400" />
+                </span>
+                <p className="text-sm font-medium text-zinc-700">Arsip kosong</p>
+                <p className="max-w-xs text-xs text-zinc-400">
+                  Pesan yang dihapus dari Inbox (spam / bukan lead) akan muncul di sini dan bisa dipulihkan kapan saja.
+                </p>
+              </div>
+            ) : archivedLeads ? (
+              <div className="crm-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
+                {archivedGroups.map((group) => (
+                  <ArchivedThreadCard
+                    key={group.key}
+                    group={group}
+                    restoring={restoringId === group.newest.id}
+                    onRestore={() => void handleRestoreLead({ lead: group.newest, ids: group.members.map((m) => m.id) })}
+                    onDeletePermanent={() => setDeleteTarget({ mode: "permanent", lead: group.newest, ids: group.members.map((m) => m.id) })}
+                  />
+                ))}
+              </div>
+            ) : null
           ) : leads && leads.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
               <span className="flex size-12 items-center justify-center rounded-full bg-zinc-100" aria-hidden="true">
@@ -3056,6 +3354,7 @@ export default function InboxModule() {
                   group={group}
                   selected={group.members.some((l) => l.id === selectedId)}
                   onSelect={handleSelectLead}
+                  onDelete={(g) => setDeleteTarget({ mode: "archive", lead: g.newest, ids: g.members.map((m) => m.id) })}
                 />
               ))}
             </div>
@@ -3180,6 +3479,23 @@ export default function InboxModule() {
                           icon={ShieldAlert}
                           label="Eskalasi ke Direktur"
                           onClick={() => openEscalateDialog(selectedLead)}
+                          danger
+                        />
+                      ) : null}
+                      {/* Ronde 61 — hapus dari inbox (anti spam); thread terkonversi dilindungi */}
+                      {!selectedOpp ? (
+                        <ToolIconButton
+                          icon={Trash2}
+                          label="Hapus dari Inbox (arsipkan)"
+                          onClick={() =>
+                            selectedLead
+                              ? setDeleteTarget({
+                                  mode: "archive",
+                                  lead: selectedLead,
+                                  ids: selectedThreadIds.length > 0 ? selectedThreadIds : [selectedLead.id],
+                                })
+                              : undefined
+                          }
                           danger
                         />
                       ) : null}
@@ -3400,6 +3716,76 @@ export default function InboxModule() {
         onConvert={() => void handleConvert()}
         onClose={() => setShowConvert(false)}
       />
+
+      {/* ===== Ronde 61 — konfirmasi hapus percakapan (arsip / permanen) ===== */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className={cn("size-4.5", deleteTarget?.mode === "permanent" ? "text-rose-600" : "text-amber-600")} aria-hidden="true" />
+              {deleteTarget?.mode === "permanent" ? "Hapus permanen percakapan ini?" : "Hapus percakapan ini dari Inbox?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm leading-relaxed">
+                {deleteTarget?.mode === "permanent" ? (
+                  <>
+                    <p>
+                      Pesan dari <span className="font-semibold text-zinc-800">{deleteTarget ? threadDisplayName(deleteTarget.lead) : ""}</span> akan dihapus
+                      {" "}<span className="font-semibold text-rose-600">SELAMANYA</span> bersama seluruh isinya ({Math.max(1, deleteTarget.ids.length)} pesan).
+                    </p>
+                    <p>Tindakan ini tidak bisa dibatalkan. Bila hanya ingin merapikan inbox, gunakan "Pulihkan" untuk mengembalikan pesan ke Inbox.</p>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      Percakapan ({Math.max(1, deleteTarget?.ids.length ?? 1)} pesan) dari{" "}
+                      <span className="font-semibold text-zinc-800">{deleteTarget ? threadDisplayName(deleteTarget.lead) : ""}</span>{" "}
+                      akan disembunyikan dari semua tampilan Inbox.
+                    </p>
+                    <p>
+                      Cocok untuk spam atau pesan bukan lead. Kamu bisa memulihkannya kapan saja dari tab{" "}
+                      <span className="inline-flex items-center gap-1 font-semibold text-zinc-700"><Archive className="size-3.5" aria-hidden="true" />Arsip</span>.
+                    </p>
+                  </>
+                )}
+                {deleteTarget ? (
+                  <p className="line-clamp-2 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs italic text-zinc-500">
+                    "{deleteTarget.lead.content.replace(/\s+/g, " ").trim().slice(0, 160)}"
+                  </p>
+                ) : null}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className={cn(
+                deleteTarget?.mode === "permanent"
+                  ? "bg-rose-600 text-white hover:bg-rose-700"
+                  : "bg-zinc-900 text-white hover:bg-zinc-800"
+              )}
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault(); // jangan tutup dialog otomatis — tutup setelah sukses
+                if (!deleteTarget) return;
+                if (deleteTarget.mode === "permanent") void handlePermanentDeleteLead({ lead: deleteTarget.lead, ids: deleteTarget.ids });
+                else void handleArchiveLead({ lead: deleteTarget.lead, ids: deleteTarget.ids });
+              }}
+            >
+              {deleting ? (
+                <><Loader2 className="size-4 animate-spin" aria-hidden="true" /> Memproses…</>
+              ) : deleteTarget?.mode === "permanent" ? (
+                "Hapus Permanen"
+              ) : (
+                "Ya, Hapus dari Inbox"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

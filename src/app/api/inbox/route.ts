@@ -19,6 +19,12 @@ import { computeReplyChannels, inferBrandIdFromSource, senderTokens, serializeAt
  * - `view=all`: juga menyertakan pesan inbound yang SUDAH tertaut opportunity
  *   (beserta ringkasan opportunity) — percakapan TIDAK hilang setelah lead
  *   dikonversi; marketing bisa melanjutkan chat dengan klien aktif dari inbox.
+ *
+ * Ronde 61 — fitur hapus (anti spam):
+ * - tampilan normal (open/all) MENYEMBUNYIKAN pesan terarsip (archivedAt != null);
+ * - `view=archived`: daftar pesan inbound terarsip (tab Arsip) utk pulihkan /
+ *   hapus permanen via /api/inbox/:id;
+ * - respons kini membawa `archivedCount` (badge tab Arsip tanpa memuat daftarnya).
  */
 
 /** Ronde 24 — pesan ringkas dalam thread (tanpa field internal berat). */
@@ -119,7 +125,8 @@ export async function GET(req: NextRequest) {
   const channelId = sp.get("channel");
   const brandId = sp.get("brandId");
   // Ronde 32 — view=all menyertakan pesan inbound yang sudah tertaut opportunity.
-  const view = sp.get("view") === "all" ? "all" : "open";
+  // Ronde 61 — view=archived: daftar pesan terarsip (tab Arsip — pulihkan/hapus permanen).
+  const view = sp.get("view") === "archived" ? "archived" : sp.get("view") === "all" ? "all" : "open";
   // Ronde 34-b — fokus kontak lintas modul (task follow-up → chat kontak): bila contactId dikirim,
   // lead kontak TERSEBUT ikut disertakan walau sudah dikonversi — via contactId ATAU kecocokan
   // identitas sender (thread belum ter-link contactId) — supaya follow-up bisa lanjut dari Inbox.
@@ -166,6 +173,9 @@ export async function GET(req: NextRequest) {
   const leads = await db.interaction.findMany({
     where: {
       direction: "inbound",
+      // Ronde 61 — arsip vs tampilan normal saling eksklusif:
+      // tab Arsip hanya pesan terarsip; open/all menyembunyikan pesan terarsip.
+      ...(view === "archived" ? { archivedAt: { not: null } } : { archivedAt: null }),
       // Ronde 32: view=open → hanya belum dikonversi; view=all → termasuk terkonversi.
       // Ronde 34-b: mode fokus kontak HANYA di view=open — menambah lead kontak tsb
       // (contactId / identitas sender) di atas lead belum-dikonversi lainnya.
@@ -334,7 +344,12 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  return ok({ leads: leadsWithThread, autoEscalated, autoUnified, brandInferred, emailSync });
+  // Ronde 61 — jumlah pesan terarsip utk badge tab Arsip (murah; daftar dimuat terpisah).
+  const archivedCount = await db.interaction.count({
+    where: { direction: "inbound", archivedAt: { not: null } },
+  });
+
+  return ok({ leads: leadsWithThread, autoEscalated, autoUnified, brandInferred, emailSync, archivedCount });
 }
 
 

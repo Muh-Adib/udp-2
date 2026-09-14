@@ -262,6 +262,9 @@ model Interaction {
   companyId      String?
   brand          Brand?       @relation(fields: [brandId], references: [id])
   createdAt      DateTime     @default(now())
+  // Ronde 61 — hapus dari inbox = SOFT DELETE (arsip): disembunyikan dari semua
+  // tampilan inbox; masih bisa dipulihkan dari tab Arsip atau dihapus permanen.
+  archivedAt     DateTime?
 
   // Ronde 36 (audit): index utk filter inbox/timeline yang tumbuh paling cepat
   @@index([contactId])

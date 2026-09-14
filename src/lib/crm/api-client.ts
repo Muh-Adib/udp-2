@@ -236,14 +236,16 @@ export const api = {
 
   // Inbox
   // Ronde 32 — view: "open" (default, belum dikonversi) | "all" (termasuk terkonversi)
+  // Ronde 61 — view: "archived" (tab Arsip — pesan terarsip, pulihkan/hapus permanen)
   // Ronde 34-b — contactId: mode fokus kontak (task follow-up → chat kontak) — server ikut menyertakan
   // lead kontak tsb (via contactId ATAU kecocokan identitas sender) walau sudah dikonversi.
-  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all"; contactId?: string }) => {
+  inbox: (params?: { channel?: string; brandId?: string; sweep?: boolean; view?: "open" | "all" | "archived"; contactId?: string }) => {
     const sp = new URLSearchParams();
     if (params?.channel && params.channel !== "all") sp.set("channel", params.channel);
     if (params?.brandId && params.brandId !== "all") sp.set("brandId", params.brandId);
     if (params?.sweep) sp.set("sweep", "1");
     if (params?.view === "all") sp.set("view", "all");
+    if (params?.view === "archived") sp.set("view", "archived");
     if (params?.contactId) sp.set("contactId", params.contactId);
     return request<{
       leads: InboxLeadDTO[];
@@ -254,6 +256,8 @@ export const api = {
        * toast di klien; email baru terdeteksi via diff ID lead di klien.
        */
       emailSync?: { ran: boolean; created: number; skipped: number; error?: string; at?: string } | null;
+      /** Ronde 61 — jumlah pesan inbound terarsip (badge tab Arsip). */
+      archivedCount?: number;
     }>(`/api/inbox?${sp}`);
   },
   convertLead: (payload: Record<string, unknown>) =>
@@ -267,6 +271,14 @@ export const api = {
    *  Ronde 34-b — lampiran dokumen (maks 3 file @2MB, data URL) ikut dikirim bersama respons. */
   inboxRespond: (payload: { interactionId: string; channel?: string; content: string; subject?: string; contactId?: string; companyId?: string; actorName: string; actorRole: string; attachments?: { name: string; url: string; size?: number }[] }) =>
     request<{ reply: InteractionDTO; lead: InteractionDTO & { slaHours?: number } }>("/api/inbox/respond", { method: "POST", body: JSON.stringify(payload) }),
+  /** Ronde 61 — hapus pesan dari inbox (anti spam): mode "archive" (soft-delete,
+   *  pulihable dari tab Arsip) atau "permanent" (hanya utk pesan di Arsip).
+   *  `ids` = seluruh pesan thread yg sama (opsional; default hanya id utama). */
+  inboxDelete: (id: string, payload: { mode?: "archive" | "permanent"; ids?: string[]; actorName: string; actorRole: string }) =>
+    request<{ deleted: boolean; mode: "archive" | "permanent"; affected?: number }>(`/api/inbox/${id}`, { method: "DELETE", body: JSON.stringify(payload) }),
+  /** Ronde 61 — pulihkan pesan dari Arsip kembali ke inbox (bisa satu thread via ids). */
+  inboxRestore: (id: string, payload: { ids?: string[]; actorName: string; actorRole: string }) =>
+    request<{ restored: boolean; affected?: number }>(`/api/inbox/${id}`, { method: "PATCH", body: JSON.stringify({ ...payload, archived: false }) }),
 
   // Interactions
   interactions: (params?: { opportunityId?: string; contactId?: string; channel?: string; companyId?: string }) => {

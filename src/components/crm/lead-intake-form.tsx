@@ -80,7 +80,9 @@ const EMPTY = {
 const STR = {
   en: {
     brandFallback: "our brand",
-    intro: "Project request form — fill in the details below and our team will get back to you.",
+    // Ronde 61 — judul halaman form request + intro tanpa prefiks redundan
+    formTitle: "Form Request",
+    intro: "Fill in the details below and our team will get back to you shortly.",
     loading: "Loading form…",
     loadFail: "Form unavailable",
     errRequiredReview: "Please review the fields marked in red.",
@@ -190,7 +192,9 @@ const STR = {
   },
   id: {
     brandFallback: "brand kami",
-    intro: "Formulir request project — isi data di bawah, tim kami akan menindaklanjuti Anda.",
+    // Ronde 61 — judul halaman form request + intro tanpa prefiks redundan
+    formTitle: "Formulir Request",
+    intro: "Isi data di bawah ini — tim kami akan segera menindaklanjuti Anda.",
     loading: "Memuat formulir…",
     loadFail: "Formulir tidak dapat dibuka",
     errRequiredReview: "Periksa kembali kolom yang bertanda merah.",
@@ -373,10 +377,10 @@ function RowList({ ariaLabel, children, onRemove }: {
   );
 }
 
-/** Toggle bahasa EN/ID — EN default (diprioritaskan user). */
+/** Toggle bahasa EN/ID — EN default (diprioritaskan user). Ronde 61: sentuh lebih besar. */
 function LangToggle({ lang, onChange, accent }: { lang: Lang; onChange: (l: Lang) => void; accent: string }) {
   return (
-    <div className="flex items-center self-end rounded-full border bg-white p-0.5 sm:self-auto" role="group" aria-label="Language / Bahasa">
+    <div className="inline-flex items-center rounded-full border bg-white p-0.5 shadow-sm" role="group" aria-label="Language / Bahasa">
       {(["en", "id"] as const).map((l) => (
         <button
           key={l}
@@ -384,7 +388,7 @@ function LangToggle({ lang, onChange, accent }: { lang: Lang; onChange: (l: Lang
           onClick={() => onChange(l)}
           aria-pressed={lang === l}
           className={cn(
-            "min-h-6 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase transition-colors",
+            "min-h-7 rounded-full px-3 py-1 text-xs font-semibold uppercase transition-colors",
             lang === l ? "text-white" : "text-zinc-500 hover:text-zinc-800",
           )}
           style={lang === l ? { backgroundColor: accent } : undefined}
@@ -587,25 +591,34 @@ export default function LeadIntakeForm({ token }: { token: string }) {
 
   return (
     <main className="min-h-screen bg-zinc-100 pb-16">
-      {/* Header brand */}
+      {/* Header brand — Ronde 61: toggle bahasa di baris sendiri (kanan-atas, tidak lagi
+          menempel di kiri atas konten), blok brand terpusat, dan JUDUL "Form Request" jelas. */}
       <header className="border-b bg-white" style={{ borderTop: `4px solid ${accent}` }}>
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          <LangToggle lang={lang} onChange={setLang} accent={accent} />
-          <div className="flex flex-col gap-1 sm:items-center sm:text-center">
-            <div className="flex items-center gap-3 sm:flex-col sm:gap-2">
-              {brand?.logoUrl ? (
-                <img src={brand.logoUrl} alt={t.logoAlt(brandName)} className="h-10 w-auto rounded-md sm:h-14" />
-              ) : (
-                <span className="flex size-11 items-center justify-center rounded-xl text-base font-black text-white" style={{ backgroundColor: accent }} aria-hidden="true">
-                  {brand?.name?.charAt(0) ?? "F"}
-                </span>
-              )}
-              <div>
-                <h1 className="text-lg font-bold leading-tight text-zinc-900 sm:text-xl">{brand?.name}</h1>
-                {brand?.tagline ? <p className="text-xs text-zinc-500 sm:text-sm">{brand.tagline}</p> : null}
-              </div>
+        <div className="mx-auto max-w-3xl px-4 py-5 sm:py-6">
+          <div className="flex justify-end">
+            <LangToggle lang={lang} onChange={setLang} accent={accent} />
+          </div>
+          <div className="-mt-1 flex flex-col items-center gap-1.5 text-center sm:gap-2">
+            {brand?.logoUrl ? (
+              <img src={brand.logoUrl} alt={t.logoAlt(brandName)} className="h-11 w-auto rounded-md sm:h-14" />
+            ) : (
+              <span className="flex size-11 items-center justify-center rounded-xl text-base font-black text-white sm:size-12" style={{ backgroundColor: accent }} aria-hidden="true">
+                {brand?.name?.charAt(0) ?? "F"}
+              </span>
+            )}
+            <div>
+              <p className="text-base font-bold leading-tight text-zinc-900 sm:text-lg">{brand?.name}</p>
+              {brand?.tagline ? <p className="text-xs text-zinc-500 sm:text-sm">{brand.tagline}</p> : null}
             </div>
-            <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-600">{t.intro}</p>
+            {/* Ronde 61 — judul halaman yang diminta user: "Form Request" */}
+            <h1
+              className="mt-1.5 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-bold tracking-wide sm:text-base"
+              style={{ borderColor: `${accent}59`, backgroundColor: `${accent}0d`, color: accent }}
+            >
+              <ClipboardList className="size-4 shrink-0" aria-hidden="true" />
+              {t.formTitle}
+            </h1>
+            <p className="mt-1 max-w-xl text-sm leading-relaxed text-zinc-600">{t.intro}</p>
           </div>
         </div>
       </header>
