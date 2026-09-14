@@ -2347,3 +2347,20 @@ Stage Summary:
 - Form intake publik kini konsisten 100% dgn sistem: validasi email & WhatsApp memakai validator + komponen kode dial yang SAMA dengan form kontak internal (email & WA keduanya wajib, E.164 preview), alamat/kota/negara wajib (data surat lengkap), format input Brief Awal identik dengan Brief Builder internal (baris dinamis deliverables & referensi, label/placeholder sama, budget parsing sama).
 - Estimasi tanggal penawaran/disepakati tampil sebagai field otomatis yang tidak bisa diubah: "Pilih deadline terlebih dahulu" → deadline − 3 minggu, atau besok bila mepet — aturan identik di client (live) dan server (final).
 - DialCodeCombobox kini komponen bersama terpusat — satu sumber untuk form internal & publik.
+---
+Task ID: 59
+Agent: main (Z.ai Code)
+Task: Ronde 59 — user: "tambahkan tooltip agar user paham juga untuk kata kunci di per detail maksudnya apa dan di buat seperti pada form bref" — tooltip penjelasan untuk SETIAP field form intake publik (esp. Keyword/kata kunci) + dibuat konsisten juga di form brief internal.
+
+Work Log:
+- Pola yang dipakai: komponen `FieldHint` / `FieldHintInLabel` existing (Ronde 42, dipakai form Peluang/Tugas/Kontak) — ikon info kecil (button aksesibel, bisa di-Tab, aria-label "Penjelasan: …") + tooltip Radix muncul saat hover/focus/tap.
+- FORM INTAKE PUBLIK (lead-intake-form.tsx): prop `info` baru di komponen Field → FieldHintInLabel inline di samping label (sejajar asterisk wajib). 22 field diberi tooltip bahasa awam utk calon lead: Nama Perusahaan, Jenis Industri (menggantikan hint lama), Alamat (hint contoh dipertahankan), Kota, Negara, Website, Nama Lengkap, Email, WhatsApp (menggantikan hint), Judul Project (menyebut judul otomatis jadi nama brief), Target Deadline, "Dari mana tahu brand", Estimasi ("Tidak perlu diisi — dihitung otomatis…"), Audiens Sasaran, KEYWORD (kata kunci/topik utama, pisahkan koma — fokus permintaan user), Tujuan Kampanye, Deliverables & Referensi/Tautan (FieldHint di samping judul section baris dinamis, menjelaskan "satu baris = satu item" + tombol tambah), Budget Min/Max, Catatan Lampiran.
+- FORM BRIEF INTERNAL (brief-panel.tsx): 11 field dialog brief builder diberi FieldHint dengan redaksi yang KONSISTEN dgn form intake utk field yang memetakan sama (Audiens sasaran, Tujuan kampanye, Deliverables, Budget min/max, Referensi/tautan, Catatan lampiran) + field khusus internal (Judul brief, Layanan, Timeline pengerjaan, Pesan kunci). Label <label>/<p> dibungkus flex row dgn FieldHint (button DI LUAR elemen label — nesting interaktif valid).
+- QA agent-browser: form intake → 22 ikon "Penjelasan: …" render (snapshot), hover ikon Keyword → tooltip popup tampil; dialog brief internal (pipeline → peluang → tab Brief → Edit) → 11 ikon render, hover Deliverables → popup tampil; console hanya warning lama (DialogContent Description — pre-existing, bukan dari perubahan ini).
+- Catatan lingkungan: dev server mati antar-panggilan Bash (sandbox) → pola aman: start server + curl + agent-browser DALAM SATU panggilan.
+- lint 0 error; tsc 0 error; dev.log bersih.
+
+Stage Summary:
+- Setiap field form intake publik kini punya tooltip penjelasan (ikon info) sehingga calon lead paham maksud tiap isian — termasuk "Keyword" yang secara eksplisit diminta user.
+- Form brief internal diberi tooltip yang sama & redaksi konsisten — pengalaman mengisi brief publik dan internal kini seragam.
+- Komponen FieldHint terus jadi satu pola tooltip form di seluruh CRM (Peluang, Tugas, Kontak, Intake publik, Brief builder).

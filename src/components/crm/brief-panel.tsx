@@ -55,6 +55,8 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { api, briefsApi } from "@/lib/crm/api-client";
 import { BRIEF_STATUS_META, computeBriefCompleteness } from "@/lib/crm/brief";
+// Ronde 59 — tooltip penjelasan tiap field (konsisten dgn form intake publik)
+import { FieldHint } from "@/components/crm/field-hint";
 import { BRAND_SERVICES } from "@/lib/crm/constants";
 import { useCrmStore } from "@/lib/crm/store";
 import type { BriefDeliverable, BriefReference, BriefStatus, ClientBriefDTO } from "@/lib/crm/types";
@@ -725,7 +727,10 @@ export default function BriefPanel({
 
           <div className="crm-scroll -mx-1 flex-1 space-y-3.5 overflow-y-auto px-1 py-1">
             <div className="space-y-1">
-              <label htmlFor="brief-title" className="text-xs font-medium text-zinc-600">Judul brief</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="brief-title" className="text-xs font-medium text-zinc-600">Judul brief</label>
+                <FieldHint tip="Nama brief yang tampil di daftar brief, estimasi, dan quotation — buat spesifik (mis. Brief animasi company profile 2026)." />
+              </div>
               <Input
                 id="brief-title"
                 value={form.title}
@@ -735,7 +740,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-zinc-600">Layanan (pilih salah satu / lebih)</p>
+              <div className="flex items-center gap-1">
+                <p className="text-xs font-medium text-zinc-600">Layanan (pilih salah satu / lebih)</p>
+                <FieldHint tip="Layanan brand yang relevan dgn kebutuhan klien — brief disusun per layanan sebelum masuk estimasi." />
+              </div>
               {catalogLive ? (
                 <p className="text-[10px] text-zinc-400">Layanan dari katalog brand</p>
               ) : null}
@@ -772,7 +780,10 @@ export default function BriefPanel({
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <label htmlFor="brief-audience" className="text-xs font-medium text-zinc-600">Audiens sasaran</label>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="brief-audience" className="text-xs font-medium text-zinc-600">Audiens sasaran</label>
+                  <FieldHint tip="Siapa yang ingin dijangkau project ini (mis. HRD BUMN, usia 30-45) — membantu menentukan gaya & pesan konten." />
+                </div>
                 <Input
                   id="brief-audience"
                   value={form.targetAudience}
@@ -781,7 +792,10 @@ export default function BriefPanel({
                 />
               </div>
               <div className="space-y-1">
-                <p className="text-xs font-medium text-zinc-600">Timeline pengerjaan</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-xs font-medium text-zinc-600">Timeline pengerjaan</p>
+                  <FieldHint tip="Rencana periode pengerjaan (mulai → selesai) — dipakai produksi & penjadwalan project." />
+                </div>
                 <div className="flex items-center gap-1.5">
                   <Input
                     type="date"
@@ -801,7 +815,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="brief-objectives" className="text-xs font-medium text-zinc-600">Tujuan kampanye</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="brief-objectives" className="text-xs font-medium text-zinc-600">Tujuan kampanye</label>
+                <FieldHint tip="Apa yang ingin dicapai dan bagaimana mengukurnya — awareness, leads, launch produk, dsb." />
+              </div>
               <Textarea
                 id="brief-objectives"
                 rows={2}
@@ -812,7 +829,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="brief-messages" className="text-xs font-medium text-zinc-600">Pesan kunci</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="brief-messages" className="text-xs font-medium text-zinc-600">Pesan kunci</label>
+                <FieldHint tip="Pesan utama yang harus tersampaikan ke audiens lewat konten project ini." />
+              </div>
               <Textarea
                 id="brief-messages"
                 rows={2}
@@ -823,7 +843,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+              <div className="flex items-center gap-1">
+                <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+                <FieldHint tip="Rincian hasil kerja yang dijanjikan ke klien — satu baris = satu item, isi jumlahnya. Klik “Tambah deliverable” untuk menambah baris." />
+              </div>
               <div className="space-y-1.5">
                 {form.deliverables.map((d, i) => (
                   <div key={i} className="flex items-center gap-1.5">
@@ -877,7 +900,10 @@ export default function BriefPanel({
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <label htmlFor="brief-bmin" className="text-xs font-medium text-zinc-600">Budget minimum ({brief?.currency ?? "IDR"})</label>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="brief-bmin" className="text-xs font-medium text-zinc-600">Budget minimum ({brief?.currency ?? "IDR"})</label>
+                  <FieldHint tip="Anggaran paling rendah yang disiapkan klien — tulis angka saja (boleh tanpa titik/koma)." />
+                </div>
                 <Input
                   id="brief-bmin"
                   inputMode="numeric"
@@ -887,7 +913,10 @@ export default function BriefPanel({
                 />
               </div>
               <div className="space-y-1">
-                <label htmlFor="brief-bmax" className="text-xs font-medium text-zinc-600">Budget maksimum ({brief?.currency ?? "IDR"})</label>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="brief-bmax" className="text-xs font-medium text-zinc-600">Budget maksimum ({brief?.currency ?? "IDR"})</label>
+                  <FieldHint tip="Anggaran paling tinggi dari klien — rentang ini memandu penyusunan estimasi & quotation yang realistis." />
+                </div>
                 <Input
                   id="brief-bmax"
                   inputMode="numeric"
@@ -899,7 +928,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-zinc-600">Referensi / tautan</p>
+              <div className="flex items-center gap-1">
+                <p className="text-xs font-medium text-zinc-600">Referensi / tautan</p>
+                <FieldHint tip="Tautan contoh style/video/design yang disukai klien (YouTube, Behance, dsb.) — beri label agar konteksnya jelas." />
+              </div>
               <div className="space-y-1.5">
                 {form.references.map((r, i) => (
                   <div key={i} className="flex items-center gap-1.5">
@@ -951,7 +983,10 @@ export default function BriefPanel({
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="brief-attach" className="text-xs font-medium text-zinc-600">Catatan lampiran (opsional)</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="brief-attach" className="text-xs font-medium text-zinc-600">Catatan lampiran (opsional)</label>
+                <FieldHint tip="Catatan pendukung: file/logo yang dikirim klien, akses footage, link Drive, dsb." />
+              </div>
               <Input
                 id="brief-attach"
                 value={form.attachmentsNote}

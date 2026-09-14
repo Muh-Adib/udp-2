@@ -31,6 +31,8 @@ import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import IndustryCombobox from "@/components/crm/industry-combobox";
 import { DialCodeCombobox } from "@/components/crm/dial-code-combobox";
+// Ronde 59 — tooltip penjelasan tiap field (pola FieldHint Ronde 42, sama dgn form lain)
+import { FieldHint, FieldHintInLabel } from "@/components/crm/field-hint";
 import { api } from "@/lib/crm/api-client";
 import { normalizePhone } from "@/lib/crm/utils";
 import { emailError, nationalPhoneError } from "@/lib/crm/validate";
@@ -121,18 +123,23 @@ function SectionCard({ icon: Icon, title, subtitle, children, accent }: {
   );
 }
 
-function Field({ label, required, hint, error, children, htmlFor }: {
+function Field({ label, required, hint, error, info, children, htmlFor }: {
   label: string;
   required?: boolean;
   hint?: string;
   error?: string;
+  /** Tooltip penjelasan maksud field (ikon info di samping label). */
+  info?: string;
   children: React.ReactNode;
   htmlFor?: string;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={htmlFor} className="text-xs font-medium text-zinc-600">
-        {label} {required ? <span className="text-rose-600">*</span> : null}
+        <span className="inline-flex items-center gap-1">
+          {label} {required ? <span className="text-rose-600">*</span> : null}
+          {info ? <FieldHintInLabel tip={info} /> : null}
+        </span>
       </Label>
       {children}
       {hint && !error ? <p className="text-[11px] leading-snug text-zinc-500">{hint}</p> : null}
@@ -367,24 +374,24 @@ export default function LeadIntakeForm({ token }: { token: string }) {
         {/* 1 — Data perusahaan */}
         <SectionCard icon={Building2} title="Data Perusahaan" subtitle="Alamat dipakai untuk dokumen resmi (surat, kontrak, invoice)." accent={accent}>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Nama Perusahaan" required error={errors.companyName} htmlFor="int-company">
+            <Field label="Nama Perusahaan" required info="Nama resmi perusahaan/bisnis Anda — akan tampil di surat penawaran, kontrak, dan invoice." error={errors.companyName} htmlFor="int-company">
               <Input id="int-company" value={values.companyName} onChange={(e) => set("companyName")(e.target.value)} placeholder="PT Nusantara Kreatif" autoComplete="organization" aria-invalid={!!errors.companyName} />
             </Field>
-            <Field label="Jenis Industri" hint="Ketik untuk mencari — boleh tulis industri baru.">
+            <Field label="Jenis Industri" info="Bidang usaha perusahaan Anda (mis. F&B, Pendidikan, Properti) — membantu kami memahami konteks project. Ketik untuk mencari, boleh tulis industri baru.">
               <IndustryCombobox value={values.industry} onChange={set("industry")} suggestions={meta.industries} />
             </Field>
           </div>
-          <Field label="Alamat Perusahaan" required hint="Alamat lengkap kantor (jalan, nomor, kota/kabupaten, kode pos)." error={errors.companyAddress} htmlFor="int-address">
+          <Field label="Alamat Perusahaan" required info="Alamat kantor lengkap (jalan, nomor, kode pos) — dipakai pada alamat surat penawaran, kontrak, dan dokumen resmi lainnya." hint="Contoh: Jl. Sudirman No. 12, Jakarta Pusat, 10220" error={errors.companyAddress} htmlFor="int-address">
             <Textarea id="int-address" value={values.companyAddress} onChange={(e) => set("companyAddress")(e.target.value)} rows={2} placeholder="Jl. Sudirman No. 12, Jakarta Pusat, 10220" aria-invalid={!!errors.companyAddress} />
           </Field>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-            <Field label="Kota" required error={errors.companyCity} htmlFor="int-city">
+            <Field label="Kota" required info="Kota/kabupaten lokasi kantor utama perusahaan Anda." error={errors.companyCity} htmlFor="int-city">
               <Input id="int-city" value={values.companyCity} onChange={(e) => set("companyCity")(e.target.value)} placeholder="Jakarta" aria-invalid={!!errors.companyCity} />
             </Field>
-            <Field label="Negara" required error={errors.companyCountry} htmlFor="int-country">
+            <Field label="Negara" required info="Negara lokasi perusahaan — memengaruhi format mata uang & dokumen." error={errors.companyCountry} htmlFor="int-country">
               <Input id="int-country" value={values.companyCountry} onChange={(e) => set("companyCountry")(e.target.value)} placeholder="Indonesia" aria-invalid={!!errors.companyCountry} />
             </Field>
-            <Field label="Website" htmlFor="int-web">
+            <Field label="Website" info="Situs resmi perusahaan (jika ada) — membantu kami mengenal bisnis Anda lebih cepat.">
               <Input id="int-web" value={values.companyWebsite} onChange={(e) => set("companyWebsite")(e.target.value)} placeholder="perusahaan.co.id" />
             </Field>
           </div>
@@ -393,14 +400,14 @@ export default function LeadIntakeForm({ token }: { token: string }) {
         {/* 2 — Kontak: email + WA wajib & validasi sistem */}
         <SectionCard icon={User} title="Data Kontak Anda" subtitle="Email dan WhatsApp wajib diisi — kami menghubungi Anda via salah satunya." accent={accent}>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Nama Lengkap" required error={errors.fullName} htmlFor="int-name">
+            <Field label="Nama Lengkap" required info="Nama Anda — yang akan kami gunakan untuk menyapa saat menghubungi via email/WhatsApp." error={errors.fullName} htmlFor="int-name">
               <Input id="int-name" value={values.fullName} onChange={(e) => set("fullName")(e.target.value)} placeholder="Budi Santoso" autoComplete="name" aria-invalid={!!errors.fullName} />
             </Field>
-            <Field label="Email" required error={errors.email} htmlFor="int-email">
+            <Field label="Email" required info="Email aktif untuk menerima penawaran, dokumen project, dan tautan approval." error={errors.email} htmlFor="int-email">
               <Input id="int-email" type="email" value={values.email} onChange={(e) => set("email")(e.target.value)} placeholder="budi@perusahaan.co.id" autoComplete="email" aria-invalid={!!errors.email} />
             </Field>
           </div>
-          <Field label="WhatsApp" required error={errors.whatsapp} hint="Pilih kode negara, lalu tulis nomor langsung tanpa awalan 0 (cth. 81234567890).">
+          <Field label="WhatsApp" required info="Nomor WhatsApp aktif untuk komunikasi cepat — pilih kode negara, lalu tulis nomor langsung tanpa awalan 0 (cth. 81234567890)." error={errors.whatsapp}>
             <div className="flex gap-2">
               <div className="w-[122px] shrink-0 sm:w-[150px]">
                 <DialCodeCombobox value={values.whatsappDial} onSelect={set("whatsappDial")} />
@@ -421,14 +428,14 @@ export default function LeadIntakeForm({ token }: { token: string }) {
 
         {/* 3 — Detail project */}
         <SectionCard icon={Target} title="Detail Project" accent={accent}>
-          <Field label="Judul Project" required hint="Contoh: Animasi Company Profile 2 Menit" error={errors.projectTitle} htmlFor="int-title">
+          <Field label="Judul Project" required info="Judul singkat kebutuhan Anda — contoh: Animasi Company Profile 2 Menit. Judul ini otomatis menjadi nama brief awal Anda." error={errors.projectTitle} htmlFor="int-title">
             <Input id="int-title" value={values.projectTitle} onChange={(e) => set("projectTitle")(e.target.value)} placeholder="Tulis judul kebutuhan Anda" aria-invalid={!!errors.projectTitle} />
           </Field>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Target Deadline" required error={errors.deadline} htmlFor="int-deadline">
+            <Field label="Target Deadline" required info="Tanggal ideal project selesai/diserahkan — menjadi dasar rencana kerja & jadwal produksi kami." error={errors.deadline} htmlFor="int-deadline">
               <Input id="int-deadline" type="date" value={values.deadline} onChange={(e) => set("deadline")(e.target.value)} min={new Date().toISOString().slice(0, 10)} aria-invalid={!!errors.deadline} />
             </Field>
-            <Field label={`Dari mana Anda tahu ${brand?.name ?? "brand kami"}?`}>
+            <Field label={`Dari mana Anda tahu ${brand?.name ?? "brand kami"}?`} info="Sumber pertama kali Anda mengenal kami (mis. Instagram, Google, rekan bisnis) — membantu kami menilai kanal promosi yang efektif.">
               <Popover open={knowFromOpen} onOpenChange={setKnowFromOpen}>
                 <PopoverTrigger asChild>
                   <Button type="button" variant="outline" role="combobox" aria-expanded={knowFromOpen} aria-label="Sumber info brand" className={cn("w-full justify-between bg-white font-normal", !knowFromLabel && "text-zinc-500")}>
@@ -463,6 +470,7 @@ export default function LeadIntakeForm({ token }: { token: string }) {
           {/* Estimasi otomatis — field read-only, tidak bisa diubah */}
           <Field
             label="Estimasi Tanggal Penawaran/Disepakati"
+            info="Tidak perlu diisi — dihitung otomatis dari deadline: 3 minggu sebelum deadline; bila deadline mepet (kurang dari 3 minggu), maksimal besok."
             hint="Dihitung otomatis — 3 minggu sebelum deadline; bila deadline mepet, maksimal besok."
           >
             <Input
@@ -479,19 +487,22 @@ export default function LeadIntakeForm({ token }: { token: string }) {
         {/* 4 — Brief awal: format input = persis form brief internal (brief-panel) */}
         <SectionCard icon={ClipboardList} title="Brief Awal" subtitle="Semakin lengkap, semakin cepat penawaran kami tepat sasaran." accent={accent}>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label="Audiens Sasaran" htmlFor="int-audience">
+            <Field label="Audiens Sasaran" info="Siapa yang ingin dijangkau project ini (mis. HRD BUMN, usia 30-45) — membantu kami menentukan gaya & pesan konten." htmlFor="int-audience">
               <Input id="int-audience" value={values.targetAudience} onChange={(e) => set("targetAudience")(e.target.value)} placeholder="Mis. HRD BUMN, usia 30-45" />
             </Field>
-            <Field label="Keyword" htmlFor="int-keyword">
+            <Field label="Keyword" info="Kata kunci / topik utama yang terkait project — pisahkan dengan koma (mis. animasi, company profile, produk baru)." htmlFor="int-keyword">
               <Input id="int-keyword" value={values.keywords} onChange={(e) => set("keywords")(e.target.value)} placeholder="Kata kunci utama, pisahkan koma" />
             </Field>
           </div>
-          <Field label="Tujuan Kampanye" htmlFor="int-objective">
+          <Field label="Tujuan Kampanye" info="Apa yang ingin dicapai dari project ini dan bagaimana mengukurnya — awareness, leads, launch produk, dsb." htmlFor="int-objective">
             <Textarea id="int-objective" value={values.objectives} onChange={(e) => set("objectives")(e.target.value)} rows={2} placeholder="Tujuan & target terukur (awareness, leads, launch produk…)" />
           </Field>
           {/* Deliverables — baris dinamis (nama + jumlah), sama dgn brief internal */}
           <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+            <div className="flex items-center gap-1">
+              <p className="text-xs font-medium text-zinc-600">Deliverables</p>
+              <FieldHint tip="Rincian hasil kerja yang Anda harapkan — satu baris = satu item, isi jumlahnya (mis. Video animasi 60 detik × 2). Klik “Tambah deliverable” untuk menambah baris." />
+            </div>
             <div className="space-y-1.5">
               {deliverables.map((d, i) => (
                 <RowList key={i} ariaLabel={`Hapus deliverable ${i + 1}`} onRemove={() => setDeliverables((rows) => rows.filter((_, j) => j !== i))}>
@@ -521,16 +532,19 @@ export default function LeadIntakeForm({ token }: { token: string }) {
           </div>
           {/* Budget — label & placeholder sama dgn brief internal (digit diparse saat kirim) */}
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <Field label={`Budget Minimum (${currency})`} htmlFor="int-bmin">
+            <Field label={`Budget Minimum (${currency})`} info="Anggaran paling rendah yang Anda siapkan untuk project ini — tulis angka saja (boleh tanpa titik/koma)." htmlFor="int-bmin">
               <Input id="int-bmin" inputMode="numeric" value={values.budgetMin} onChange={(e) => set("budgetMin")(e.target.value)} placeholder="Mis. 50000000" />
             </Field>
-            <Field label={`Budget Maksimum (${currency})`} htmlFor="int-bmax">
+            <Field label={`Budget Maksimum (${currency})`} info="Anggaran paling tinggi yang Anda siapkan — rentang ini membantu kami menyusun penawaran yang realistis." htmlFor="int-bmax">
               <Input id="int-bmax" inputMode="numeric" value={values.budgetMax} onChange={(e) => set("budgetMax")(e.target.value)} placeholder="Mis. 80000000" />
             </Field>
           </div>
           {/* Referensi — baris dinamis (label + url), sama dgn brief internal */}
           <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-medium text-zinc-600">Referensi / Tautan</p>
+            <div className="flex items-center gap-1">
+              <p className="text-xs font-medium text-zinc-600">Referensi / Tautan</p>
+              <FieldHint tip="Tautan contoh style/video/design yang Anda suka (YouTube, Behance, dsb.) — beri label agar kami paham konteksnya. Klik “Tambah referensi” untuk menambah baris." />
+            </div>
             <div className="space-y-1.5">
               {references.map((r, i) => (
                 <RowList key={i} ariaLabel={`Hapus referensi ${i + 1}`} onRemove={() => setReferences((rows) => rows.filter((_, j) => j !== i))}>
@@ -557,7 +571,7 @@ export default function LeadIntakeForm({ token }: { token: string }) {
               </Button>
             </div>
           </div>
-          <Field label="Catatan Lampiran" htmlFor="int-notes">
+          <Field label="Catatan Lampiran" info="Hal pendukung lain yang perlu kami tahu: logo/file yang akan dikirim, akses footage, link Drive, dsb." htmlFor="int-notes">
             <Input id="int-notes" value={values.catatan} onChange={(e) => set("catatan")(e.target.value)} placeholder="Mis. Logo & footage tersedia di Drive — link dikirim via WA" />
           </Field>
         </SectionCard>
