@@ -91,6 +91,33 @@ export interface PdfCompany {
   address?: string | null;
 }
 
+/** Ronde 60 — salinan Brief Awal (lampiran email otomatis form intake publik). */
+export interface PdfBrief {
+  code?: string | null;
+  title?: string | null;
+  submittedAt?: Date | string | null;
+  // Info klien
+  contactName?: string | null;
+  contactEmail?: string | null;
+  contactWhatsapp?: string | null;
+  companyCity?: string | null;
+  companyCountry?: string | null;
+  companyIndustry?: string | null;
+  // Detail project
+  targetDeadline?: Date | string | null;
+  leadSource?: string | null;
+  // Isi brief
+  targetAudience?: string | null;
+  keyMessages?: string | null;
+  objectives?: string | null;
+  deliverables?: string | Array<{ name?: string; qty?: number; notes?: string }>;
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+  currency?: string | null;
+  references?: string | Array<{ label?: string; url?: string }>;
+  attachmentsNote?: string | null;
+}
+
 // ============ Util ============
 
 const A4_W = 210;
@@ -805,8 +832,182 @@ export function buildInvoicePdf(inv: PdfInvoice, brand: PdfBrand, company: PdfCo
 /** Deskripsi jatuh tempo termin (EN — dokumen Inggris). Ronde 57: pindah ke payment-terms.ts (dipakai bersama quotation & invoice). */
 export { describeDue };
 
+// ============ Ronde 60 — INITIAL BRIEF PDF (lampiran email intake publik) ============
+
+/**
+ * Salinan "Brief Awal" sesuai isi form intake publik — BAHASA INGGRIS
+ * (konvensi dokumen resmi, konsisten quotation/invoice) dgn kop surat brand.
+ * Dipanggil API intake setelah transaksi tersimpan; dikirim sebagai lampiran
+ * email ke calon lead bersama salinan isi form + link portal.
+ */
+export function buildBriefPdf(b: PdfBrief, brand: PdfBrand, company: PdfCompany): Uint8Array {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const accent = brandColor(brand.color);
+  const ctx: PageCtx = { doc, y: 0, accent };
+  const cur = b.currency ?? "IDR";
+
+  drawHeader(ctx, brand, "quotation");
+
+  // Judul dokumen + kotak kode/tanggal
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(21);
+  doc.setTextColor(25, 25, 25);
+  doc.text("INITIAL PROJECT BRIEF", MARGIN, ctx.y + 4);
+  const boxW = 88;
+  const bx = A4_W - MARGIN - boxW;
+  doc.setFontSize(9);
+  doc.setFillColor(...accent);
+  doc.rect(bx, ctx.y - 5, boxW / 2, 7, "F");
+  doc.rect(bx + boxW / 2, ctx.y - 5, boxW / 2, 7, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.text("Ref. Code", bx + boxW / 4, ctx.y, { align: "center" });
+  doc.text("Date", bx + (boxW * 3) / 4, ctx.y, { align: "center" });
+  doc.setTextColor(30, 30, 30);
+  doc.setFont("helvetica", "normal");
+  doc.rect(bx, ctx.y + 2, boxW / 2, 7);
+  doc.rect(bx + boxW / 2, ctx.y + 2, boxW / 2, 7);
+  doc.text(latin(b.code ?? "-"), bx + boxW / 4, ctx.y + 6.4, { align: "center" });
+  doc.text(fmtDate(b.submittedAt), bx + (boxW * 3) / 4, ctx.y + 6.4, { align: "center" });
+  ctx.y += 16;
+
+  // Blok klien (To / Attn / Contact / dsb.) — gaya quotation
+  const clientLines: Array<[string, string]> = [["Client", company.name ?? "-"]];
+  if (company.address) clientLines.push(["Address", company.address]);
+  if (b.contactName) clientLines.push(["Attn.", b.contactName]);
+  if (b.contactEmail) clientLines.push(["Email", b.contactEmail]);
+  if (b.contactWhatsapp) clientLines.push(["WhatsApp", `+${b.contactWhatsapp}`]);
+  if (b.companyIndustry) clientLines.push(["Industry", b.companyIndustry]);
+  const place = [b.companyCity, b.companyCountry].filter(Boolean).join(", ");
+  if (place) clientLines.push(["Location", place]);
+  for (const [label, value] of clientLines) {
+    ensureSpace(ctx, 6);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.text(latin(label), MARGIN, ctx.y);
+    doc.setFont("helvetica", "normal");
+    const lines = doc.splitTextToSize(latin(value), A4_W - MARGIN * 2 - 26) as string[];
+    lines.forEach((line, i) => doc.text(i === 0 ? `:  ${line}` : line, MARGIN + 26, ctx.y + i * 4.4));
+    ctx.y += Math.max(6, lines.length * 4.4 + 1.5);
+  }
+  ctx.y += 2;
+
+  // Paragraf pengantar
+  textBlock(ctx, `This document is an automatic summary of the project request "${b.title ?? "-"}" submitted via our online intake form. It serves as the initial brief for further discussion and quotation.`, 9, "normal", [45, 45, 45]);
+  ctx.y += 2;
+
+  // Info project: judul, deadline, sumber
+  const metaLines: Array<[string, string]> = [
+    ["Project Title", b.title ?? "-"],
+    ["Target Deadline", fmtDate(b.targetDeadline)],
+  ];
+  if (b.leadSource) metaLines.push(["Source", b.leadSource]);
+  for (const [label, value] of metaLines) {
+    ensureSpace(ctx, 6);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(latin(label), MARGIN, ctx.y);
+    doc.setFont("helvetica", "normal");
+    const lines = doc.splitTextToSize(latin(value), A4_W - MARGIN * 2 - 40) as string[];
+    lines.forEach((line, i) => doc.text(i === 0 ? `:  ${line}` : line, MARGIN + 40, ctx.y + i * 4.4));
+    ctx.y += Math.max(5.6, lines.length * 4.2 + 1.2);
+  }
+  ctx.y += 2;
+
+  // Bagian isi brief — tiap bagian header aksen kecil
+  const section = (title: string, body: string | null | undefined): void => {
+    if (!body || !body.trim()) return;
+    ensureSpace(ctx, 14);
+    doc.setFillColor(...accent);
+    doc.rect(MARGIN, ctx.y - 4.4, 42, 5.6, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.8);
+    doc.setTextColor(255, 255, 255);
+    doc.text(title, MARGIN + 21, ctx.y - 0.4, { align: "center" });
+    ctx.y += 5.2;
+    textBlock(ctx, body, 9, "normal", [40, 40, 40]);
+    ctx.y += 2.5;
+  };
+
+  section("TARGET AUDIENCE", b.targetAudience);
+  section("KEY MESSAGE", b.keyMessages);
+  section("PROJECT GOALS", b.objectives);
+
+  // Deliverables — tabel
+  const delivs = parseItems<{ name?: string; qty?: number; notes?: string }>(b.deliverables);
+  if (delivs.length > 0) {
+    ensureSpace(ctx, 14);
+    doc.setFillColor(...accent);
+    doc.rect(MARGIN, ctx.y - 4.4, 42, 5.6, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.8);
+    doc.setTextColor(255, 255, 255);
+    doc.text("DELIVERABLES", MARGIN + 21, ctx.y - 0.4, { align: "center" });
+    ctx.y += 5.2;
+    itemsTable(
+      ctx,
+      [
+        { label: "No.", width: 14, align: "center" },
+        { label: "Deliverable", width: 132 },
+        { label: "Qty", width: 44, align: "center" },
+      ],
+      delivs.map((d, i) => [String(i + 1), latin(d.name ?? ""), String(Number(d.qty) || 1)]),
+      accent,
+    );
+    ctx.y += 3.5;
+  }
+
+  // Budget range
+  if (b.budgetMin != null || b.budgetMax != null) {
+    ensureSpace(ctx, 12);
+    doc.setFillColor(...accent);
+    doc.rect(MARGIN, ctx.y - 4.4, 42, 5.6, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.8);
+    doc.setTextColor(255, 255, 255);
+    doc.text("BUDGET RANGE", MARGIN + 21, ctx.y - 0.4, { align: "center" });
+    ctx.y += 5.2;
+    const range = `${b.budgetMin != null ? moneyDoc(b.budgetMin, cur) : "-"}  -  ${b.budgetMax != null ? moneyDoc(b.budgetMax, cur) : "-"}`;
+    textBlock(ctx, range, 9.5, "bold", [25, 25, 25]);
+    ctx.y += 2.5;
+  }
+
+  // Referensi
+  const refs = parseItems<{ label?: string; url?: string }>(b.references);
+  if (refs.length > 0) {
+    ensureSpace(ctx, 14);
+    doc.setFillColor(...accent);
+    doc.rect(MARGIN, ctx.y - 4.4, 42, 5.6, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.8);
+    doc.setTextColor(255, 255, 255);
+    doc.text("REFERENCES", MARGIN + 21, ctx.y - 0.4, { align: "center" });
+    ctx.y += 5.2;
+    for (const r of refs) {
+      ensureSpace(ctx, 5);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(40, 40, 40);
+      const line = `-  ${r.label ? `${latin(r.label)}: ` : ""}${latin(r.url ?? "")}`;
+      const lines = doc.splitTextToSize(line, A4_W - MARGIN * 2) as string[];
+      lines.forEach((ln, i) => doc.text(ln, MARGIN, ctx.y + i * 4.2));
+      ctx.y += lines.length * 4.2 + 1.2;
+    }
+    ctx.y += 2;
+  }
+
+  section("ATTACHMENT NOTES", b.attachmentsNote);
+
+  // Penutup
+  ctx.y += 3;
+  textBlock(ctx, "Our team will review this brief and get back to you shortly with a proposal. Should anything above look incorrect, please let us know.", 8.5, "italic", [110, 110, 110]);
+
+  drawFooter(ctx, brand, "quotation");
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
 /** Nama file PDF yang aman. */
-export function pdfFileName(kind: "Quotation" | "Invoice", number_: string): string {
+export function pdfFileName(kind: "Quotation" | "Invoice" | "Brief", number_: string): string {
   const safe = number_.replace(/[^\w.-]+/g, "-").slice(0, 80);
   return `${kind}-${safe}.pdf`;
 }

@@ -479,7 +479,7 @@ export default function BriefPanel({
           <div className="space-y-1">
             <p className="text-sm font-semibold text-zinc-800">Belum ada brief terstruktur</p>
             <p className="max-w-md text-xs leading-relaxed text-zinc-500">
-              Susun brief per layanan sebelum estimasi: tujuan kampanye, audiens, deliverables, timeline, dan rentang
+              Susun brief per layanan sebelum estimasi: tujuan project, audiens, deliverables, timeline, dan rentang
               budget. Brief lengkap mempercepat penyusunan estimasi &amp; quotation.
             </p>
           </div>
@@ -614,7 +614,7 @@ export default function BriefPanel({
           )}
         </SectionCard>
 
-        <SectionCard icon={Target} label="Tujuan Kampanye">
+        <SectionCard icon={Target} label="Tujuan Project">
           <SectionText value={brief.objectives} empty="Jelaskan tujuan & target terukur" />
         </SectionCard>
 
@@ -816,7 +816,7 @@ export default function BriefPanel({
 
             <div className="space-y-1">
               <div className="flex items-center gap-1">
-                <label htmlFor="brief-objectives" className="text-xs font-medium text-zinc-600">Tujuan kampanye</label>
+                <label htmlFor="brief-objectives" className="text-xs font-medium text-zinc-600">Tujuan project</label>
                 <FieldHint tip="Apa yang ingin dicapai dan bagaimana mengukurnya — awareness, leads, launch produk, dsb." />
               </div>
               <Textarea
@@ -831,7 +831,7 @@ export default function BriefPanel({
             <div className="space-y-1">
               <div className="flex items-center gap-1">
                 <label htmlFor="brief-messages" className="text-xs font-medium text-zinc-600">Pesan kunci</label>
-                <FieldHint tip="Pesan utama yang harus tersampaikan ke audiens lewat konten project ini." />
+                <FieldHint tip="Pesan utama yang harus tersampaikan ke audiens lewat project ini — mis. pengenalan produk, sejarah perusahaan, dll." />
               </div>
               <Textarea
                 id="brief-messages"

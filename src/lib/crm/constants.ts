@@ -213,17 +213,43 @@ export const INDUSTRY_SUGGESTIONS: string[] = [
 // ============ Ronde 57 — "Dari mana Anda tahu [brand]?" (form intake publik) ============
 // Nilai tersimpan ke opportunity.leadSource (field bebas) agar muncul di tabel pipeline
 // & statistik sumber; key slug-angan, label tampil di form. "other" menampung teks bebas.
-export const KNOW_FROM_SUGGESTIONS: { key: string; label: string }[] = [
-  { key: "instagram", label: "Instagram" },
-  { key: "google", label: "Google / Pencarian" },
-  { key: "website", label: "Website Brand" },
-  { key: "referral", label: "Rekomendasi Kenalan / Klien" },
-  { key: "linkedin", label: "LinkedIn" },
-  { key: "tiktok", label: "TikTok" },
-  { key: "facebook", label: "Facebook" },
-  { key: "event", label: "Pameran / Event / Seminar" },
-  { key: "email", label: "Email / Newsletter" },
-  { key: "whatsapp", label: "WhatsApp" },
-  { key: "cold_outreach", label: "Tim Kami Menghubungi Anda" },
-  { key: "other", label: "Lainnya (tulis sendiri)" },
+// Ronde 60 — labelEn: label bahasa Inggris (multi-bahasa form intake, EN diprioritaskan).
+export const KNOW_FROM_SUGGESTIONS: { key: string; label: string; labelEn: string }[] = [
+  { key: "instagram", label: "Instagram", labelEn: "Instagram" },
+  { key: "google", label: "Google / Pencarian", labelEn: "Google / Search" },
+  { key: "website", label: "Website Brand", labelEn: "Brand Website" },
+  { key: "referral", label: "Rekomendasi Kenalan / Klien", labelEn: "Referral / Recommendation" },
+  { key: "linkedin", label: "LinkedIn", labelEn: "LinkedIn" },
+  { key: "tiktok", label: "TikTok", labelEn: "TikTok" },
+  { key: "facebook", label: "Facebook", labelEn: "Facebook" },
+  { key: "event", label: "Pameran / Event / Seminar", labelEn: "Exhibition / Event / Seminar" },
+  { key: "email", label: "Email / Newsletter", labelEn: "Email / Newsletter" },
+  { key: "whatsapp", label: "WhatsApp", labelEn: "WhatsApp" },
+  { key: "cold_outreach", label: "Tim Kami Menghubungi Anda", labelEn: "Our Team Reached Out to You" },
+  { key: "other", label: "Lainnya (tulis sendiri)", labelEn: "Other (write your own)" },
+];
+
+// ============ Ronde 60 — industri bilingual (form intake publik mode EN) ============
+// Pasangan ID↔EN utk 20 saran konstanta; nilai DB lain (bebas teks) tampil apa adanya.
+export const INDUSTRY_SUGGESTIONS_PAIRS: { id: string; en: string }[] = [
+  { id: "Perbankan & Jasa Keuangan", en: "Banking & Financial Services" },
+  { id: "Asuransi", en: "Insurance" },
+  { id: "Manufaktur", en: "Manufacturing" },
+  { id: "Retail & E-Commerce", en: "Retail & E-Commerce" },
+  { id: "Teknologi Informasi", en: "Information Technology" },
+  { id: "Media & Kreatif", en: "Media & Creative" },
+  { id: "Pendidikan", en: "Education" },
+  { id: "Kesehatan", en: "Healthcare" },
+  { id: "Properti", en: "Real Estate" },
+  { id: "Konstruksi", en: "Construction" },
+  { id: "Pemerintahan / BUMN", en: "Government / State-Owned" },
+  { id: "Transportasi & Logistik", en: "Transportation & Logistics" },
+  { id: "Pariwisata & Perhotelan", en: "Tourism & Hospitality" },
+  { id: "F&B / Restoran", en: "F&B / Restaurant" },
+  { id: "Energi & Pertambangan", en: "Energy & Mining" },
+  { id: "Pertanian", en: "Agriculture" },
+  { id: "Olahraga & Hiburan", en: "Sports & Entertainment" },
+  { id: "Organisasi Non-Profit", en: "Non-Profit Organization" },
+  { id: "Konsultan", en: "Consulting" },
+  { id: "Lainnya", en: "Others" },
 ];

@@ -1,8 +1,12 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, readBody } from "@/lib/crm/server";
-import { extractDomain, normalizeEmail, normalizePhone } from "@/lib/crm/utils";
+import { extractDomain, normalizeEmail, normalizePhone, toTitleCase } from "@/lib/crm/utils";
 import { INDUSTRY_SUGGESTIONS, KNOW_FROM_SUGGESTIONS } from "@/lib/crm/constants";
+import { buildBriefPdf, pdfFileName } from "@/lib/crm/doc-pdf";
+import {
+  baseUrlFromReq, isDelivered, pdfAttachment, randomToken, sendDocumentEmail,
+} from "@/lib/crm/doc-send";
 
 /**
  * Ronde 57 — FORM INTAKE PUBLIK (tanpa login) untuk shareable link per brand.
@@ -16,6 +20,9 @@ import { INDUSTRY_SUGGESTIONS, KNOW_FROM_SUGGESTIONS } from "@/lib/crm/constants
  *  4. Draft ClientBrief — judul = judul project, tanpa layanan, timelineEnd = deadline − 1 hari,
  *     objective/audience/keywords/deliverables/budget/referensi/catatan dari form.
  *  5. Interaction timeline channel "website" + hitung submissionCount link + audit log.
+ *  6. RONDE 60 — EMAIL OTOMATIS ke pengirim via kanal email brand terkait:
+ *     salinan isi form + link portal klien (token auto dibuat bila belum ada)
+ *     + lampiran PDF "Initial Brief" sesuai isi form (EN, kop brand).
  */
 
 /** Rate limit sederhana in-memory per token (10 submit / 5 menit) — anti spam dasar. */
@@ -188,7 +195,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!companyCity) return fail("Kota wajib diisi");
   const companyCountry = String(body.companyCountry ?? "").trim();
   if (!companyCountry) return fail("Negara wajib diisi");
-  const companyIndustry = String(body.industry ?? "").trim() || null;
+  // Ronde 60 — kategori industri dinormalisasi Title Case (konsistensi data).
+  const companyIndustry = toTitleCase(String(body.industry ?? "")) || null;
   const companyWebsite = String(body.companyWebsite ?? "").trim() || null;
 
   const title = String(body.projectTitle ?? "").trim();
@@ -198,7 +206,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const deadline = new Date(deadlineRaw);
   if (Number.isNaN(deadline.getTime())) return fail("Format deadline tidak valid");
 
+  // Ronde 60 — "Dari mana Anda tahu kami" WAJIB dipilih (permintaan user).
   const knowFrom = String(body.knowFrom ?? "").trim() || null; // → opportunity.leadSource
+  if (!knowFrom) return fail("Sumber informasi (dari mana Anda tahu kami) wajib dipilih");
+  const lang = String(body.lang ?? "en").trim() === "id" ? "id" : "en"; // bahasa email tindak lanjut
 
   // ===== Aturan estimasi close =====
   // Deadline ≥ 3 minggu lagi → expected close = deadline − 21 hari.
@@ -213,7 +224,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   // ===== Brief fields =====
   const objectives = String(body.objectives ?? "").trim() || null;
   const targetAudience = String(body.targetAudience ?? "").trim() || null;
-  const keywords = String(body.keywords ?? "").trim() || null;
+  // Ronde 60 — field "Pesan Utama" form intake = brief.keyMessages (pesan utama yang
+  // harus tersampaikan ke audiens — BERBEDA dari keyword kata-kunci topik di brief internal).
+  const keyMessages = String(body.keyMessages ?? body.keywords ?? "").trim() || null;
   const deliverables = parseDeliverables(body);
   const budgetMin = parseBudget(body.budgetMin);
   const budgetMax = parseBudget(body.budgetMax);
@@ -314,7 +327,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           serviceTypes: "[]", // layanan disembunyikan di form intake
           objectives,
           targetAudience,
-          keywords,
+          keyMessages,
           deliverables: JSON.stringify(deliverables),
           timelineStart: now, // timeline pengerjaan diatur tim produksi — start = hari ini
           timelineEnd,
@@ -370,11 +383,82 @@ export async function POST(req: NextRequest, { params }: Params) {
       },
     }).catch(() => undefined);
 
+    // ===== 6. RONDE 60 — email otomatis: salinan form + link portal + PDF brief =====
+    // Best-effort: data lead SUDAH tersimpan; kegagalan SMTP hanya dicatat di respons.
+    let emailStatus = "skipped";
+    let emailNote: string | null = null;
+    try {
+      const briefPdf = buildBriefPdf(
+        {
+          code: result.brief.code,
+          title: result.brief.title,
+          submittedAt: result.brief.submittedAt,
+          contactName: result.contact.fullName,
+          contactEmail: result.contact.email,
+          contactWhatsapp: result.contact.whatsapp,
+          companyCity: result.company.city,
+          companyCountry: result.company.country,
+          companyIndustry: result.company.industry,
+          targetDeadline: deadline,
+          leadSource: knowFrom,
+          targetAudience,
+          keyMessages,
+          objectives,
+          deliverables: JSON.stringify(deliverables),
+          budgetMin,
+          budgetMax,
+          currency: brand.primaryCurrency,
+          references: JSON.stringify(references),
+          attachmentsNote: catatan,
+        },
+        brand,
+        { name: result.company.name, address: result.company.address },
+      );
+      const sent = await sendIntakeCopyEmail({
+        req,
+        brand: { id: brand.id, name: brand.name },
+        lang,
+        email,
+        fullName,
+        companyName: result.company.name,
+        companyAddress: result.company.address ?? companyAddress,
+        companyCity: result.company.city ?? companyCity,
+        companyCountry: result.company.country ?? companyCountry,
+        companyIndustry: result.company.industry,
+        companyId: result.company.id,
+        contactId: result.contact.id,
+        opportunityId: result.opportunity.id,
+        opportunityTitle: result.opportunity.title,
+        deadline,
+        knowFrom,
+        targetAudience,
+        keyMessages,
+        objectives,
+        deliverables,
+        budgetMin,
+        budgetMax,
+        currency: brand.primaryCurrency,
+        references,
+        catatan,
+        briefCode: result.brief.code,
+        briefPdf,
+      });
+      emailStatus = sent.status;
+      emailNote = sent.portalLink;
+      if (!isDelivered(emailStatus)) {
+        console.warn(`[public-intake] email salinan gagal terkirim: ${emailStatus} ${emailNote ?? ""}`);
+      }
+    } catch (emailErr) {
+      console.error("[public-intake] email salinan error:", emailErr);
+      emailStatus = "failed";
+    }
+
     return ok({
       submitted: true,
       opportunity: { id: result.opportunity.id, title: result.opportunity.title },
       briefCode: result.brief.code,
       expectedCloseDate: result.opportunity.expectedCloseDate,
+      emailStatus,
     }, 201);
   } catch (err) {
     if (err instanceof Error && err.message === "BRIEF_CODE_FAIL") {
@@ -383,4 +467,128 @@ export async function POST(req: NextRequest, { params }: Params) {
     console.error("[public-intake] gagal:", err);
     return fail("Terjadi kesalahan saat memproses formulir — coba lagi", 500);
   }
+}
+
+// ============ Ronde 60 — email salinan form + link portal + PDF brief ============
+
+/**
+ * Susun & kirim email tindak lanjut ke pengirim form (best-effort — kegagalan SMTP
+ * TIDAK menggagalkan penyimpanan data). Isi: salinan isi form, link portal klien
+ * (token dibuat otomatis bila perusahaan belum punya), lampiran PDF Initial Brief.
+ * Bahasa email mengikuti bahasa form (EN default — diprioritaskan user).
+ */
+async function sendIntakeCopyEmail(opts: {
+  req: NextRequest;
+  brand: { id: string; name: string };
+  lang: "en" | "id";
+  email: string;
+  fullName: string;
+  companyName: string;
+  companyAddress: string;
+  companyCity: string;
+  companyCountry: string;
+  companyIndustry: string | null;
+  companyId: string;
+  contactId: string;
+  opportunityId: string;
+  opportunityTitle: string;
+  deadline: Date;
+  knowFrom: string;
+  targetAudience: string | null;
+  keyMessages: string | null;
+  objectives: string | null;
+  deliverables: DelivInput[];
+  budgetMin: number | null;
+  budgetMax: number | null;
+  currency: string;
+  references: RefInput[];
+  catatan: string | null;
+  briefCode: string;
+  briefPdf: Uint8Array;
+}): Promise<{ status: string; portalLink: string }> {
+  const { req, brand, lang } = opts;
+  const t = lang === "id";
+
+  // Portal token: pakai yang aktif, atau buat baru otomatis (pola email-link project).
+  let portal = await db.clientPortalToken.findFirst({
+    where: { companyId: opts.companyId, active: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!portal) {
+    portal = await db.clientPortalToken.create({
+      data: {
+        token: randomToken(24),
+        companyId: opts.companyId,
+        label: `${opts.fullName} — ${opts.companyName}`.slice(0, 80),
+        createdByName: `Formulir Intake (${brand.name})`,
+      },
+    });
+  }
+  const portalLink = `${baseUrlFromReq(req)}/?portal=${portal.token}`;
+
+  const rows: Array<[string, string]> = [
+    [t ? "Nama Perusahaan" : "Company", opts.companyName],
+    [t ? "Alamat" : "Address", [opts.companyAddress, opts.companyCity, opts.companyCountry].filter(Boolean).join(", ")],
+    [t ? "Jenis Industri" : "Industry", opts.companyIndustry ?? "-"],
+    [t ? "Nama Lengkap" : "Full Name", opts.fullName],
+    [t ? "Email" : "Email", opts.email],
+    [t ? "Judul Project" : "Project Title", opts.opportunityTitle],
+    [t ? "Target Deadline" : "Target Deadline", opts.deadline.toISOString().slice(0, 10)],
+    [t ? "Dari mana tahu kami" : "How did you hear about us", opts.knowFrom],
+    [t ? "Audiens Sasaran" : "Target Audience", opts.targetAudience ?? "-"],
+    [t ? "Pesan Utama" : "Key Message", opts.keyMessages ?? "-"],
+    [t ? "Tujuan Project" : "Project Goals", opts.objectives ?? "-"],
+    [t ? "Deliverables" : "Deliverables", opts.deliverables.length ? opts.deliverables.map((d) => `${d.name} ×${d.qty}`).join(", ") : "-"],
+    [t ? "Budget" : "Budget", `${opts.budgetMin ?? "?"} – ${opts.budgetMax ?? "?"} ${opts.currency}`],
+    [t ? "Referensi" : "References", opts.references.length ? opts.references.map((r) => (r.label ? `${r.label}: ${r.url}` : r.url)).join(", ") : "-"],
+    [t ? "Catatan Lampiran" : "Attachment Notes", opts.catatan ?? "-"],
+  ];
+
+  const subject = t
+    ? `[${brand.name}] Salinan request Anda — ${opts.opportunityTitle}`
+    : `[${brand.name}] Copy of your request — ${opts.opportunityTitle}`;
+
+  const content = [
+    t ? `Halo ${opts.fullName},` : `Dear ${opts.fullName},`,
+    "",
+    t
+      ? `Terima kasih telah mengisi formulir request di ${brand.name}. Berikut salinan isi formulir yang Anda kirim:`
+      : `Thank you for submitting your project request at ${brand.name}. Here is a copy of the details you sent:`,
+    "",
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+    "",
+    t
+      ? `Dokumen salinan Brief Awal (${opts.briefCode}) terlampir dalam format PDF.`
+      : `The attached PDF (${opts.briefCode}) is a copy of your Initial Brief.`,
+    "",
+    t ? "Pantau progres project Anda kapan saja melalui portal klien:" : "You can follow your project progress anytime via your client portal:",
+    portalLink,
+    "",
+    t
+      ? "Tim kami akan segera menindaklanjuti Anda melalui email/WhatsApp."
+      : "Our team will get back to you shortly via email/WhatsApp.",
+    "",
+    t ? "Salam," : "Best regards,",
+    brand.name,
+  ].join("\n");
+
+  const send = await sendDocumentEmail({
+    req,
+    actorName: `Formulir Intake (${brand.name})`,
+    actorRole: "system",
+    brandId: brand.id,
+    recipientEmail: opts.email,
+    recipientName: opts.fullName,
+    subject,
+    content,
+    attachments: [pdfAttachment(pdfFileName("Brief", opts.briefCode), opts.briefPdf)],
+    interaction: {
+      opportunityId: opts.opportunityId,
+      contactId: opts.contactId,
+      companyId: opts.companyId,
+    },
+    entityLabel: `Salinan form intake ${opts.briefCode} → ${opts.email}`,
+    auditMetadata: `intake auto email (${lang}) + portal ${portal.token.slice(0, 8)}…`,
+  });
+  return { status: send.status, portalLink };
 }

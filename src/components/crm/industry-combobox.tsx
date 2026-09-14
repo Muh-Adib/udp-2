@@ -6,6 +6,7 @@
  * distinct Company.industry). Juga menerima prop `suggestions` (bila penelepon sudah
  * punya daftarnya — mis. form intake publik yang dapat daftar dari endpoint publik).
  * Filter case-insensitive + boleh teks bebas (nilai yang tidak ada di daftar tetap valid).
+ * Ronde 60 — teks bebas kini dinormalisasi Title Case (kategori industri konsisten).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -17,6 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/crm/api-client";
 import { INDUSTRY_SUGGESTIONS } from "@/lib/crm/constants";
+import { toTitleCase } from "@/lib/crm/utils";
 
 interface IndustryComboboxProps {
   value: string;
@@ -101,10 +103,10 @@ export default function IndustryCombobox({
               <CommandGroup heading="Tulis sendiri">
                 <CommandItem
                   value={`__free__${query}`}
-                  onSelect={() => { onChange(query.trim()); setOpen(false); setQuery(""); }}
+                  onSelect={() => { onChange(toTitleCase(query)); setOpen(false); setQuery(""); }}
                 >
                   <Check className={cn("mr-2 size-4", value.toLowerCase() === query.trim().toLowerCase() ? "opacity-100" : "opacity-0")} aria-hidden="true" />
-                  Gunakan &ldquo;{query.trim()}&rdquo;
+                  Gunakan &ldquo;{toTitleCase(query)}&rdquo;
                 </CommandItem>
               </CommandGroup>
             )}

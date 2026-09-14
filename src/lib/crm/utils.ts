@@ -123,6 +123,28 @@ export function matchableIdentity(input: MatchInput) {
 
 // ============ Format helpers ============
 
+/**
+ * Ronde 60 — normalisasi "Title Text" untuk kategori Industri (permintaan user:
+ * autocomplete industri dinormalisasi jadi Title Case).
+ * "pariwisata & perhotelan" → "Pariwisata & Perhotelan", "f&b" → "F&B",
+ * "Pemerintahan / bumn" → "Pemerintahan / Bumn" (akronim ALL-CAPS ≥2 huruf dipertahankan).
+ */
+export function toTitleCase(input: string): string {
+  const s = String(input ?? "").trim().replace(/\s+/g, " ");
+  if (!s) return "";
+  return s
+    .split(" ")
+    .map((word) => {
+      const letters = word.replace(/[^a-zA-Z]/g, "");
+      // Kata yang sudah ALL-CAPS (≥2 huruf) dipertahankan (BUMN, HRD, KPI, AI, TV)
+      if (letters.length >= 2 && letters === letters.toUpperCase()) return word;
+      return word.replace(/[a-zA-Z0-9]+/g, (run) =>
+        run.charAt(0).toUpperCase() + run.slice(1).toLowerCase()
+      );
+    })
+    .join(" ");
+}
+
 export function formatCurrency(value?: number | null, currency = "IDR"): string {
   if (value === null || value === undefined) return "-";
   if (currency === "IDR") {
@@ -139,16 +161,17 @@ export function formatCurrencyFull(value?: number | null, currency = "IDR"): str
   return `${currency} ${value.toLocaleString("en-US")}`;
 }
 
-export function formatDate(d?: string | Date | null): string {
+/** Format tanggal — locale opsional (Ronde 60: portal bilingual, default id-ID). */
+export function formatDate(d?: string | Date | null, locale = "id-ID"): string {
   if (!d) return "-";
   const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+  return date.toLocaleDateString(locale, { day: "2-digit", month: "short", year: "numeric" });
 }
 
-export function formatDateTime(d?: string | Date | null): string {
+export function formatDateTime(d?: string | Date | null, locale = "id-ID"): string {
   if (!d) return "-";
   const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString(locale, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 export function timeAgo(d?: string | Date | null): string {

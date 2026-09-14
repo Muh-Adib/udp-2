@@ -64,10 +64,10 @@ export const api = {
 
   /** Ronde 57 — akses publik metainfo form intake (tanpa login). */
   intakeMeta: (token: string) =>
-    request<{ intake: { brand: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; tagline?: string | null; website?: string | null; primaryCurrency: string }; label: string | null; expiresAt: string | null; industries: string[]; knowFrom: { key: string; label: string }[]; submissionCount: number } }>(`/api/public/intake/${token}`),
-  /** Ronde 57 — submit form intake publik (tanpa login). */
+    request<{ intake: { brand: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; tagline?: string | null; website?: string | null; primaryCurrency: string }; label: string | null; expiresAt: string | null; industries: string[]; knowFrom: { key: string; label: string; labelEn?: string }[]; submissionCount: number } }>(`/api/public/intake/${token}`),
+  /** Ronde 57 — submit form intake publik (tanpa login). Ronde 60: + keyMessages, lang, emailStatus. */
   intakeSubmit: (token: string, payload: Record<string, unknown>) =>
-    request<{ submitted: boolean; opportunity: { id: string; title: string }; briefCode: string; expectedCloseDate: string }>(`/api/public/intake/${token}`, { method: "POST", body: JSON.stringify(payload) }),
+    request<{ submitted: boolean; opportunity: { id: string; title: string }; briefCode: string; expectedCloseDate: string; emailStatus?: string }>(`/api/public/intake/${token}`, { method: "POST", body: JSON.stringify(payload) }),
   // Ronde 46 — login dengan PASSWORD (PIN khusus kunci layar; legacy pin masih diterima server utk akun lama)
   login: (email: string, password: string) =>
     request<{ user: SessionUserResponse; legacyPin?: boolean }>(

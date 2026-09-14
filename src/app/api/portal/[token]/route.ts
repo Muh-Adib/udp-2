@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { fail, ok } from "@/lib/crm/server";
+import { amountInWords } from "@/lib/crm/doc-pdf";
 import type {
   ClientDocumentDTO, PortalInvoiceSummary, PortalMilestoneSummary, PortalTokenPayload, ProjectDeliverableDTO,
 } from "@/lib/crm/types";
@@ -11,7 +12,20 @@ import type {
  * company (id/name/industry/city), token (label/createdAt), documents (termasuk
  * fileData utk unduh), projects + deliverables.
  * Payload PUBLIK — field internal (telepon, notes, tags, dsb.) TIDAK ikut.
+ * Ronde 60 — invoice DRAFT tidak lagi dikirim ke portal (hanya sudah terkirim/dibayar);
+ * payload invoice diperkaya utk dialog detail per card (items, terms, pajak, dsb.).
  */
+
+/** Parse aman JSON kolom string invoice → array (fallback []). */
+function parseJsonArray<T>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -28,6 +42,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
 
   // Ronde 48 — milestone + invoice ikut diumumkan ke klien: progress proyek
   // (timeline milestone) dan tagihan terlihat langsung dari secure link.
+  // RONDE 60 — invoice status "draft" & "cancelled" DISEMBUNYIKAN dari portal:
+  // draft belum resmi diterbitkan (belum dikirim/disetujui), tidak layak dilihat klien.
   const [documents, projects, invoices] = await Promise.all([
     db.clientDocument.findMany({
       where: { companyId: portal.companyId },
@@ -43,11 +59,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       orderBy: { createdAt: "desc" },
     }),
     db.invoice.findMany({
-      where: { companyId: portal.companyId, status: { not: "cancelled" } },
+      where: { companyId: portal.companyId, status: { notIn: ["draft", "cancelled"] } },
       orderBy: { issueDate: "desc" },
       select: {
         id: true, number: true, description: true, amount: true, taxAmount: true,
         total: true, currency: true, status: true, issueDate: true, dueDate: true,
+        items: true, terms: true, discountAmount: true, taxName: true, taxRate: true,
+        taxMode: true, downPaymentPct: true, projectName: true, purchaseNumber: true,
+        brand: { select: { name: true } },
       },
     }),
   ]);
@@ -123,6 +142,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       ),
     })),
     // Ronde 48 — tagihan klien (ringkas, tanpa data internal).
+    // Ronde 60 — diperkaya utk dialog detail: items, termin, pajak, diskon, dsb.
     invoices: invoices.map(
       (i): PortalInvoiceSummary => ({
         id: i.id,
@@ -135,6 +155,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
         status: i.status,
         issueDate: i.issueDate.toISOString(),
         dueDate: i.dueDate ? i.dueDate.toISOString() : null,
+        brandName: i.brand?.name ?? null,
+        projectName: i.projectName,
+        purchaseNumber: i.purchaseNumber,
+        taxName: i.taxName,
+        taxRate: i.taxRate,
+        taxMode: i.taxMode,
+        downPaymentPct: i.downPaymentPct,
+        discountAmount: i.discountAmount,
+        items: parseJsonArray<{ description?: string; qty?: number; unit?: string; unitPrice?: number; total?: number }>(i.items),
+        terms: parseJsonArray<{ label?: string; pct?: number; dueDays?: number; dueEvent?: string }>(i.terms),
+        totalInWords: amountInWords(i.total, i.currency).en,
       })
     ),
   };

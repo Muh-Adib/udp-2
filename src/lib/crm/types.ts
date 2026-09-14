@@ -1051,9 +1051,24 @@ export interface PortalInvoiceSummary {
   taxAmount: number;
   total: number;
   currency: string;
-  status: string; // draft | sent | partial | paid | overdue
+  status: string; // sent | partial | paid | overdue (draft TIDAK dikirim ke portal — Ronde 60)
   issueDate: string;
   dueDate?: string | null;
+  // ==== Ronde 60 — detail invoice utk dialog "detail per card" di portal ====
+  brandName?: string | null;
+  projectName?: string | null;
+  purchaseNumber?: string | null;
+  taxName?: string | null;
+  taxRate?: number | null;
+  taxMode?: string | null; // add | withhold | grossup
+  downPaymentPct?: number | null;
+  discountAmount?: number | null;
+  /** Baris item faktur: [{description, qty, unit, unitPrice, total}]. */
+  items: Array<{ description?: string; qty?: number; unit?: string; unitPrice?: number; total?: number }>;
+  /** Jadwal termin [{label, pct, dueDays, dueEvent}] (R56/57). */
+  terms: Array<{ label?: string; pct?: number; dueDays?: number; dueEvent?: string }>;
+  /** "Amount in words" (EN) utk tampilan portal. */
+  totalInWords?: string | null;
 }
 
 /** Payload GET /api/portal/[token] — isi secure link klien. */
