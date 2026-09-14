@@ -145,6 +145,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
       name: q.brand.name,
       color: q.brand.color,
       logoUrl: q.brand.logoUrl,
+      logoBg: q.brand.logoBg, // Ronde 62 — latar logo utk logo putih
       letterheadHeader: q.brand.letterheadHeader,
       letterheadFooter: q.brand.letterheadFooter,
       signerName: q.brand.signerName,

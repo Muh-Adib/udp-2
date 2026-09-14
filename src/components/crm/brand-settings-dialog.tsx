@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AtSign, BadgeCheck, Building2, Calculator, Check, ChevronDown, ChevronUp, FileText, Globe, Hash, Image as ImageIcon, Info, Instagram,
-  Landmark, Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, X,
+  Landmark, Layers, Link2, ListOrdered, Loader2, Mail, MessageCircle, Pencil, Plus, RefreshCw, Ruler, Save, Trash2, TriangleAlert, Wand2, X,
 } from "lucide-react";
 import { WhatsAppIcon } from "@/components/crm/whatsapp-icon";
 import type { LucideIcon } from "lucide-react";
@@ -52,6 +52,7 @@ import {
 import type {
   Brand, BrandServiceCatalog, ChannelConfigDTO, NumberingRuleDTO, ServiceCategoryDTO, ServiceDTO,
 } from "@/lib/crm/types";
+import ChannelSetupWizard from "@/components/crm/channel-setup-wizard";
 
 /**
  * Ronde 52-a — payload kategori×item rincian biaya layanan: struktur PERSIS sama
@@ -262,6 +263,40 @@ const LETTER_HEADER_STYLES = [
   { key: "letterhead-image", label: "Gambar kop surat penuh" },
 ];
 
+// ============ Ronde 62 — palet warna brand ============
+
+interface PaletteDraft {
+  primary: string;
+  accent: string;
+  background: string;
+  text: string;
+}
+
+const EMPTY_PALETTE: PaletteDraft = { primary: "", accent: "", background: "", text: "" };
+
+const PALETTE_META: Array<{ key: keyof PaletteDraft; label: string; hint: string; preset: string }> = [
+  { key: "primary", label: "Warna utama", hint: "Identitas utama brand (tombol & elemen penting)", preset: "#f97316" },
+  { key: "accent", label: "Warna aksen", hint: "Aksen garis/judul — form request publik otomatis ikut warna ini", preset: "#0f172a" },
+  { key: "background", label: "Warna latar", hint: "Latar tampilan brand (mis. form request)", preset: "#f8fafc" },
+  { key: "text", label: "Warna teks", hint: "Warna teks utama di atas latar", preset: "#18181b" },
+];
+
+/** Preset warna latar logo — logo putih butuh latar gelap agar terlihat. */
+const LOGO_BG_PRESETS = ["#0f172a", "#18181b", "#1e293b", "#3f3f46", "#7c2d12", "#14532d"];
+
+function parsePalette(raw: string | null | undefined): PaletteDraft {
+  const out: PaletteDraft = { ...EMPTY_PALETTE };
+  if (!raw) return out;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const { key } of PALETTE_META) {
+      const v = parsed[key];
+      if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) out[key] = v;
+    }
+  } catch { /* palet rusak → kosong */ }
+  return out;
+}
+
 // ============ Komponen utama ============
 
 export default function BrandSettingsDialog({
@@ -324,11 +359,24 @@ export default function BrandSettingsDialog({
   const [channels, setChannels] = useState<ChannelConfigDTO[] | null>(null);
   const [connectingKey, setConnectingKey] = useState<string | null>(null);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
+  // Ronde 62 — info webhook (callback path + verify token) utk wizard setup berpandu
+  const [webhookInfo, setWebhookInfo] = useState<import("@/lib/crm/types").ChannelsData["webhook"]["whatsapp"] | null>(null);
+  // Ronde 62 — wizard setup langsung dari pengaturan brand (tanpa pindah modul Kanal)
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardChannel, setWizardChannel] = useState<string | null>(null);
+  const [wizardEditCfg, setWizardEditCfg] = useState<ChannelConfigDTO | null>(null);
+
+  // Ronde 62 — palet warna & latar logo
+  const [logoBgDraft, setLogoBgDraft] = useState<string>("");
+  const [paletteDraft, setPaletteDraft] = useState<PaletteDraft>({ ...EMPTY_PALETTE });
 
   // Reset state saat brand berganti / dialog dibuka
   useEffect(() => {
     if (open && brand) {
       setTab("identity");
+      // Ronde 62 — palet & latar logo dari brand
+      setLogoBgDraft(brand.logoBg ?? "");
+      setPaletteDraft(parsePalette(brand.palette));
       setIdentity({
         tagline: brand.tagline ?? "",
         address: brand.address ?? "",
@@ -368,6 +416,12 @@ export default function BrandSettingsDialog({
       setNumbering(null);
       setNumberingLoaded(false);
       setNumberingLoading(false);
+      // Ronde 62 — tutup wizard setup & reset kanal saat brand berganti
+      setWizardOpen(false);
+      setWizardChannel(null);
+      setWizardEditCfg(null);
+      setWebhookInfo(null);
+      setChannels(null);
     }
   }, [open, brand]);
 
@@ -391,6 +445,7 @@ export default function BrandSettingsDialog({
     try {
       const res = await channelsApi.list();
       setChannels(res.configs);
+      setWebhookInfo(res.webhook?.whatsapp ?? null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal memuat kanal");
     }
@@ -450,6 +505,14 @@ export default function BrandSettingsDialog({
     try {
       const payload: Record<string, unknown> = { ...identity };
       if (logoData !== null) payload.logoUrl = logoData === "" ? null : logoData;
+      // Ronde 62 — latar logo & palet warna: kosong = null (tanpa latar / tanpa palet)
+      payload.logoBg = logoBgDraft.trim() ? logoBgDraft.trim().toLowerCase() : null;
+      const palClean: Record<string, string> = {};
+      for (const { key } of PALETTE_META) {
+        const v = paletteDraft[key].trim().toLowerCase();
+        if (v) palClean[key] = v;
+      }
+      payload.palette = JSON.stringify(palClean);
       // Ronde 50 — identitas dokumen resmi + rekening bank (satu PATCH /api/brands/:id)
       if (official) {
         const shortCode = official.shortCode.trim().toUpperCase();
@@ -749,6 +812,14 @@ export default function BrandSettingsDialog({
     }
   }
 
+  // Ronde 62 — setup BERPANDU langsung dari pengaturan brand: kredensial nyata
+  // (redirect ke alur OAuth/SMTP dsb.) tanpa harus pindah ke modul Kanal.
+  function openSetupWizard(channelKey: string, editCfg: ChannelConfigDTO | null) {
+    setWizardChannel(channelKey);
+    setWizardEditCfg(editCfg);
+    setWizardOpen(true);
+  }
+
   // ============ Render ============
 
   return (
@@ -781,17 +852,22 @@ export default function BrandSettingsDialog({
           <TabsContent value="identity" className="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
             {/* Logo */}
             <div className="mb-5 flex items-center gap-4 rounded-xl border bg-zinc-50/60 p-4">
-              <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white">
+              <div
+                className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border"
+                style={{ backgroundColor: logoBgDraft || "#ffffff" }}
+                data-testid="brand-logo-preview"
+              >
                 {effectiveLogo ? (
                   <img src={effectiveLogo} alt={`Logo ${brand.name}`} className="max-h-full max-w-full object-contain p-1.5" />
                 ) : (
-                  <span className="text-3xl font-bold" style={{ color: brand.color }} aria-hidden>{brand.name.charAt(0).toUpperCase()}</span>
+                  <span className="text-3xl font-bold" style={{ color: logoBgDraft ? "#ffffff" : brand.color }} aria-hidden>{brand.name.charAt(0).toUpperCase()}</span>
                 )}
               </div>
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="text-sm font-semibold text-zinc-900">Logo brand</p>
                 <p className="text-xs leading-relaxed text-zinc-500">
                   Logo asli dari situs resmi sudah terpasang. Unggah ulang bila ada pembaruan (PNG/SVG/WebP ≤1MB).
+                  Latar pratinjau mengikuti warna latar logo di bawah.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <input
@@ -815,6 +891,115 @@ export default function BrandSettingsDialog({
 
             {identity ? (
               <div className="space-y-4">
+                {/* ===== Ronde 62 — Palet warna brand & latar logo ===== */}
+                <div className="rounded-xl border p-4" data-testid="brand-palette-card">
+                  <p className="text-sm font-semibold text-zinc-900">Warna brand &amp; latar logo</p>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    Ada logo berwarna putih (mis. Segia) yang tidak terlihat di latar putih —
+                    pilih <span className="font-medium text-zinc-700">warna latar logo</span> di bawah, lalu logo
+                    tampil jelas di semua tempat: form request, dokumen PDF, dan kartu brand.
+                  </p>
+                  <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
+                    {/* Kiri: kontrol warna */}
+                    <div className="space-y-4">
+                      {/* Latar logo */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label htmlFor="bs-logobg" className="text-xs font-medium">Latar belakang logo</Label>
+                          {logoBgDraft ? (
+                            <button type="button" className="text-[11px] text-zinc-500 underline-offset-2 hover:text-rose-600 hover:underline"
+                              onClick={() => setLogoBgDraft("")}>
+                              Hapus latar (transparan)
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-zinc-400">Saat ini transparan (putih)</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            id="bs-logobg" type="color" aria-label="Pilih warna latar logo"
+                            className="h-9 w-12 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
+                            value={/^#[0-9a-fA-F]{6}$/.test(logoBgDraft) ? logoBgDraft : "#0f172a"}
+                            onChange={(e) => setLogoBgDraft(e.target.value)}
+                          />
+                          <Input
+                            className="h-9 w-28 font-mono text-xs" placeholder="#0f172a" value={logoBgDraft}
+                            onChange={(e) => setLogoBgDraft(e.target.value)}
+                          />
+                          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Preset warna latar logo">
+                            {LOGO_BG_PRESETS.map((c) => (
+                              <button key={c} type="button" title={`Pakai ${c}`}
+                                aria-label={`Pakai warna latar ${c}`}
+                                onClick={() => setLogoBgDraft(c)}
+                                className={`size-6 rounded-md border transition-transform hover:scale-110 ${logoBgDraft.toLowerCase() === c ? "ring-2 ring-zinc-900 ring-offset-1" : "border-zinc-200"}`}
+                                style={{ backgroundColor: c }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      {/* Palet 4 slot */}
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {PALETTE_META.map(({ key, label, hint, preset }) => {
+                          const val = paletteDraft[key];
+                          return (
+                            <div key={key} className="space-y-1.5 rounded-lg border bg-zinc-50/60 p-2.5">
+                              <Label htmlFor={`bs-pal-${key}`} className="text-xs font-medium">{label}</Label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  id={`bs-pal-${key}`} type="color" aria-label={`Pilih ${label}`}
+                                  className="h-8 w-10 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
+                                  value={/^#[0-9a-fA-F]{6}$/.test(val) ? val : preset}
+                                  onChange={(e) => setPaletteDraft({ ...paletteDraft, [key]: e.target.value })}
+                                />
+                                <Input
+                                  className="h-8 w-24 font-mono text-[11px]" placeholder={preset} value={val}
+                                  onChange={(e) => setPaletteDraft({ ...paletteDraft, [key]: e.target.value })}
+                                />
+                                {val ? (
+                                  <button type="button" aria-label={`Kosongkan ${label}`}
+                                    className="text-[11px] text-zinc-400 hover:text-rose-600"
+                                    onClick={() => setPaletteDraft({ ...paletteDraft, [key]: "" })}>
+                                    Kosongkan
+                                  </button>
+                                ) : null}
+                              </div>
+                              <p className="text-[10px] leading-snug text-zinc-500">{hint}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* Kanan: pratinjau live */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-zinc-700">Pratinjau langsung</p>
+                      <div
+                        className="flex h-24 items-center justify-center rounded-xl border border-zinc-200 p-3"
+                        style={{ backgroundColor: logoBgDraft || "#ffffff" }}
+                      >
+                        {effectiveLogo ? (
+                          <img src={effectiveLogo} alt={`Pratinjau logo ${brand.name} di atas latar`} className="max-h-full max-w-full object-contain" />
+                        ) : (
+                          <span className="text-3xl font-bold" style={{ color: logoBgDraft ? "#ffffff" : brand.color }} aria-hidden>
+                            {brand.name.charAt(0).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      {/* Mini mockup dgn palet */}
+                      <div className="rounded-xl border p-3" style={{ backgroundColor: paletteDraft.background || "#ffffff" }}>
+                        <p className="text-[11px] font-bold" style={{ color: paletteDraft.text || "#18181b" }}>{brand.name}</p>
+                        <span className="mt-1.5 inline-flex items-center rounded-md px-2 py-1 text-[10px] font-semibold text-white"
+                          style={{ backgroundColor: paletteDraft.primary || "#f97316" }}>
+                          Contoh tombol
+                        </span>
+                        <span className="ml-1.5 inline-block h-1.5 w-10 rounded-full align-middle" style={{ backgroundColor: paletteDraft.accent || brand.color }} aria-hidden />
+                      </div>
+                      <p className="text-[10px] leading-snug text-zinc-400">
+                        Pratinjau memakai logo &amp; warna di kiri. Klik Simpan (bawah) untuk menerapkan.
+                      </p>
+                    </div>
+                  </div>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5 sm:col-span-2">
                     <Label htmlFor="bs-tagline" className="text-xs">Tagline</Label>
@@ -1299,7 +1484,9 @@ export default function BrandSettingsDialog({
                     <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${connectedPct}%` }} />
                   </div>
                   <p className="mt-1.5 text-[11px] text-zinc-500">
-                    Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, gunakan Setup berpandu di modul Kanal.
+                    Mode demo memakai akun asli brand dgn kredensial buatan — untuk produksi, pakai{" "}
+                    <span className="font-medium text-zinc-700">Setup berpandu</span> atau{" "}
+                    <span className="font-medium text-zinc-700">Ubah kredensial</span> langsung di tab ini (alur berpandu OAuth/SMTP).
                   </p>
                 </div>
 
@@ -1352,14 +1539,25 @@ export default function BrandSettingsDialog({
                           {cfg ? (
                             <>
                               {cfg.status !== "connected" ? (
-                                <Button
-                                  type="button" size="sm" variant="outline" className="h-9 gap-1.5"
-                                  disabled={reconnectingId !== null || connectingKey !== null}
-                                  onClick={() => void reconnectChannel(cfg.id, label)}
-                                >
-                                  {reconnectingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
-                                  Sambungkan ulang
-                                </Button>
+                                <>
+                                  <Button
+                                    type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+                                    disabled={reconnectingId !== null || connectingKey !== null}
+                                    onClick={() => void reconnectChannel(cfg.id, label)}
+                                  >
+                                    {reconnectingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+                                    Sambungkan ulang
+                                  </Button>
+                                  {/* Ronde 62 — ubah kredensial langsung via wizard (dulu harus ke modul Kanal) */}
+                                  <Button
+                                    type="button" size="sm" variant="outline" className="h-9 gap-1.5 border-zinc-300"
+                                    disabled={reconnectingId !== null || connectingKey !== null}
+                                    onClick={() => openSetupWizard(key, cfg)}
+                                  >
+                                    <Wand2 className="h-3.5 w-3.5" aria-hidden />
+                                    Ubah kredensial
+                                  </Button>
+                                </>
                               ) : null}
                               <Button
                                 type="button" size="sm" variant="ghost" className="h-9 text-zinc-500 hover:text-rose-600"
@@ -1369,19 +1567,33 @@ export default function BrandSettingsDialog({
                               </Button>
                             </>
                           ) : (
-                            <Button
-                              type="button" size="sm" variant="outline" className="h-9 gap-1.5"
-                              disabled={connectingKey !== null || reconnectingId !== null}
-                              onClick={() => void connectDemo(key)}
-                            >
-                              {connectingKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
-                              Hubungkan (Demo)
-                            </Button>
+                            <>
+                              <Button
+                                type="button" size="sm" variant="outline" className="h-9 gap-1.5"
+                                disabled={connectingKey !== null || reconnectingId !== null}
+                                onClick={() => void connectDemo(key)}
+                              >
+                                {connectingKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />}
+                                Hubungkan (Demo)
+                              </Button>
+                              {/* Ronde 62 — FIX: dulu setelah diputuskan satu-satunya jalan = demo;
+                                  sekarang setup kredensial nyata bisa langsung dari sini (redirect berpandu). */}
+                              <Button
+                                type="button" size="sm" variant="outline" className="h-9 gap-1.5 border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-700 hover:text-white"
+                                disabled={connectingKey !== null || reconnectingId !== null}
+                                onClick={() => openSetupWizard(key, null)}
+                              >
+                                <Wand2 className="h-3.5 w-3.5" aria-hidden />
+                                Setup berpandu
+                              </Button>
+                            </>
                           )}
                         </div>
                       </div>
                       {!cfg ? (
-                        <p className="mt-2 border-t pt-2 text-[11px] text-zinc-400">Setup kredensial nyata via modul Kanal.</p>
+                        <p className="mt-2 border-t pt-2 text-[11px] text-zinc-400">
+                          Demo = kredensial buatan. Pilih <span className="font-medium text-zinc-600">Setup berpandu</span> untuk memakai akun nyata (SMTP/OAuth) langsung di sini.
+                        </p>
                       ) : null}
                     </div>
                   );
@@ -1390,21 +1602,48 @@ export default function BrandSettingsDialog({
             )}
           </TabsContent>
         </Tabs>
+
+        {/* ===== Ronde 62 — Wizard setup kanal berpandu (langsung dari pengaturan brand) =====
+            Solve: setelah kanal diputuskan, dulu satu-satunya jalan adalah "Hubungkan (Demo)".
+            Kini setup kredensial NYATA (alur OAuth/SMTP berpandu) bisa dibuka langsung di sini. */}
+        {brand ? (
+          <ChannelSetupWizard
+            open={wizardOpen}
+            onOpenChange={(o) => { if (!o) setWizardOpen(false); }}
+            channelKey={wizardChannel}
+            callbackPath={webhookInfo?.path ?? "/api/webhooks/whatsapp"}
+            verifyToken={webhookInfo?.effectiveVerifyToken ?? "grupcrm-demo-token"}
+            brands={[{ id: brand.id, name: brand.name }]}
+            initialBrandId={brand.id}
+            editConfig={wizardEditCfg}
+            configs={channels ?? []}
+            onEditExisting={(cfg) => setWizardEditCfg(cfg)}
+            onConnected={async () => { await loadChannels(); }}
+            onGoInbox={() => setWizardOpen(false)}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
 }
 
 // ============ BrandLogo (dipakai lintas modul) ============
-export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "color">; size?: "sm" | "md" | "lg" }) {
+/** Ronde 62 — logoBg: warna latar area logo. Logo berwarna putih (mis. Segia)
+ *  tampil jelas di latar gelap; huruf fallback ikut putih di latar gelap. */
+export function BrandLogo({ brand, size = "md" }: { brand: Pick<Brand, "name" | "logoUrl" | "color" | "logoBg">; size?: "sm" | "md" | "lg" }) {
   const dim = size === "sm" ? "h-8 w-8 text-sm" : size === "lg" ? "h-14 w-14 text-2xl" : "h-10 w-10 text-lg";
+  const bg = (brand.logoBg ?? "").trim();
   return (
-    <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-white`} aria-hidden>
+    <span
+      className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-200 bg-white`}
+      style={bg ? { backgroundColor: bg } : undefined}
+      aria-hidden
+    >
       {brand.logoUrl ? (
-         
+
         <img src={brand.logoUrl} alt="" className="max-h-full max-w-full object-contain p-1" />
       ) : (
-        <span className="font-bold" style={{ color: brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
+        <span className="font-bold" style={{ color: bg ? "#ffffff" : brand.color }}>{brand.name.charAt(0).toUpperCase()}</span>
       )}
     </span>
   );

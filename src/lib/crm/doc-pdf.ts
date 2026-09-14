@@ -25,6 +25,8 @@ export interface PdfBrand {
   name?: string | null;
   color?: string | null;
   logoUrl?: string | null;
+  /** Ronde 62 — warna latar area logo (logo putih tampil jelas). null = tanpa latar. */
+  logoBg?: string | null;
   address?: string | null;
   city?: string | null;
   phone?: string | null;
@@ -319,6 +321,12 @@ function drawHeader(ctx: PageCtx, brand: PdfBrand, docType: "quotation" | "invoi
   if (logo) {
     const lh = Math.min(16, (logo.h / logo.w) * 16);
     try {
+      // Ronde 62 — latar logo (logo putih butuh latar gelap agar terlihat di PDF).
+      // brandColor punya fallback → uji dulu hex-nya agar logoBg kosong = tanpa latar.
+      if (/^#([0-9a-f]{6})$/i.test((brand.logoBg ?? "").trim())) {
+        ctx.doc.setFillColor(...brandColor(brand.logoBg));
+        ctx.doc.rect(MARGIN - 3, y - 4 - 3, 16 + 6, lh + 6, "F");
+      }
       const fmt = logo.dataUrl.includes("image/jpeg") ? "JPEG" : "PNG";
       ctx.doc.addImage(logo.dataUrl, fmt, MARGIN, y - 4, 16, lh);
     } catch {

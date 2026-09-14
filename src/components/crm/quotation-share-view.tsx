@@ -31,7 +31,7 @@ interface ShareData {
     signedAt: string | null; signedByName: string | null;
   };
   company: { name: string | null };
-  brand: { name: string | null; color: string | null; logoUrl: string | null; letterheadHeader: string | null; letterheadFooter: string | null; signerName: string | null };
+  brand: { name: string | null; color: string | null; logoUrl: string | null; logoBg?: string | null; letterheadHeader: string | null; letterheadFooter: string | null; signerName: string | null };
   opensLeft: number;
   maxOpens: number;
 }
@@ -230,7 +230,9 @@ export default function QuotationShareView({ token, magicKey }: { token: string;
             <header className="border-b-4 px-6 pb-4 pt-6" style={{ borderColor: accent }}>
               <div className="flex items-center gap-3">
                 {data.brand.logoUrl ? (
-                  <img src={data.brand.logoUrl} alt={`${data.brand.name ?? "Brand"} logo`} className="h-10 w-auto object-contain" />
+                  <span className="inline-flex items-center rounded-md px-1.5 py-1" style={{ backgroundColor: (data.brand.logoBg ?? "").trim() || "transparent" }}>
+                    <img src={data.brand.logoUrl} alt={`${data.brand.name ?? "Brand"} logo`} className="h-10 w-auto object-contain" />
+                  </span>
                 ) : null}
                 <h1 className="text-2xl font-black tracking-tight" style={{ color: accent }}>{data.brand.name ?? "Quotation"}</h1>
               </div>

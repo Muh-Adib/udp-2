@@ -82,6 +82,7 @@ async function runSeed(force = false): Promise<{ seeded: boolean; reason?: strin
       description: "Jasa pembuatan website dengan desain responsif, SEO teroptimasi, dan solusi UI/UX yang intuitif.",
       website: "https://www.segiatech.com",
       logoUrl: "/brands/logo-segia.png",
+      logoBg: "#101828", // Ronde 62 — logo Segia berwarna putih → butuh latar gelap agar terlihat
       tagline: "Jasa Pembuatan Website & AI Apps",
       city: "Jakarta",
       phone: "+6281225929178",

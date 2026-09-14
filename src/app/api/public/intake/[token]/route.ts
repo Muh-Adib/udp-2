@@ -127,7 +127,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     where: { token },
     include: {
       brand: {
-        select: { id: true, name: true, slug: true, color: true, logoUrl: true, tagline: true, website: true, primaryCurrency: true },
+        select: { id: true, name: true, slug: true, color: true, logoUrl: true, logoBg: true, palette: true, tagline: true, website: true, primaryCurrency: true },
       },
     },
   });

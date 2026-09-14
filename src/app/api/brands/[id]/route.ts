@@ -80,6 +80,41 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     data.logoUrl = val || null;
   }
+  // ==== Ronde 62 — palet warna brand ====
+  // logoBg: warna latar area logo (hex #rrggbb) — logo putih tampil jelas di latar gelap.
+  // null / "" = hapus latar (transparan).
+  if (body.logoBg !== undefined) {
+    if (body.logoBg === null || body.logoBg === "") {
+      data.logoBg = null;
+    } else {
+      const val = String(body.logoBg).trim();
+      if (!/^#([0-9a-fA-F]{6})$/.test(val)) {
+        return fail("Warna latar logo tidak valid — gunakan format hex #rrggbb (mis. #0f172a)");
+      }
+      data.logoBg = val.toLowerCase();
+    }
+  }
+  // palette: JSON object {primary?, accent?, background?, text?} — nilai hex #rrggbb atau "" utk kosong.
+  if (body.palette !== undefined) {
+    if (body.palette === null || body.palette === "") {
+      data.palette = "{}";
+    } else if (typeof body.palette === "object") {
+      const RAW_KEYS = ["primary", "accent", "background", "text"] as const;
+      const src = body.palette as Record<string, unknown>;
+      const out: Record<string, string> = {};
+      for (const k of RAW_KEYS) {
+        const v = typeof src[k] === "string" ? (src[k] as string).trim() : "";
+        if (!v) continue;
+        if (!/^#([0-9a-fA-F]{6})$/.test(v)) {
+          return fail(`Warna palet "${k}" tidak valid — gunakan format hex #rrggbb`);
+        }
+        out[k] = v.toLowerCase();
+      }
+      data.palette = JSON.stringify(out);
+    } else {
+      return fail("Palet warna tidak valid — kirim object {primary, accent, background, text}");
+    }
+  }
   if (body.tagline !== undefined) data.tagline = String(body.tagline).trim() || null;
   if (body.address !== undefined) data.address = String(body.address).trim() || null;
   if (body.city !== undefined) data.city = String(body.city).trim() || null;

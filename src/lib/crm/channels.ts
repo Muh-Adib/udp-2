@@ -273,6 +273,39 @@ export const SETUP_GUIDES: Record<string, SetupGuide> = {
       },
     ],
   },
+  // Ronde 62 — panduan threads (dulu SETUP_GUIDES tidak punya threads → wizard
+  // "Ubah kredensial/Setup berpandu" untuk Threads tidak bisa dibuka sama sekali)
+  threads: {
+    intro:
+      "Hubungkan Threads via Threads API (Meta). Mention & reply otomatis jadi lead dan balasan terkirim atas nama akun Threads brand.",
+    minutes: 10,
+    demoHint: "Belum punya akses Threads API? Gunakan Mode Demo untuk mencoba alurnya.",
+    steps: [
+      {
+        id: "prasyarat",
+        title: "Siapkan akun profesional & aplikasi Meta",
+        description: "Threads API hanya untuk akun Threads tipe Professional (Business/Creator) yang tertaut ke aplikasi Meta.",
+        checklist: [
+          { text: "Ubah akun Threads ke tipe Professional (Business/Creator)." },
+          { text: "Buat aplikasi di Meta App Dashboard lalu tambahkan produk Threads.", link: { label: "Meta App Dashboard", href: "https://developers.facebook.com/apps" } },
+          { text: "Ambil Threads User ID akun (tampil di Threads API setelah login).", link: { label: "Dokumentasi: Threads API", href: "https://developers.facebook.com/docs/threads" } },
+        ],
+        docLink: { label: "Dokumentasi: Memulai Threads API", href: "https://developers.facebook.com/docs/threads/getting-started" },
+      },
+      {
+        id: "kredensial",
+        title: "Isi kredensial akses",
+        description: "Token harus punya izin threads_basic & threads_manage_reply agar percakapan bisa dibaca dan dibalas.",
+        fields: ["accountId", "accessToken"],
+      },
+      {
+        id: "verifikasi",
+        title: "Verifikasi & aktifkan",
+        description: "Sistem memverifikasi ID & token ke API Threads — kanal hanya bertanda Terhubung bila token valid.",
+        note: "Gagal verifikasi? Pastikan token belum kedaluwarsa dan punya izin threads_basic + threads_manage_reply. Anda tetap bisa memilih “tanpa verifikasi” untuk mode demo.",
+      },
+    ],
+  },
   email: {
     intro:
       "Sambungkan email bisnis via SMTP/IMAP. Email masuk menjadi lead otomatis dan balasan terkirim atas nama alamat bisnis.",

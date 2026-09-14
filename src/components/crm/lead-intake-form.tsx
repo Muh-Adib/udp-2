@@ -433,7 +433,18 @@ export default function LeadIntakeForm({ token }: { token: string }) {
   }, [token]);
 
   const brand = meta?.brand;
-  const accent = brand?.color ?? "#18181b";
+  // Ronde 62 — palet warna brand: aksen form ikut palette.accent bila diatur (fallback brand.color)
+  const palette = useMemo(() => {
+    try {
+      const p = JSON.parse(brand?.palette ?? "{}") as Record<string, unknown>;
+      return {
+        accent: typeof p.accent === "string" && /^#[0-9a-fA-F]{6}$/.test(p.accent) ? p.accent : "",
+        background: typeof p.background === "string" && /^#[0-9a-fA-F]{6}$/.test(p.background) ? p.background : "",
+        text: typeof p.text === "string" && /^#[0-9a-fA-F]{6}$/.test(p.text) ? p.text : "",
+      };
+    } catch { return { accent: "", background: "", text: "" }; }
+  }, [brand?.palette]);
+  const accent = palette.accent || (brand?.color ?? "#18181b");
   const t = STR[lang];
   const set = (k: keyof typeof EMPTY) => (v: string) => {
     setValues((s) => ({ ...s, [k]: v }));
@@ -599,8 +610,14 @@ export default function LeadIntakeForm({ token }: { token: string }) {
             <LangToggle lang={lang} onChange={setLang} accent={accent} />
           </div>
           <div className="-mt-1 flex flex-col items-center gap-1.5 text-center sm:gap-2">
+            {/* Ronde 62 — latar logo: logo putih (mis. Segia) tampil jelas di latar gelap */}
             {brand?.logoUrl ? (
-              <img src={brand.logoUrl} alt={t.logoAlt(brandName)} className="h-11 w-auto rounded-md sm:h-14" />
+              <span
+                className="inline-flex max-w-full items-center justify-center rounded-lg px-2.5 py-1.5"
+                style={{ backgroundColor: (brand.logoBg ?? "").trim() || "transparent" }}
+              >
+                <img src={brand.logoUrl} alt={t.logoAlt(brandName)} className="h-11 w-auto object-contain sm:h-14" />
+              </span>
             ) : (
               <span className="flex size-11 items-center justify-center rounded-xl text-base font-black text-white sm:size-12" style={{ backgroundColor: accent }} aria-hidden="true">
                 {brand?.name?.charAt(0) ?? "F"}

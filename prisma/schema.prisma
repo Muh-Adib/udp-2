@@ -27,6 +27,9 @@ model Brand {
 
   // ==== Ronde 29-b — Identitas brand dari data asli situs ====
   logoUrl          String? // path aset publik ("/brands/logo-x.png") atau data URL upload
+  // ==== Ronde 62 — Palet warna brand ====
+  logoBg           String? // warna latar area logo (mis. "#0f172a") — logo berwarna putih (mis. Segia) tampil jelas; null = transparan/putih
+  palette          String  @default("{}") // JSON palet warna brand {primary, accent, background, text} — dipakai form request & pratinjau
   tagline          String? // tagline resmi (mis. "Jagonya Buat Animasi")
   address          String? // alamat lengkap kantor
   city             String? // kota utama operasional

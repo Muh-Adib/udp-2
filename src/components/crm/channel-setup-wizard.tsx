@@ -156,6 +156,10 @@ export interface ChannelSetupWizardProps {
   callbackPath: string;
   verifyToken: string;
   brands: Array<{ id: string; name: string }>;
+  /** Ronde 62 — preset brand saat dibuka dari Pengaturan Brand (brand terkunci milik brand tsb). */
+  initialBrandId?: string | null;
+  /** Ronde 62 — mode EDIT: koneksi yang sedang diubah kredensialnya (kosong = tetap pakai tersimpan). */
+  editConfig?: import("@/lib/crm/types").ChannelConfigDTO | null;
   /** Koneksi yang sudah ada — dipakai utk mendeteksi konflik 409 & menawarkan jalur edit. */
   configs?: Array<import("@/lib/crm/types").ChannelConfigDTO>;
   /** Buka dialog edit utk koneksi yang sudah ada (dipanggil dari peringatan 409). */
@@ -164,8 +168,8 @@ export interface ChannelSetupWizardProps {
   actorRole?: string;
   /** Dipanggil setelah koneksi berhasil (refresh daftar). */
   onConnected: () => Promise<void> | void;
-  /** Dipanggil saat tombol "Buka Inbox" pada layar sukses. */
-  onGoInbox: () => void;
+  /** Dipanggil saat tombol "Buka Inbox" pada layar sukses (opsional — disembunyikan bila tidak ada). */
+  onGoInbox?: () => void;
 }
 
 export default function ChannelSetupWizard({
@@ -175,6 +179,8 @@ export default function ChannelSetupWizard({
   callbackPath,
   verifyToken,
   brands,
+  initialBrandId,
+  editConfig,
   configs,
   onEditExisting,
   actorName,
@@ -199,25 +205,28 @@ export default function ChannelSetupWizard({
 
   const meta = channelKey ? CHANNEL_TYPES[channelKey] : null;
   const guide = channelKey ? SETUP_GUIDES[channelKey] : null;
+  // Ronde 62 — mode edit kredensial (dari Pengaturan Brand / tombol "Ubah kredensial")
+  const isEdit = Boolean(editConfig);
 
-  // Reset seluruh state wizard setiap kali dibuka / ganti kanal.
+  // Reset seluruh state wizard setiap kali dibuka / ganti kanal / masuk mode edit.
   useEffect(() => {
     if (open && channelKey) {
-      setPhase("intro");
+      const edit = editConfig ?? null;
+      setPhase(edit ? Math.max(0, (SETUP_GUIDES[channelKey]?.steps.length ?? 1) - 1) : "intro");
       setChecks({});
       setCreds({});
-      setBrandId("all");
-      setDisplayName(CHANNEL_TYPES[channelKey]?.label ?? "");
-      setAccountRef("");
+      setBrandId(edit ? (edit.brandId ?? "all") : (initialBrandId ?? "all"));
+      setDisplayName(edit?.displayName || (CHANNEL_TYPES[channelKey]?.label ?? ""));
+      setAccountRef(edit?.accountRef ?? "");
       setError(null);
       setConnecting(false);
-      setIsDemo(false);
+      setIsDemo(edit?.isDemo ?? false);
       setSkipVerify(false);
       setVerifyNote(null);
       setConflictConfig(null);
       setOrigin(window.location.origin);
     }
-  }, [open, channelKey]);
+  }, [open, channelKey, editConfig, initialBrandId]);
 
   const stepIndex = typeof phase === "number" ? phase : -1;
   const step = guide && stepIndex >= 0 ? guide.steps[stepIndex] : null;
@@ -266,9 +275,11 @@ export default function ChannelSetupWizard({
 
   async function handleConnect() {
     if (!channelKey || !meta) return;
-    const missing = meta.fields
-      .filter((f) => f.required && !(collectedCreds[f.key] ?? "").trim())
-      .map((f) => f.label);
+    const missing = isEdit
+      ? [] // mode edit: kredensial kosong = tetap pakai yang tersimpan (server merge)
+      : meta.fields
+          .filter((f) => f.required && !(collectedCreds[f.key] ?? "").trim())
+          .map((f) => f.label);
     if (missing.length > 0) {
       setError(`Kredensial wajib belum lengkap: ${missing.join(", ")}`);
       return;
@@ -283,6 +294,37 @@ export default function ChannelSetupWizard({
     }
     setConnecting(true);
     setError(null);
+    // ===== Ronde 62 — mode EDIT: simpan perubahan kredensial ke koneksi yang ada =====
+    if (editConfig) {
+      try {
+        const res = await channelsApi.update(editConfig.id, {
+          action: "update",
+          displayName: displayName.trim(),
+          accountRef: accountRef.trim(),
+          credentials: collectedCreds,
+          actorName,
+          actorRole,
+        });
+        const st = res.config?.status;
+        const note = res.config?.statusNote ?? null;
+        // Server menjalankan verifikasi NYATA saat menyimpan — gagal → tampilkan inline.
+        if (st === "error") {
+          setError(note || "Verifikasi koneksi gagal — periksa kredensial");
+          setConnecting(false);
+          return;
+        }
+        setIsDemo(res.config?.isDemo ?? false);
+        setVerifyNote(note);
+        setPhase("success");
+        await onConnected();
+        toast.success("Koneksi diperbarui");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Gagal menyimpan koneksi");
+      } finally {
+        setConnecting(false);
+      }
+      return;
+    }
     try {
       const res = await channelsApi.connect({
         channel: channelKey,
@@ -600,17 +642,24 @@ export default function ChannelSetupWizard({
                 </div>
                 <div className="space-y-0.5">
                   <label htmlFor="wiz-brand" className="text-xs font-medium text-zinc-600">Cakupan brand</label>
-                  <Select value={brandId} onValueChange={setBrandId}>
-                    <SelectTrigger id="wiz-brand" aria-label="Cakupan brand">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Global (semua brand)</SelectItem>
-                      {brands.map((b) => (
-                        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {isEdit ? (
+                    // Ronde 62 — mode edit: brand tidak bisa diganti (koneksi milik brand tetap)
+                    <div id="wiz-brand" className="flex h-9 items-center rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm text-zinc-600">
+                      {editConfig?.brand?.name ?? brandName ?? "Global (semua brand)"}
+                    </div>
+                  ) : (
+                    <Select value={brandId} onValueChange={setBrandId}>
+                      <SelectTrigger id="wiz-brand" aria-label="Cakupan brand">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Global (semua brand)</SelectItem>
+                        {brands.map((b) => (
+                          <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               </div>
               <div className="space-y-0.5">
@@ -627,7 +676,20 @@ export default function ChannelSetupWizard({
                   Koneksi ini hanya aktif untuk lead brand <span className="font-medium text-zinc-600">{brandName}</span>.
                 </p>
               ) : null}
-              {/* Ronde 21: opsi sadar-demo — default TIDAK dicentang, verifikasi nyata diutamakan */}
+              {/* Ronde 62 — banner mode edit */}
+              {isEdit ? (
+                <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2" role="note">
+                  <p className="text-[11px] font-semibold text-sky-900">Mengubah koneksi "{editConfig?.displayName}"</p>
+                  <p className="mt-0.5 text-[10px] leading-snug text-sky-800">
+                    Isi hanya kredensial yang ingin diganti — kolom yang dibiarkan kosong tetap memakai nilai tersimpan.
+                    Server akan memverifikasi nyata saat disimpan.
+                  </p>
+                </div>
+              ) : null}
+              {/* Ronde 21: opsi sadar-demo — default TIDAK dicentang, verifikasi nyata diutamakan.
+                  Ronde 62: disembunyikan di mode edit (server update selalu verifikasi nyata). */}
+              {!isEdit ? (
+              <>
               <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2" htmlFor="wiz-skip-verify">
                 <input
                   id="wiz-skip-verify"
@@ -644,6 +706,8 @@ export default function ChannelSetupWizard({
               <p className="text-[10px] text-zinc-400">
                 Default: sistem melakukan verifikasi NYATA ({channelKey === "email" ? "handshake + login SMTP/IMAP" : "cek ID & token ke API penyedia"}) — gagal berarti koneksi tidak dibuat.
               </p>
+              </>
+              ) : null}
             </div>
           ) : null}
 
@@ -710,22 +774,26 @@ export default function ChannelSetupWizard({
         <div className="flex shrink-0 items-center justify-between gap-2 border-t bg-zinc-50/80 px-5 py-3">
           <div className="min-w-0">
             {phase !== "success" ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
-                onClick={() => void handleDemo()}
-                disabled={connecting}
-              >
-                {connecting ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
-                Demo 1-klik
-              </Button>
-            ) : (
+              !isEdit ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 px-2 text-xs text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                  onClick={() => void handleDemo()}
+                  disabled={connecting}
+                >
+                  {connecting ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
+                  Demo 1-klik
+                </Button>
+              ) : (
+                <span className="text-[10px] text-zinc-400">Mode edit kredensial</span>
+              )
+            ) : onGoInbox ? (
               <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs" onClick={onGoInbox}>
                 <Inbox className="size-3.5" aria-hidden="true" />
                 Buka Inbox
               </Button>
-            )}
+            ) : null}
           </div>
 
           <div className="flex items-center gap-1.5">

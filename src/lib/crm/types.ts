@@ -15,6 +15,10 @@ export interface Brand {
   active: boolean;
   // Ronde 29-b — identitas asli + integrasi per brand
   logoUrl?: string | null;
+  /** Ronde 62 — warna latar area logo (mis. "#0f172a"): logo putih tampil jelas. null = transparan. */
+  logoBg?: string | null;
+  /** Ronde 62 — JSON palet warna {primary, accent, background, text} (boleh parsial). */
+  palette?: string | null;
   tagline?: string | null;
   address?: string | null;
   city?: string | null;
@@ -1195,7 +1199,7 @@ export interface CrossSellCompany {
 
 /** Payload GET /api/service-map. */
 export interface ServiceMapData {
-  brands: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; tagline?: string | null }[];
+  brands: { id: string; name: string; slug: string; color: string; logoUrl?: string | null; logoBg?: string | null; tagline?: string | null }[];
   rows: ServiceMapRow[];
   crossSell: CrossSellCompany[];
   stats: { companies: number; coveredAll: number; avgBrandsPerCompany: number; activeServices: number };

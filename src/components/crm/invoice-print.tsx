@@ -204,7 +204,9 @@ export function InvoicePrintArea({ invoice: inv, brand }: { invoice: InvoicePrin
           <div className={centeredKop ? "flex flex-col items-center gap-2 text-center" : "flex items-start justify-between gap-4"}>
             <div className="flex items-start gap-3">
               {showLogo && brand?.logoUrl ? (
-                <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
+                <span className="inline-flex items-center rounded-md px-1.5 py-1" style={{ backgroundColor: (brand.logoBg ?? "").trim() || "transparent" }}>
+                  <img src={brand.logoUrl} alt={`Logo ${brand.name}`} className="h-12 w-auto max-w-28 object-contain" />
+                </span>
               ) : showLogo && brand ? (
                 <span className="flex h-12 w-12 items-center justify-center rounded-lg border text-2xl font-bold leading-none" style={{ color: brandColor }} aria-hidden>
                   {brand.name.charAt(0).toUpperCase()}

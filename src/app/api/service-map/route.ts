@@ -45,7 +45,7 @@ export async function GET(_req: NextRequest) {
     db.brand.findMany({
       where: { active: true },
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true, slug: true, color: true, logoUrl: true, tagline: true },
+      select: { id: true, name: true, slug: true, color: true, logoUrl: true, logoBg: true, tagline: true },
     }),
     db.serviceCategory.findMany({ orderBy: [{ order: "asc" }, { createdAt: "asc" }], select: { id: true, name: true } }),
     db.service.findMany({
