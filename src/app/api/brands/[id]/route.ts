@@ -83,36 +83,57 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // ==== Ronde 62 — palet warna brand ====
   // logoBg: warna latar area logo (hex #rrggbb) — logo putih tampil jelas di latar gelap.
   // null / "" = hapus latar (transparan).
+  // Ronde 62-b — normalisasi ramah: terima #rgb & tanpa "#" (hasil ketikan manual),
+  // dan palette menerima OBJECT maupun STRING JSON (frontend lama mengirim string).
+  const normalizeHexColor = (raw: unknown): string | null => {
+    if (typeof raw !== "string") return null;
+    let v = raw.trim().toLowerCase();
+    if (!v) return null;
+    if (!v.startsWith("#")) v = `#${v}`;
+    if (/^#[0-9a-f]{3}$/.test(v)) v = `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+    return /^#[0-9a-f]{6}$/.test(v) ? v : null;
+  };
   if (body.logoBg !== undefined) {
     if (body.logoBg === null || body.logoBg === "") {
       data.logoBg = null;
     } else {
-      const val = String(body.logoBg).trim();
-      if (!/^#([0-9a-fA-F]{6})$/.test(val)) {
+      const val = normalizeHexColor(body.logoBg);
+      if (!val) {
         return fail("Warna latar logo tidak valid — gunakan format hex #rrggbb (mis. #0f172a)");
       }
-      data.logoBg = val.toLowerCase();
+      data.logoBg = val;
     }
   }
-  // palette: JSON object {primary?, accent?, background?, text?} — nilai hex #rrggbb atau "" utk kosong.
+  // palette: object {primary?, accent?, background?, text?} ATAU string JSON berisi object itu.
+  // Nilai hex #rrggbb (normalisasi otomatis dr #rgb / tanpa #); "" utk kosong.
   if (body.palette !== undefined) {
     if (body.palette === null || body.palette === "") {
       data.palette = "{}";
-    } else if (typeof body.palette === "object") {
+    } else {
+      let src: unknown = body.palette;
+      if (typeof src === "string") {
+        try {
+          src = JSON.parse(src);
+        } catch {
+          return fail("Palet warna tidak valid — JSON tidak bisa dibaca");
+        }
+      }
+      if (typeof src !== "object" || src === null || Array.isArray(src)) {
+        return fail("Palet warna tidak valid — kirim object {primary, accent, background, text}");
+      }
       const RAW_KEYS = ["primary", "accent", "background", "text"] as const;
-      const src = body.palette as Record<string, unknown>;
+      const rec = src as Record<string, unknown>;
       const out: Record<string, string> = {};
       for (const k of RAW_KEYS) {
-        const v = typeof src[k] === "string" ? (src[k] as string).trim() : "";
-        if (!v) continue;
-        if (!/^#([0-9a-fA-F]{6})$/.test(v)) {
-          return fail(`Warna palet "${k}" tidak valid — gunakan format hex #rrggbb`);
+        const raw = typeof rec[k] === "string" ? (rec[k] as string) : "";
+        if (!raw.trim()) continue;
+        const val = normalizeHexColor(raw);
+        if (!val) {
+          return fail(`Warna palet "${k}" tidak valid — gunakan format hex #rrggbb (mis. #059669)`);
         }
-        out[k] = v.toLowerCase();
+        out[k] = val;
       }
       data.palette = JSON.stringify(out);
-    } else {
-      return fail("Palet warna tidak valid — kirim object {primary, accent, background, text}");
     }
   }
   if (body.tagline !== undefined) data.tagline = String(body.tagline).trim() || null;

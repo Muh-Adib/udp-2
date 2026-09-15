@@ -297,6 +297,16 @@ function parsePalette(raw: string | null | undefined): PaletteDraft {
   return out;
 }
 
+/** Ronde 62-b — normalisasi warna ramah: "059669"→"#059669", "#f90"→"#ff9900".
+ *  Mengembalikan null bila tetap bukan hex valid — dipakai sebelum simpan & saat blur input teks. */
+function normalizeHexColor(raw: string): string | null {
+  let v = raw.trim().toLowerCase();
+  if (!v) return null;
+  if (!v.startsWith("#")) v = `#${v}`;
+  if (/^#[0-9a-f]{3}$/.test(v)) v = `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+  return /^#[0-9a-f]{6}$/.test(v) ? v : null;
+}
+
 // ============ Komponen utama ============
 
 export default function BrandSettingsDialog({
@@ -506,13 +516,28 @@ export default function BrandSettingsDialog({
       const payload: Record<string, unknown> = { ...identity };
       if (logoData !== null) payload.logoUrl = logoData === "" ? null : logoData;
       // Ronde 62 — latar logo & palet warna: kosong = null (tanpa latar / tanpa palet)
-      payload.logoBg = logoBgDraft.trim() ? logoBgDraft.trim().toLowerCase() : null;
-      const palClean: Record<string, string> = {};
-      for (const { key } of PALETTE_META) {
-        const v = paletteDraft[key].trim().toLowerCase();
-        if (v) palClean[key] = v;
+      // Ronde 62-b — normalisasi ramah (terima tanpa "#"/#rgb) + validasi inline SEBELUM
+      // PATCH agar pesan error menyebut field yang salah, bukan error server generik.
+      const logoBgNorm = logoBgDraft.trim() ? normalizeHexColor(logoBgDraft) : null;
+      if (logoBgDraft.trim() && !logoBgNorm) {
+        toast.error("Warna latar logo tidak valid — contoh benar: #0f172a (atau pilih lewat kotak warna)");
+        setSavingIdentity(false);
+        return;
       }
-      payload.palette = JSON.stringify(palClean);
+      payload.logoBg = logoBgNorm;
+      const palClean: Record<string, string> = {};
+      for (const { key, label, preset } of PALETTE_META) {
+        const raw = paletteDraft[key];
+        if (!raw.trim()) continue;
+        const norm = normalizeHexColor(raw);
+        if (!norm) {
+          toast.error(`Warna ${label} tidak valid — contoh benar: ${preset} (atau pilih lewat kotak warna)`);
+          setSavingIdentity(false);
+          return;
+        }
+        palClean[key] = norm;
+      }
+      payload.palette = palClean; // object — server menerima object maupun string JSON
       // Ronde 50 — identitas dokumen resmi + rekening bank (satu PATCH /api/brands/:id)
       if (official) {
         const shortCode = official.shortCode.trim().toUpperCase();
@@ -925,6 +950,11 @@ export default function BrandSettingsDialog({
                           <Input
                             className="h-9 w-28 font-mono text-xs" placeholder="#0f172a" value={logoBgDraft}
                             onChange={(e) => setLogoBgDraft(e.target.value)}
+                            onBlur={() => {
+                              // Ronde 62-b — rapikan ketikan manual saat blur: "0f172a"→"#0f172a", "f90"→"#ff9900"
+                              const norm = normalizeHexColor(logoBgDraft);
+                              if (norm) setLogoBgDraft(norm);
+                            }}
                           />
                           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Preset warna latar logo">
                             {LOGO_BG_PRESETS.map((c) => (
@@ -955,6 +985,11 @@ export default function BrandSettingsDialog({
                                 <Input
                                   className="h-8 w-24 font-mono text-[11px]" placeholder={preset} value={val}
                                   onChange={(e) => setPaletteDraft({ ...paletteDraft, [key]: e.target.value })}
+                                  onBlur={() => {
+                                    // Ronde 62-b — rapikan ketikan manual saat blur (sama dgn latar logo)
+                                    const norm = normalizeHexColor(val);
+                                    if (norm) setPaletteDraft({ ...paletteDraft, [key]: norm });
+                                  }}
                                 />
                                 {val ? (
                                   <button type="button" aria-label={`Kosongkan ${label}`}

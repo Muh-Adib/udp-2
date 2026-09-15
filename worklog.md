@@ -2446,3 +2446,18 @@ Work Log:
 
 Stage Summary:
 - Sandbox kini SINKRON penuh dgn origin/main e5d5a4b (R62). Tidak ada pekerjaan yang hilang — semua fitur R51-R62 hidup & terverifikasi browser. Commit lokal duplikat dihapus; DB live dipertahankan + skema di-push. Palet Segia dikonfigurasi sesuai intent R62. My prior session summary yang mengklaim R55-R58 "belum ada" ternyata salah arah: pekerjaan itu ada di REMOTE, sandbox-lah yang tertinggal.
+
+---
+Task ID: 53
+Agent: main (Z.ai Code)
+Task: Fix "ganti warna dgn picker muncul error tidak valid" — bug integrasi palet brand (R62)
+
+Work Log:
+- AKAR MASALAH: mismatch format antara frontend & API. saveIdentity (brand-settings-dialog.tsx) mengirim payload.palette sebagai STRING JSON (JSON.stringify), sedangkan PATCH /api/brands/[id] menuntut OBJECT (typeof === "object") → setiap Simpan Identitas brand GAGAL dgn "Palet warna tidak valid — kirim object {primary, accent, background, text}" (bug ini menyebabkan SEMUA penyimpanan identitas brand gagal, bukan hanya warna). Validasi server juga menolak format ramah: #rgb 3-digit & hex tanpa "#" (hasil ketikan manual di input teks di samping color well).
+- FIX API (src/app/api/brands/[id]/route.ts): helper normalizeHexColor — terima #rrggbb, #rgb (diekspansi), dengan/tanpa "#", uppercase di-lowercase; palette kini menerima OBJECT maupun STRING JSON (parse aman, gagal jelas bila JSON rusak); nilai palet non-hex tetap ditolak dgn pesan spesifik per key.
+- FIX FRONTEND (brand-settings-dialog.tsx): saveIdentity kini mengirim palette sebagai OBJECT + validasi inline SEBELUM PATCH (toast menyebut field yang salah: "Warna latar logo tidak valid — contoh benar: #0f172a…" / "Warna {label} tidak valid…"); helper normalizeHexColor dipindah ke module scope; onBlur input teks (latar logo & 4 slot palet) otomatis merapikan ketikan "0f172a"→"#0f172a", "f90"→"#ff9900".
+- QA curl: palette string 200, logoBg tanpa # 200, #0f1→200 (terekspansi #00ff11), palette object 200, "hijau"→ditolak pesan jelas. QA browser end-to-end: Pengaturan Segia → pilih warna via color well (native setter) → Simpan → toast "Identitas Segia Tech tersimpan" → persistensi terverifikasi via GET /api/brands (logoBg #0f172a + palette penuh). Data uji dipulihkan ke #0f172a.
+- VALIDASI: bunx tsc --noEmit 0 error, bun run lint bersih, dev.log bersih.
+
+Stage Summary:
+- Penyebab error "tidak valid" = palette dikirim sebagai string JSON vs API menuntut object (regresi R62) + validasi hex terlalu kaku utk ketikan manual. Kini: object/string sama-sama diterima, format ramah dinormalisasi, error inline menyebut field spesifik. Alur picker → Simpan terverifikasi browser end-to-end.
