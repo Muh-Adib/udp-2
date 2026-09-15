@@ -2430,3 +2430,19 @@ Work Log:
 Stage Summary:
 - Brand kini punya PALET WARNA dengan kunci utama LATAR LOGO: logo berwarna putih (contoh nyata Segia Tech) tidak lagi hilang di latar putih — warna latar otomatis dipakai di kartu brand, pratinjau pengaturan, form request publik, kop PDF quotation/invoice/brief, dan halaman share quotation. 4 slot palet tambahan (utama/aksen/latar/teks) tersimpan per brand; aksen form request publik kini mengikuti palette.accent.
 - Alur koneksi kanal di Pengaturan Brand kini jujur & lengkap: setelah diputuskan user bisa langsung "Setup berpandu" (kredensial nyata, alur berpandu per penyedia) atau "Ubah kredensial" (edit koneksi ada, kosong = tetap pakai nilai tersimpan, verifikasi nyata saat simpan) — tanpa harus pindah ke modul Kanal dan tanpa terjebak mode demo. Wizard juga kini mendukung Threads (guide baru; dulu tidak bisa dibuka sama sekali).
+
+---
+Task ID: 52
+Agent: main (Z.ai Code)
+Task: Audit git "cek repo tertinggal" — sinkronisasi sandbox stale ke origin/main (R62)
+
+Work Log:
+- AUDIT: sandbox lokal tertinggal di snapshot R50-b + 1 commit lokal 2829311 (fix SMTP R51 versi awal, belum push). origin/main ternyata SUDAH maju 13 commit: R51 (396dc84, implementasi lebih lengkap + DB dikeluarkan dr git) s.d. R62 (e5d5a4b: palet warna brand + latar logo, wizard kanal edit mode; R61: judul Form Request + toggle bahasa + hapus/arsip inbox; R60: intake multi-bahasa EN/ID + email salinan form/portal/PDF brief + portal detail invoice & draft hidden; R59: tooltip FieldHint; R58: validasi email/WA/alamat + format brief; R57: shareable intake link; R54-56: IMAP sync, e-sign share link, TOP builder).
+- Commit lokal 2829311 terbukti REDUNDAN (diduplikasi oleh 396dc84 yg lebih lengkap) — tidak di-rebase, diganti reset.
+- SYNC AMAN: backup db/custom.db + 3 screenshot upload/ ke /tmp → git reset --hard origin/main (e5d5a4b) → restore DB live (data user: kredensial Hostinger, identitas Unicam, numbering rule tetap utuh) → prisma db push (skema baru LeadIntakeLink/QuotationShareToken/logoBg/palette/terms/dst — semua aditif, tanpa data loss) + prisma generate → bun install (dep baru jspdf@4.2.1 — penyebab 500 massal sblmnya) → restart dev server.
+- DATA REPAIR R62: brand Segia Tech diberi logoBg #0f172a + palette {primary #059669, accent #10b981, background #0f172a, text #f8fafc} — logo putih Segia kini terlihat (live DB ini belum pernah dikonfigurasi palet krn berasal dr snapshot lama).
+- QA BROWSER (agent-browser): login andri@udp.co.id OK → Brand Configuration: dialog Pengaturan Segia menampilkan section "Warna brand & latar logo" (color well #0f172a + preset + pratinjau live, logo putih jelas terlihat); kartu brand grid menampilkan logo Segia di latar gelap → Lead Inbox: tombol "Hapus dari Inbox (arsipkan)" per thread + dialog konfirmasi + tab Arsip; uji arsip @rani.creativehouse → Arsip(1) → Pulihkan → Arsip(0) ✓ → link intake QA dibuat via POST /api/pipeline/intake-links (Segia) → form publik /?intake=<token>: logo Segia terlihat di latar gelap, judul "Form Request", toggle EN/ID pojok kanan atas, konten EN default, tooltip ⓘ per field ✓ → link QA dinonaktifkan (PATCH active:false).
+- VALIDASI: curl login/bootstrap/brands/inbox/quotations 200; brands API mengirim logoBg+palette; bun run lint bersih; tsc --noEmit 0 error; dev.log bersih; git status clean (db/custom.db kini untracked sesuai .gitignore baru).
+
+Stage Summary:
+- Sandbox kini SINKRON penuh dgn origin/main e5d5a4b (R62). Tidak ada pekerjaan yang hilang — semua fitur R51-R62 hidup & terverifikasi browser. Commit lokal duplikat dihapus; DB live dipertahankan + skema di-push. Palet Segia dikonfigurasi sesuai intent R62. My prior session summary yang mengklaim R55-R58 "belum ada" ternyata salah arah: pekerjaan itu ada di REMOTE, sandbox-lah yang tertinggal.
