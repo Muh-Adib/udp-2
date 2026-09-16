@@ -658,7 +658,8 @@ export default function LeadIntakeForm({ token }: { token: string }) {
               <IndustryCombobox value={values.industry} onChange={set("industry")} suggestions={industryOptions} />
             </Field>
           </div>
-          <Field label={t.address} required info={t.addressInfo} hint={t.addressHint} error={errors.companyAddress} htmlFor="int-address">
+          {/* R62-c — hint dihilangkan: teks contoh sama persis dgn placeholder di dalam field (duplikat saat kosong) */}
+          <Field label={t.address} required info={t.addressInfo} error={errors.companyAddress} htmlFor="int-address">
             <Textarea id="int-address" value={values.companyAddress} onChange={(e) => set("companyAddress")(e.target.value)} rows={2} placeholder={t.addressHint} aria-invalid={!!errors.companyAddress} />
           </Field>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">

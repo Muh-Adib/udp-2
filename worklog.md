@@ -2461,3 +2461,18 @@ Work Log:
 
 Stage Summary:
 - Penyebab error "tidak valid" = palette dikirim sebagai string JSON vs API menuntut object (regresi R62) + validasi hex terlalu kaku utk ketikan manual. Kini: object/string sama-sama diterima, format ramah dinormalisasi, error inline menyebut field spesifik. Alur picker → Simpan terverifikasi browser end-to-end.
+
+---
+Task ID: 54
+Agent: main (Z.ai Code)
+Task: "masih error saat simpan warna" (sandbox ter-restore ulang) + duplikat teks contoh alamat di form request
+
+Work Log:
+- DIAGNOSIS 1 (warna): reproduksi browser gagal PATCH 400 "Palet warna tidak valid" padahal fix R62-b sudah di-push → TERNYATA sandbox ter-restore KE SNAPSHOT LAMA lagi: lokal jadi f4cc7d0 (R62 pra-fix, hash beda dr e5d5a4b), ahead 1 behind 1, dan DB ikut ter-reseed (semua id brand berganti ke batch cmu2wtuu* — konfigurasi user yg tersimpan ikut hilang, logoBg Segia sempat #101828 tersimpan dari percobaan user). Fix R62-b aman di origin/main (757ea5c).
+- SYNC ULANG: backup db live (kondisi reseed + pilihan user) → git reset --hard origin/main (757ea5c) → restore DB → bun install (no changes) → prisma generate → restart dev server → health 200.
+- VERIFIKASI ULANG end-to-end di browser: Pengaturan Segia Tech → pilih latar logo #1e293b + palet primary #059669 via color well → Simpan → "Identitas Segia Tech tersimpan", PATCH 200. logoBg user dikembalikan ke #101828 (pilihan aslinya). CATATAN OPERASIONAL: sandbox ini bisa ter-restore ke snapshot lama kapan saja — SELALU cek `git status -sb` + bandingkan hash dgn origin/main di awal sesi; push ke origin adalah satu-satunya penyelamat.
+- FIX 2 (duplikat): lead-intake-form.tsx field Company Address menampilkan teks contoh DUA KALI — `hint={t.addressHint}` di bawah field + `placeholder={t.addressHint}` di dalam textarea, string sama persis → hint dihilangkan (placeholder cukup; tooltip ⓘ addressInfo tetap ada). Field lain tidak terdampak (placeholder memakai key *Ph berbeda).
+- QA: link intake QA baru dibuat (link lama hilang krn reseed) → form publik: teks "Example: Jl. Sudirman No. 12…" kini tampil SEKALI (placeholder dalam field, screenshot diverifikasi) → link QA dinonaktifkan. tsc 0 error, lint bersih.
+
+Stage Summary:
+- Error simpan warna = sandbox ter-restore ke snapshot pra-fix (bukan bug baru); sinkron ulang ke origin/main memulihkan fix R62-b — simpan warna terverifikasi browser 200 kembali. Duplikat teks contoh alamat di form request diperbaiki (hint ganda dihapus). Keduanya di-commit & push.
