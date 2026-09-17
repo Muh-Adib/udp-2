@@ -2476,3 +2476,23 @@ Work Log:
 
 Stage Summary:
 - Error simpan warna = sandbox ter-restore ke snapshot pra-fix (bukan bug baru); sinkron ulang ke origin/main memulihkan fix R62-b — simpan warna terverifikasi browser 200 kembali. Duplikat teks contoh alamat di form request diperbaiki (hint ganda dihapus). Keduanya di-commit & push.
+
+---
+Task ID: 55
+Agent: main (Z.ai Code)
+Task: "hai ada error dan juga cek apakah ini sudah file terbaru git" — aplikasi 500 massal (GET / & login 500) + audit kesesuaian sandbox vs origin/main
+
+Work Log:
+- DIAGNOSIS ERROR (500 massal): dev.log memperlihatkan 2 penyebab: (1) TurbopackInternalError "Failed to write app endpoint /_not-found/page — Unable to watch .tmp-audit — Permission denied" → SELURUH halaman & API 500 (GET / = 500, login = 500, terverifikasi curl); (2) warning Edge Runtime "node:crypto not supported" dari src/middleware.ts yang MENGHALAU semua mutasi /api/*.
+- AKAR MASALAH: file-file STRAY bukan berasal dari git — (a) .tmp-audit/ = sisa QA lama (cookies.txt, qa-r57.sh) mengacaukan watcher Turbopack; (b) src/middleware.ts = artefak PRA-Ronde-27 (sebelum rename ke proxy.ts konvensi Next 16) yang dulu PERNAH menyebabkan 500 massal yang sama (worklog R27: "middleware.ts DEPRECATED & bentrok, terdeteksi saat startup") — gate sesi yang BENAR ada di src/proxy.ts (tracked); (c) 4 file orphan fitur cron 1 Sep yang tak direferensikan mana pun: src/app/api/services/ (2 route), src/app/api/inbox/avatar/route.ts, src/lib/crm/service-flow.ts; (d) 4 PNG public/brands lama dari DB ter-reseed (DB live merujuk logo-segia.png dsb — semuanya tracked).
+- GIT REKONSILIASI ("cek file terbaru"): lokal & origin SAMA-sama punya commit R62-c dgn hash beda (259973f lokal vs b9bf165 remote — duplikasi pasca restore sandbox; diff = perubahan mode file saja, 0 insersi/del). git reset --hard origin/main → HEAD b9bf165; hapus semua file stray di atas; git checkout .zscripts/dev.pid → git status BERSIH total (0 untracked), sandbox = origin/main persis.
+- RESTART DEV via .zscripts/dev.sh (setsid nohup, bun install + db:push + disown — nohup bun run dev polos mati saat shell tool berakhir, jangan dipakai): GET / 200, login 200, proxy.ts aktif (terlihat di log request), TANPA warning Edge/node:crypto, dev.log bersih.
+- QA curl E2E warna: PATCH /api/brands/segia {logoBg #101828, palette 4 slot} → 200; GET /api/brands → persisted ✓.
+- QA browser E2E (agent-browser) alur persis user: login → Brand Configuration → Pengaturan Segia Tech → tab Identitas → klik preset latar #1e293b → Simpan identitas → TOAST "Identitas Segia Tech tersimpan" ✓ → DB terverifikasi #1e293b → dikembalikan ke pilihan user #101828.
+- QA form publik: link intake QA dibuat (Segia) → form render EN, placeholder #int-address = "Example: Jl. Sudirman No. 12, Central Jakarta, 10220" TEPAT SEKALI (innerText & textContent 0 kemunculan ganda, tak ada hint saudara) → fix duplikat R62-c terkonfirmasi ikut ter-restore → link QA dinonaktifkan.
+- VALIDASI: bun run lint bersih; tsc --noEmit 0 error; dev.log tanpa ⨯/Edge error.
+
+Stage Summary:
+- Error "ada error" yang dilihat user = aplikasi 500 MASSAL, bukan bug warna: sandbox berisi file stray (.tmp-audit + middleware.ts usang pra-R27) yang menggagalkan Turbopack & menghalau API. Setelah dibersihkan + reset ke origin/main + restart via dev.sh, aplikasi pulih penuh — simpan warna brand terverifikasi browser end-to-end (toast sukses), fix duplikat contoh alamat juga terkonfirmasi aktif.
+- Jawaban "cek apakah sudah file terbaru git": YA kini sandbox = origin/main b9bf165 (R62-c) PERSIS, git status bersih tanpa file liar. Sebelumnya ada duplikasi commit R62-c (hash beda, isi sama) + file orphan — semuanya dirapikan.
+- PELAJARAN OPERASIONAL: (1) SELALU cek keberadaan src/middleware.ts — file ini TIDAK BOLEH ada (harus proxy.ts); (2) restart dev WAJIB lewat .zscripts/dev.sh, bukan nohup bun run dev manual; (3) .tmp-audit/ adalah sampah QA — hapus saat jumpa.
