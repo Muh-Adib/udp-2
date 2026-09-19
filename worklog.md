@@ -2496,3 +2496,16 @@ Stage Summary:
 - Error "ada error" yang dilihat user = aplikasi 500 MASSAL, bukan bug warna: sandbox berisi file stray (.tmp-audit + middleware.ts usang pra-R27) yang menggagalkan Turbopack & menghalau API. Setelah dibersihkan + reset ke origin/main + restart via dev.sh, aplikasi pulih penuh — simpan warna brand terverifikasi browser end-to-end (toast sukses), fix duplikat contoh alamat juga terkonfirmasi aktif.
 - Jawaban "cek apakah sudah file terbaru git": YA kini sandbox = origin/main b9bf165 (R62-c) PERSIS, git status bersih tanpa file liar. Sebelumnya ada duplikasi commit R62-c (hash beda, isi sama) + file orphan — semuanya dirapikan.
 - PELAJARAN OPERASIONAL: (1) SELALU cek keberadaan src/middleware.ts — file ini TIDAK BOLEH ada (harus proxy.ts); (2) restart dev WAJIB lewat .zscripts/dev.sh, bukan nohup bun run dev manual; (3) .tmp-audit/ adalah sampah QA — hapus saat jumpa.
+
+---
+Task ID: 56
+Agent: main (Z.ai Code)
+Task: "cek git semoga tidak regresi workspace" — audit regresi pasca sesi R63
+
+Work Log:
+- GIT: lokal f61e5e9 vs remote 1dc1ae9 — commit R63 TERDUPLIKASI lagi (pesan sama, hash beda; diff = mode file + 1 baris runtime noise, worklog.md identik) — pola restore snapshot sandbox yang sudah diketahui. Reset --hard origin/main → 1dc1ae9, status bersih.
+- ARTIFAK LIAR: TIDAK ADA kembali — src/middleware.ts, .tmp-audit/, api/services/, api/inbox/avatar/, service-flow.ts semuanya tetap terhapus; src/proxy.ts utuh.
+- HEALTH: GET / 200, login 200, .zscripts/dev.pid hanya noise runtime (dicheckout).
+
+Stage Summary:
+- TIDAK ADA REGRESI: pembersihan R63 bertahan, server sehat, sandbox = origin/main persis. Duplikasi hash commit murni artefak restore (isi identik) — reset aman tanpa kehilangan apa pun.
