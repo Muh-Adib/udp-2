@@ -2509,3 +2509,18 @@ Work Log:
 
 Stage Summary:
 - TIDAK ADA REGRESI: pembersihan R63 bertahan, server sehat, sandbox = origin/main persis. Duplikasi hash commit murni artefak restore (isi identik) — reset aman tanpa kehilangan apa pun.
+
+---
+Task ID: 63
+Agent: main (Z.ai Code)
+Task: "tolong rebase dengan git" — rebase diminta user; ditemukan commit lokal TERKONTAMINASI pasca 12 hari (17→29 Sep) snapshot restore/cron
+
+Work Log:
+- REBASE dieksekksi sesuai permintaan: checkout .zscripts/dev.pid → git rebase origin/main sukses (2d5f635). TAPI inspeksi lanjutan menemukan commit lokal 27968f6 (pesan "R63-b", author date 19 Sep) ternyata TREE-nya TERKONTAMINASI: berisi src/middleware.ts (usang pra-R27, Edge crash), .tmp-audit/, api/services/, api/inbox/avatar/, service-flow.ts — total 539 baris file liar kembali sebagai file TRACKED. Rebase yang setia mempertahankan patch justru menghidupkan kembali kontaminasi (dev server 12 hari berjalan dgn middleware.ts aktif — dev.log lama penuh warning node:crypto Edge).
+- KEPUTUSAN: konten lokal tidak berharga (hanya file liar + pesan commit duplikat) → buang: git reset --hard origin/main (4e64d8f) + rm -rf sisa (middleware.ts dsb terhapus otomatis oleh reset karena sempat tracked). ls-tree HEAD = tanpa middleware.ts ✓.
+- DB TER-RESEED lagi selama 12 hari: semua id brand berganti (batch cmumbsto*); Segia Tech = cmumbstoa0002mwwjyjq38d43 — logoBg #101828 & konfigurasi user BERTAHAN.
+- RESTART dev via .zscripts/dev.sh (fresh baseline): GET / 200, login 200 (401 awal hanya race compile), brands 200, PATCH palette Segia 200 + persist terverifikasi. dev.log FRESH: 0 warning Edge/node:crypto, 0 ⨯.
+- PELAJARAN TAMBAHAN: commit "pesan sama" TIDAK BERARTI "isi sama" — SELALU inspeksi tree (git ls-tree / diff --stat) sebelum menganggap duplikat aman; rebase menjaga patch kontaminasi, reset --hard ke origin adalah pembersih yang benar untuk kontaminasi.
+
+Stage Summary:
+- Rebase selesai tapi hasilnya dibuang karena commit lokalnya terkontaminasi file liar (middleware.ts dkk. kembali sebagai tracked). Sandbox kembali = origin/main 4e64d8f persis, bersih, server sehat, simpan palet brand terverifikasi 200. DB reseeded tapi konfigurasi warna Segia milik user utuh.
