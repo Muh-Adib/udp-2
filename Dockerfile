@@ -21,6 +21,11 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 # DATABASE_URL hanya dummy utk build — database tidak diakses saat build.
 ENV DATABASE_URL="file:/app/db/custom.db"
+# SESSION_SECRET dummy utk build — guard fail-closed Ronde 36 di session.ts melempar
+# error saat modul dievaluasi "Collecting page data" jika kosong di produksi.
+# Runtime memakai secret nyata: env compose/Coolify, atau yang digenerate
+# docker-entrypoint.sh dan disimpan persisten di volume /app/data.
+ENV SESSION_SECRET="build-time-dummy-secret-not-used-at-runtime"
 RUN bun run build
 
 # ---------- 3) runner: server standalone ringan ----------

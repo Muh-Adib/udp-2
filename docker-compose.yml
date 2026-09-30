@@ -19,6 +19,9 @@ services:
       # Opsional — kunci layanan AI (ringkasan opportunity). Kosongkan bila tak dipakai.
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - Z_AI_API_KEY=${Z_AI_API_KEY:-}
+      # Kunci tanda-tangan cookie sesi (fail-closed sejak Ronde 36).
+      # Bila kosong, docker-entrypoint.sh otomatis generate & simpan di volume.
+      - SESSION_SECRET=${SESSION_SECRET:-}
       # Opsional — variabel SMTP global (kredensial email kanal dikelola via UI Saluran & Integrasi).
     volumes:
       - db-data:/app/data
