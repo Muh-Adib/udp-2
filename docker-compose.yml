@@ -1,17 +1,30 @@
 # =============================================================
-# Multi-Brand CRM — deployment sederhana 1 container (SQLite)
-#   docker compose up -d --build   →  http://localhost:3000
-# Data tersimpan persisten di volume "db-data".
+# Multi-Brand CRM — deployment Coolify / docker compose (SQLite)
+# -------------------------------------------------------------
+# Mengikuti pola "Generated Stack Values" Coolify:
+# https://coolify.io/docs/applications/builds/docker-compose#generated-stack-values
+#
+# - TANPA binding port host (ports:) — port host 3000 sering sudah
+#   dipakai layanan lain di server → "port is already allocated".
+#   Aplikasi diakses lewat domain Coolify (proxy internal Docker).
+# - SERVICE_FQDN_APP_3000 → Coolify otomatis generate domain & mendaftarkan
+#   route proxy ke port 3000 di dalam container. Domain bisa diganti di UI
+#   Coolify (Environment Variables / Domains).
+# - Data tersimpan persisten di volume "db-data".
 # =============================================================
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: grup-crm
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
+      # === Coolify generated stack values ===
+      # Domain otomatis dari Coolify → diproxy ke port 3000 container.
+      # Value variabel ini di dalam container = URL yang di-generate.
+      - SERVICE_FQDN_APP_3000
+      # === Aplikasi ===
       # Path database DI DALAM container (volume di bawah).
       - DATABASE_URL=file:/app/data/custom.db
       - NODE_ENV=production
