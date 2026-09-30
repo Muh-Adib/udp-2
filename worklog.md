@@ -2583,3 +2583,19 @@ Work Log:
 
 Stage Summary:
 - Rantai perbaikan deployment Coolify sejauh ini: (1) build gagal SESSION_SECRET → dummy build env + entrypoint generate/persist; (2) port host 3000 conflict → compose tanpa binding host + SERVICE_FQDN_APP_3000; (3) bunx prisma v7 UNKNOWN_COMMAND → CLI lokal langsung + seed path benar; (4) closure dependensi CLI kurang → COPY lengkap. Semua tahap terverifikasi lokal. Redeploy udp-2:main (203592f) — container seharusnya menyala: seed tersalin, db push sinkron, server standalone start.
+
+---
+Task ID: 68
+Agent: main (Z.ai Code)
+Task: deployment tahap 5 — crash-loop lanjutan: "error: Module not found .next/standalone/server.js" (progress: fix Task 67 terbukti — log user kini "database is already in sync", db push SUKSES; tinggal langkah start server)
+
+Work Log:
+- DIAGNOSIS: Dockerfile runner memakai pola resmi Next.js Docker "COPY --from=builder /app/.next/standalone ./" → ISI standalone DIRATAKAN ke /app, server berada di /app/server.js. Entrypoint masih `exec bun .next/standalone/server.js` → path /app/.next/standalone/server.js TIDAK ADA → bun "Module not found". (package.json "start" utk repo host tetap benar — layout bersarang di host.)
+- FIX docker-entrypoint.sh: resolve SERVER_JS — /app/server.js (layout image, utama) → fallback /app/.next/standalone/server.js (kompatibilitas) → FATAL exit 1 dgn pesan jelas bila tak ketemu; exec bun "$SERVER_JS".
+- HARDENING .dockerignore: db/custom.db & -journal tidak lagi masuk image (data user asli tidak terbawa ke produksi; build tidak menyentuh db — terbukti build terisolasi tanpa file db sukses). db/custom.db.seed tetap ikut utk first-boot seeding.
+- VERIFIKASI END-TO-END TANPA DOCKER (layout runner PERSIS): build produksi terisolasi /tmp/build-test68 (bun install frozen + prisma generate + dummy env + bun run build → sukses, standalone/server.js + static + public ada) → simulasi runner: standalone diratakan ke /tmp/runner-sim68 + 27 paket closure prisma di-merge ke node_modules + prisma/ + db/ + entrypoint → jalankan entrypoint asli (dgn set -x trace): SESSION_SECRET generate ✓, seed tersalin ✓, db push 59ms ✓, "[ -f /tmp/runner-sim68/server.js ]" ✓, `bun server.js` → "▲ Next.js 16.1.3 Ready in 74ms" ✓ → curl: /api/health 200 {"status":"ok"}, / 200, POST /api/auth/login andri@udp.co.id/udp1234 → 200 dgn objek user (prisma client + sqlite + seed + session BEKERJA). Guard fail-closed SESSION_SECRET terbukti berlaku juga (tanpa secret → 500 middleware, sesuai desain).
+- INSIDEN LOKAL: dev server sandbox berulang kali mati — dmesg: "Out of memory: Killed process next-server anon-rss:2.2GB" (Turbopack dev compile meledak di RAM 4GB). Mitigasi lokal: restart dgn NODE_OPTIONS=--max-old-space-size=1408 → stabil di ~1.8GB, HTTP 200 (tidak memengaruhi produksi — container standalone ringan). Total 5 fix commit deployment: 5a96b39→1b3f2ca→901ac1c→203592f→a527e6e.
+- PUSH: a527e6e (docker-entrypoint.sh, .dockerignore).
+
+Stage Summary:
+- Rantai deployment Coolify lengkap kini terverifikasi TANPA docker di level layout persis seperti image: build ✓ → seed first-boot ✓ → db push ✓ → server standalone start (bun /app/server.js) ✓ → health 200 ✓ → login 200 ✓. Redeploy udp-2:main (a527e6e) — container seharusnya menyala penuh: log akan berlanjut dari "Menjalankan server di port 3000 (/app/server.js)" → "▲ Next.js ... Ready". Bila masih gagal, log entrypoint kini memberi pesan FATAL eksplisit per tahap.
