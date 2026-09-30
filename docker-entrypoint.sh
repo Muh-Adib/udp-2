@@ -12,7 +12,13 @@ set -e
 
 DATA_DIR="/app/data"
 DB_FILE="$DATA_DIR/custom.db"
-SEED_DB="/app/db/custom.db"
+# Seed demo yang di-track git (db/custom.db TIDAK di-track — hanya .seed).
+SEED_DB="/app/db/custom.db.seed"
+# CLI Prisma dari node_modules citra (versi terkunci di bun.lock) — JANGAN pakai
+# `bunx prisma`: node_modules/.bin tidak ikut disalin di image runner, sehingga
+# bunx mengunduh Prisma TERBARU dari npm (v7 — perintah `db push` sudah tidak ada,
+# gagal: CLI.UNKNOWN_COMMAND "No command registered for `push`").
+PRISMA_CLI="/app/node_modules/prisma/build/index.js"
 
 mkdir -p "$DATA_DIR"
 
@@ -31,7 +37,8 @@ if [ -z "$SESSION_SECRET" ]; then
   export SESSION_SECRET
 fi
 
-if [ ! -f "$DB_FILE" ]; then
+# ! -s = file tidak ada ATAU berukuran 0 — keduanya dianggap perlu seed.
+if [ ! -s "$DB_FILE" ]; then
   if [ -f "$SEED_DB" ]; then
     echo "[entrypoint] Menyalin database seed demo → $DB_FILE"
     cp "$SEED_DB" "$DB_FILE"
@@ -41,7 +48,7 @@ if [ ! -f "$DB_FILE" ]; then
 fi
 
 echo "[entrypoint] Sinkronisasi schema Prisma..."
-bunx --bun prisma db push --accept-data-loss --skip-generate --schema=/app/prisma/schema.prisma
+bun "$PRISMA_CLI" db push --accept-data-loss --skip-generate --schema=/app/prisma/schema.prisma
 
 echo "[entrypoint] Menjalankan server di port ${PORT:-3000}..."
 exec bun .next/standalone/server.js
