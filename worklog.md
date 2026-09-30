@@ -2539,3 +2539,17 @@ Work Log:
 
 Stage Summary:
 - Deployment Coolify gagal krn SESSION_SECRET fail-closed (Ronde 36) dievaluasi saat next build tanpa secret di Docker. Kini: build punya dummy secret (hanya utk build), runtime otomatis dapat secret nyata yang di-generate & dipersistenkan di volume oleh entrypoint (atau dari env Coolify bila diset). Silakan redeploy udp-2:main (commit 5a96b39) — build akan lolos dan container menyala tanpa konfigurasi tambahan.
+
+---
+Task ID: 65
+Agent: main (Z.ai Code)
+Task: deployment Coolify tahap 2 — build LOLOS (fix SESSION_SECRET Task 64 terbukti), tapi start container gagal: "Bind for 0.0.0.0:3000 failed: port is already allocated". User minta compose memakai variabel Coolify (docs: docker-compose#generated-stack-values)
+
+Work Log:
+- PROGRES: deploy commit bfaf5d1 — build sukses, container lama dibersihkan, container baru start → gagal HANYA di networking: compose lama mem-binding port host tetap (ports "3000:3000") dan port 3000 host sudah dipakai layanan lain di server deployment.
+- FIX COMPOSE (pola Coolify generated stack values): (1) HAPUS ports "3000:3000" — tidak ada lagi binding port host; (2) tambah expose "3000"; (3) tambah env SERVICE_FQDN_APP_3000 → Coolify generate domain & mendaftarkan route proxy internal docker network ke port 3000 container (domain bisa diganti di UI Coolify); (4) HAPUS container_name "grup-crm" (anti-pola Coolify — risiko konflik nama dgn container lama; Coolify menamai container sendiri); healthcheck internal 127.0.0.1:3000 tetap valid; volume db-data tetap.
+- VERIFIKASI: YAML divalidasi parser (tanpa ports/container_name, expose+SERVICE_FQDN ada); git rebase origin/main dulu (bersih); lint bersih.
+- PUSH: 1b3f2ca (docker-compose.yml).
+
+Stage Summary:
+- Build produksi kini sehat (bukti: deploy mencapai tahap start). Kegagalan start krn konflik port host diselesaikan dgn pola resmi Coolify: tanpa binding port host, akses via domain yang di-generate SERVICE_FQDN_APP_3000 + proxy internal. Catatan utk user: bila ingin domain khusus, set di UI Coolify pada service app (Environment Variables atau field Domains) — nilai SERVICE_FQDN_APP_3000 akan mengikuti.
