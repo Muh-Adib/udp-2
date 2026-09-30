@@ -2617,3 +2617,21 @@ Work Log:
 
 Stage Summary:
 - Arsitektur deployment kini: BUILD = validasi schema; DEPLOY (one-shot service migrate) = seed first-boot + db push + generate secret persisten; RUNTIME app = murni `bun --env-file=... server.js` tanpa entrypoint/script. Secret sama antar deploy (file volume) → sesi user tidak gugur saat redeploy. 401 massal teratasi (cookie Secure adaptif terhadap protokol aktual). Redeploy udp-2:main (3fc8946): Coolify akan menjalankan migrate dulu lalu app; bila login via domain, GET /api/brands dkk tidak lagi 401. Bila masih 401 setelah LOGIN ULANG (cookie lama tak valid): cek apakah akses via https atau http — kini keduanya didukung.
+---
+Task ID: 70
+Agent: main (Z.ai Code)
+Task: Buat dokumen yang menjelaskan arsitektur project saat ini beserta semua business logic di dalam arsitekturnya
+
+Work Log:
+- Baca worklog.md (konvensi + status terkini) untuk konteks project UDP CRM.
+- Jalankan 5 agen eksplorasi paralel (read-only) yang membaca seluruh source: (a) arsitektur & infrastruktur (app shell, proxy.ts, session/auth, RBAC, Docker, notif-service, PWA/push), (b) data model & core libs (prisma/schema.prisma 34 model + 30 modul src/lib/crm), (c) API pipeline & growth (opportunities, inbox, dashboard, reports, intake, dst.), (d) API commerce & dokumen (invoices 8 action, quotations, portal, briefs, projects, CR, brands), (e) API auth/kanal/notifikasi/master data.
+- Verifikasi manual: 34 model Prisma terkonfirmasi via rg; status git dicek (HEAD = 4ae69ca).
+- Tulis dokumen Markdown lengkap 1.115 baris di docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md — 14 bab: ringkasan eksekutif, tech stack, arsitektur sistem (diagram lapisan + SPA/PortalGate + struktur direktori), model data (34 model per kelompok + relasi + narasi domain + 12 stage pipeline + konstanta bisnis), keamanan/auth/RBAC (cookie HMAC adaptif, proxy allowlist, matriks RBAC lengkap, audit), business logic per 21 sub-modul (rumus KPI dashboard, bobot lead scoring & identity matching, SLA sweep, transisi WON 9 langkah, workflow Brief→Estimasi→Quotation, invoice 8 action + rumus total + taxMode, TOP, aging, projects/milestones/deliverables/CR, portal, intake publik, AI, health/bootstrap), generator PDF & kop surat, kanal & integrasi eksternal, notifikasi/socket/push, deployment (Dockerfile 3 stage, migrate one-shot, env vars), 14 keputusan arsitektur & trade-off, 12 kelemahan yang diketahui + rekomendasi, referensi API (±70 endpoint), lampiran (seed, kredensial demo, glosarium).
+- Buat versi DOCX profesional (docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.docx, 44 halaman) via skill docx: resep cover R1 + palet DM-1 (Deep Cyan tech), 3 seksi (cover margin-0 / Daftar Isi Roman / body Arabic mulai 1), TOC field 74 entri + refresh hint, header berjalan + footer nomor halaman, 20+ tabel WPS-safe (tableHeader/cantSplit/margins/persentase, header teal 1B6B7A), blok rumus monospace bershading.
+- Post-processing sesuai skill: add_toc_placeholders.py --auto (exit 0, 74 entri) → patch footer PAGE \* ROMAN / \* arabic + hapus pgNumType kosong (script python sendiri) → postcheck.py hasil 0 error (2 warning by-design: PageBreak wajib setelah TOC; spacing 264 = tabel kompak).
+- Verifikasi visual end-to-end: konversi ke PDF via LibreOffice (44 halaman) → render halaman 1-6 + 13 + 18 sebagai PNG → cover/TOC/body/tabel RBAC 9 kolom semuanya ter-render benar tanpa overflow.
+- Bersihkan .tmp-docgen (generator + hasil PDF verifikasi dihapus).
+
+Stage Summary:
+- Deliverable: docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md (sumber) + docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.docx (dokumen formal siap distribusi). Dokumen menjadi sumber kebenaran arsitektur & business logic UDP CRM per tanggal 30 Sep 2025; klaim diverifikasi langsung ke source code.
+- Temuan penting yang terdokumentasi untuk tugas berikutnya: 12 kelemahan dgn rekomendasi (GET read tanpa sesi di layer route, add_payment tanpa validasi sisa, validUntil tidak ditegakkan, CR invoice hardcode tax 11/IDR, kredensial kanal plaintext, notif-service belum dideploy produksi, tanpa backup SQLite otomatis).
