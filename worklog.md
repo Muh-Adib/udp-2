@@ -2553,3 +2553,18 @@ Work Log:
 
 Stage Summary:
 - Build produksi kini sehat (bukti: deploy mencapai tahap start). Kegagalan start krn konflik port host diselesaikan dgn pola resmi Coolify: tanpa binding port host, akses via domain yang di-generate SERVICE_FQDN_APP_3000 + proxy internal. Catatan utk user: bila ingin domain khusus, set di UI Coolify pada service app (Environment Variables atau field Domains) — nilai SERVICE_FQDN_APP_3000 akan mengikuti.
+
+---
+Task ID: 66
+Agent: main (Z.ai Code)
+Task: deployment tahap 3 — runtime crash-loop: entrypoint gagal di "prisma db push" → CLI.UNKNOWN_COMMAND "No command registered for `push`, did you mean `update`?" (container restart tiap ±62 dtk)
+
+Work Log:
+- DIAGNOSIS: sandbox pakai prisma 6.19.2 (db push normal), tapi di CONTAINER `bunx --bun prisma` mengunduh Prisma TERBARU (v7) dari npm — sebab: image runner HANYA menyalin node_modules/.prisma, @prisma, prisma — TANPA node_modules/.bin, jadi bunx tidak menemukan binary lokal. Prisma v7 mengganti/hapus `db push` (hint "did you mean update", output JSON envelope baru).
+- BUG KEDUA (ditemukan saat baca log user "[entrypoint] Database kosong"): SEED_DB menunjuk /app/db/custom.db, padahal satu-satunya file db yang di-track git adalah db/custom.db.seed → first boot akan membuat database KOSONG tanpa user → login mustahil.
+- FIX docker-entrypoint.sh: (1) PRISMA_CLI=/app/node_modules/prisma/build/index.js — panggil CLI lokal terkunci langsung via `bun` (offline, versi = bun.lock); (2) SEED_DB=/app/db/custom.db.seed; (3) deteksi DB perlu-seed pakai `[ ! -s "$DB_FILE" ]` (tidak ada ATAU 0 byte). PLUS pin package.json prisma & @prisma/client exact 6.19.2 (bun.lock ikut, tanpa perubahan resolusi).
+- VERIFIKASI: CLI langsung 6.19.2 ✓; db push uji pada SALINAN seed → "database is now in sync", 9 user ada ✓; sh -n OK; simulasi alur seed OK; bun install "no changes".
+- PUSH: 901ac1c (docker-entrypoint.sh, package.json, bun.lock).
+
+Stage Summary:
+- Crash-loop runtime teratasi: entrypoint kini memakai CLI Prisma 6.19.2 yang terkunci di image (bukan unduhan v7 dari bunx), dan database first-boot otomatis di-seed demo (9 user, login andri@udp.co.id langsung bisa). Silakan redeploy udp-2:main (901ac1c). PELAJARAN: di image standalone JANGAN andalkan bunx/npx untuk tool lokal — .bin tidak ikut tersalin; panggil entry node_modules langsung.
