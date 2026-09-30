@@ -5,6 +5,7 @@ import {
   SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySecret, hashSecret,
   isPlainPin, loginRateLimit, loginRateLimitEmail, loginRateLimitReset,
 } from "@/lib/crm/auth";
+import { isSecureRequest } from "@/lib/crm/server";
 
 /**
  * Ronde 27 — login sesi nyata. Ronde 46 — PASSWORD menjadi kredensial utama:
@@ -110,7 +111,8 @@ export async function POST(req: NextRequest) {
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Ronde 63 — Secure adaptif: cookie Secure via HTTP ditolak browser → 401 massal.
+    secure: isSecureRequest(req),
     path: "/",
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });

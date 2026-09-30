@@ -96,6 +96,31 @@ export function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+/**
+ * Ronde 63 — cookie Secure adaptif: `secure` HANYA bila request benar-benar
+ * lewat HTTPS. Cookie `Secure` yang diset lewat HTTP murni DITOLAK browser →
+ * login 200 tapi cookie tak tersimpan → SEMUA API 401 (persis bug deployment:
+ * /api/brands, /api/permissions, /api/dashboard 401). Proxy (Traefik/Coolify)
+ * menyimpan protokol asli di `x-forwarded-proto`; fallback = protokol URL.
+ * Akses HTTPS tetap dapat cookie Secure penuh — tidak ada kompromi keamanan.
+ */
+export function isSecureRequest(req: {
+  headers: { get(name: string): string | null };
+  url?: string;
+}): boolean {
+  const xf = req.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  if (xf) return xf === "https";
+  try {
+    return new URL(req.url ?? "").protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export async function logAudit(entry: {
   actorName: string;
   actorRole?: string | null;

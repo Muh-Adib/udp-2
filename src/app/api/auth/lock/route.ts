@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ok, fail, logAudit } from "@/lib/crm/server";
+import { ok, fail, logAudit, isSecureRequest } from "@/lib/crm/server";
 import {
   getSessionUser, signSession, LOCK_COOKIE, LOCK_TTL_MS, SESSION_TTL_MS, SESSION_COOKIE,
 } from "@/lib/crm/auth";
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
   response.cookies.set(LOCK_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureRequest(req), // Ronde 63 — Secure adaptif
     path: "/",
     maxAge: Math.floor(LOCK_TTL_MS / 1000),
   });
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   ), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureRequest(req), // Ronde 63 — Secure adaptif
     path: "/",
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });

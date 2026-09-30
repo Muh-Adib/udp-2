@@ -1,31 +1,52 @@
 # =============================================================
 # Multi-Brand CRM — deployment Coolify / docker compose (SQLite)
 # -------------------------------------------------------------
+# ARSITEKTUR (redesign Ronde 63 — runtime bersih tanpa entrypoint):
+#   service `migrate` (one-shot, exit setelah selesai):
+#     - generate SESSION_SECRET → file persisten di volume (sekali, first deploy)
+#     - salin DB seed demo bila volume kosong (first boot)
+#     - sinkronisasi schema Prisma (db push, idempoten)
+#   service `app` (runtime murni `CMD bun server.js` — TANPA entrypoint/shell):
+#     - start SETELAH migrate sukses (depends_on service_completed_successfully)
+#     - secret dibaca dari file volume oleh src/instrumentation.ts saat start
+#
 # Mengikuti pola "Generated Stack Values" Coolify:
 # https://coolify.io/docs/applications/builds/docker-compose#generated-stack-values
-#
-# - TANPA binding port host (ports:) — port host 3000 sering sudah
-#   dipakai layanan lain di server → "port is already allocated".
-#   Aplikasi diakses lewat domain Coolify (proxy internal Docker).
-# - SERVICE_FQDN_APP_3000 → Coolify otomatis generate domain & mendaftarkan
-#   route proxy ke port 3000 di dalam container. Domain bisa diganti di UI
-#   Coolify (Environment Variables / Domains).
-# - Data tersimpan persisten di volume "db-data".
+#   - TANPA binding port host (ports:) — akses via domain Coolify (proxy internal).
+#   - SERVICE_FQDN_APP_3000 → Coolify generate domain + route proxy ke port 3000.
+#   - Data persisten di volume "db-data" (database + secret file).
 # =============================================================
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # One-shot — BUKAN server. Gagal di sini = deploy gagal jelas (app tak nyala
+    # dengan schema/secret invalid); error migrasi tampil di log deploy.
+    command: ["sh", "/app/docker-migrate.sh"]
+    environment:
+      - DATABASE_URL=file:/app/data/custom.db
+      # Env platform dipakai bila diset; bila kosong → script generate file secret.
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - NEXT_TELEMETRY_DISABLED=1
+    volumes:
+      - db-data:/app/data
+    restart: "no"
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     expose:
       - "3000"
     environment:
       # === Coolify generated stack values ===
       # Domain otomatis dari Coolify → diproxy ke port 3000 container.
-      # Value variabel ini di dalam container = URL yang di-generate.
       - SERVICE_FQDN_APP_3000
       # === Aplikasi ===
-      # Path database DI DALAM container (volume di bawah).
       - DATABASE_URL=file:/app/data/custom.db
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
@@ -33,7 +54,8 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - Z_AI_API_KEY=${Z_AI_API_KEY:-}
       # Kunci tanda-tangan cookie sesi (fail-closed sejak Ronde 36).
-      # Bila kosong, docker-entrypoint.sh otomatis generate & simpan di volume.
+      # Prioritas: env platform > file /app/data/.session-secret di volume
+      # (dibaca src/instrumentation.ts saat start; file digenerate service migrate).
       - SESSION_SECRET=${SESSION_SECRET:-}
       # Opsional — variabel SMTP global (kredensial email kanal dikelola via UI Saluran & Integrasi).
     volumes:

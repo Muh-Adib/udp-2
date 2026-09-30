@@ -23,10 +23,17 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="file:/app/db/custom.db"
 # SESSION_SECRET dummy utk build — guard fail-closed Ronde 36 di session.ts melempar
 # error saat modul dievaluasi "Collecting page data" jika kosong di produksi.
-# Runtime memakai secret nyata: env compose/Coolify, atau yang digenerate
-# docker-entrypoint.sh dan disimpan persisten di volume /app/data.
+# Runtime memakai secret nyata: env compose/Coolify, atau file di volume yang
+# digenerate docker-migrate.sh (dibaca src/instrumentation.ts saat app start).
 ENV SESSION_SECRET="build-time-dummy-secret-not-used-at-runtime"
 RUN bun run build
+
+# Validasi schema di tahap BUILD (permintaan Ronde 63: migrasi/validasi di build,
+# bukan runtime) — schema.prisma yang salah/ruptak membuat BUILD GAGAL sekarang,
+# bukan crash saat container nyala. Dipush ke db buangan sementara.
+RUN DATABASE_URL="file:/tmp/schema-check.db" \
+    bun /app/node_modules/prisma/build/index.js db push \
+    --skip-generate --schema=/app/prisma/schema.prisma
 
 # ---------- 3) runner: server standalone ringan ----------
 FROM oven/bun:1 AS runner
@@ -72,11 +79,13 @@ COPY --from=builder /app/node_modules/nypm ./node_modules/nypm
 COPY --from=builder /app/node_modules/destr ./node_modules/destr
 COPY --from=builder /app/node_modules/pure-rand ./node_modules/pure-rand
 COPY --from=builder /app/node_modules/tinyexec ./node_modules/tinyexec
-# Schema prisma + db seed demo bawaan repo (disalin ke volume saat pertama jalan)
+# Schema prisma + db seed demo bawaan repo (dipakai service migrate utk first-boot)
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/db ./db
-COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x ./docker-entrypoint.sh && mkdir -p /app/data
+# Script one-shot migrate (HANYA dipakai service `migrate` di compose —
+# container app tidak pernah menjalankannya; CMD-nya murni `bun server.js`)
+COPY docker-migrate.sh ./docker-migrate.sh
+RUN chmod +x ./docker-migrate.sh && mkdir -p /app/data
 
 VOLUME ["/app/data"]
 EXPOSE 3000
@@ -84,4 +93,11 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD bun -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(200<=r.status&&r.status<400?0:1)).catch(()=>process.exit(1))"
 
-ENTRYPOINT ["./docker-entrypoint.sh"]
+# Runtime bersih — TANPA entrypoint, TANPA shell (permintaan Ronde 63).
+# Seed + migrasi schema + secret sudah dijamin oleh service one-shot `migrate`
+# (docker-migrate.sh) yang selesai dulu (depends_on di docker-compose.yml).
+# --env-file memuat secret dari volume SEBELUM modul apa pun dievaluasi:
+#  - file hilang → diabaikan diam (fail-closed session.ts tetap berlaku bila
+#    secret benar-benar tidak ada di mana pun),
+#  - env platform (Coolify) TIDAK tertimpa oleh file.
+CMD ["bun", "--env-file=/app/data/.session-secret", "server.js"]
