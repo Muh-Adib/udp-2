@@ -2635,3 +2635,23 @@ Work Log:
 Stage Summary:
 - Deliverable: docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md (sumber) + docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.docx (dokumen formal siap distribusi). Dokumen menjadi sumber kebenaran arsitektur & business logic UDP CRM per tanggal 30 Sep 2025; klaim diverifikasi langsung ke source code.
 - Temuan penting yang terdokumentasi untuk tugas berikutnya: 12 kelemahan dgn rekomendasi (GET read tanpa sesi di layer route, add_payment tanpa validasi sisa, validUntil tidak ditegakkan, CR invoice hardcode tax 11/IDR, kredensial kanal plaintext, notif-service belum dideploy produksi, tanpa backup SQLite otomatis).
+---
+Task ID: 71
+Agent: main (Z.ai Code)
+Task: Rebase/restore workspace pasca sandbox reset — "tolong rebase karena versi ter reset"
+
+Work Log:
+- Diagnosis: sandbox di-restore ke kondisi lama (lokal main = a5a80f8 / R63-c, parent 4e64d8f), sementara origin/main sudah maju ke fdb9371 (R63-d..R63-i + dokumentasi Task 70).
+- Verifikasi keamanan: git diff a5a80f8 401d861 → KOSONG (commit lokal byte-identik dgn duplikatnya di origin; tidak ada isi unik yang berisiko hilang).
+- git fetch origin → git reset --hard origin/main (fdb9371): lokal kini memuat seluruh fix deployment Coolify (R63-d..R63-i), fix 401 cookie Secure adaptif, redesign tanpa entrypoint, dan docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md + .docx (Task 70).
+- bun install: 916 install / 985 paket, tanpa perubahan — prisma & @prisma/client terkunci 6.19.2 (pin exact sesuai R63-f).
+- Dev server lama masih memegang cache modul stale → POST /api/auth/login 500 "isSecureRequest is not a function" (ekspor baru server.ts tak dikenal kompilasi lama). Fix: pkill next-server + rm -rf .next + restart via .zscripts/dev.sh (mini-service notif-service ikut naik).
+- Verifikasi pasca-restart: /api/health 200; login andri@udp.co.id 200; API terlindungi brands/permissions/dashboard/bootstrap semua 200 (fix 401 R63-i terkonfirmasi jalan di lokal).
+- bun run lint bersih; bunx tsc --noEmit 0 error (di luar skills/examples).
+- QA agent-browser: halaman login render sempurna → login via tombol Masuk → Command Center tampil penuh (Pipeline Rp 1.8M, Win Rate 50%, Outstanding Rp 215jt, SLA terlambat 4, badge 4 brand aktif) — data live dari API, tanpa error console/page error.
+- Dokumentasi Task 70 terverifikasi utuh (docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md 1.115 baris, 14 bab; DOCX 44 hal).
+
+Stage Summary:
+- Workspace tersinkron penuh dgn origin/main fdb9371 — tidak ada commit baru kode (reset murni restore), worklog ini satu-satunya perubahan yang di-commit.
+- Status runtime lokal: sehat (health/login/dashboard hijau, tsc & lint bersih). Status produksi: menunggu redeploy udp-2:main di Coolify (R63-i) — bila login masih 401 setelah cookie baru, cek protokol https/http (kini adaptif).
+- Belum selesai / backlog tetap: 12 kelemahan terdokumentasi di docs/ARSITEKTUR-DAN-BUSINESS-LOGIC.md Bab 12 (GET read tanpa sesi di layer route, add_payment tanpa validasi sisa, validUntil tak ditegakkan, CR hardcode tax 11/IDR, kredensial kanal plaintext, notif-service belum di produksi, tanpa backup SQLite otomatis, dst).
