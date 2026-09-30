@@ -7,7 +7,8 @@ import type { SessionUser, Brand } from "@/lib/crm/types";
 
 export type ModuleKey =
   | "dashboard" | "inbox" | "contacts" | "pipeline" | "followups"
-  | "finance" | "reports" | "projects" | "portal" | "channels" | "brands" | "users" | "audit";
+  | "finance" | "reports" | "projects" | "portal" | "channels" | "brands" | "users" | "audit"
+  | "hris" | "payroll" | "accounting" | "work";
 
 /** Ronde 47 — level akses RBAC dinamis (tersimpan di tabel ModulePermission). */
 export type AccessLevel = "none" | "read" | "write" | "full";
@@ -26,17 +27,22 @@ export const MODULE_META: Record<ModuleKey, { label: string; description: string
   brands: { label: "Brand Configuration", description: "Konfigurasi brand tanpa ubah source code", roles: ["super_admin", "director"] },
   users: { label: "User & Access", description: "Role dan permission", roles: ["super_admin", "director", "hr"] },
   audit: { label: "Audit Logs", description: "Siapa mengubah apa, kapan, dari mana", roles: ["super_admin", "director"] },
+  // ERP (Blueprint UDP Integrated Operations Platform v2.0) — Fase 3/5/6/7
+  hris: { label: "HRIS", description: "Kehadiran, izin, lembur, dinas, log harian", roles: ["super_admin", "director", "manager", "hr", "marketing", "finance", "production"] },
+  payroll: { label: "Payroll & Poin", description: "Periode gaji, slip, poin, insentif, uang saku magang", roles: ["super_admin", "director", "hr", "finance"] },
+  accounting: { label: "Pembukuan", description: "Jurnal umum, bagan akun, periode tutup buku", roles: ["super_admin", "director", "finance"] },
+  work: { label: "Workflows", description: "Template workflow berversi, periode kerja, deliverables", roles: ["super_admin", "director", "manager", "marketing", "production", "finance", "hr"] },
 };
 
 /** Ronde 47 — matriks default (fallback statis bila matriks DB belum termuat). */
 const STATIC_DEFAULT_MATRIX: Record<string, Record<string, AccessLevel>> = {
-  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
-  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
-  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write" },
-  hr: { dashboard: "read", followups: "write", users: "read" },
-  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write" },
-  finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read" },
-  production: { dashboard: "read", followups: "write", projects: "write" },
+  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
+  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
+  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write", hris: "write", work: "full" },
+  hr: { dashboard: "read", followups: "write", users: "read", hris: "full", payroll: "full", work: "read" },
+  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write", hris: "write", work: "write" },
+  finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read", hris: "read", payroll: "write", accounting: "full", work: "read" },
+  production: { dashboard: "read", followups: "write", projects: "write", hris: "write", work: "write" },
   client: { dashboard: "read", portal: "read" },
 };
 

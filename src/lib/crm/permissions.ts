@@ -34,6 +34,7 @@ export function isAccessLevel(v: unknown): v is AccessLevel {
 export const MODULE_KEYS = [
   "dashboard", "inbox", "contacts", "pipeline", "followups",
   "finance", "reports", "projects", "portal", "channels", "brands", "users", "audit",
+  "hris", "payroll", "accounting", "work",
 ] as const;
 
 /**
@@ -42,13 +43,13 @@ export const MODULE_KEYS = [
  * role lain = write utk modul operasionalnya, read utk modul pantauan.
  */
 export const DEFAULT_MATRIX: Record<string, Record<string, AccessLevel>> = {
-  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
-  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full" },
-  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write" },
-  hr: { dashboard: "read", followups: "write", users: "read" },
-  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write" },
-  finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read" },
-  production: { dashboard: "read", followups: "write", projects: "write" },
+  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
+  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
+  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write", hris: "write", work: "full" },
+  hr: { dashboard: "read", followups: "write", users: "read", hris: "full", payroll: "full", work: "read" },
+  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write", hris: "write", work: "write" },
+  finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read", hris: "read", payroll: "write", accounting: "full", work: "read" },
+  production: { dashboard: "read", followups: "write", projects: "write", hris: "write", work: "write" },
   client: { dashboard: "read", portal: "read" },
 };
 

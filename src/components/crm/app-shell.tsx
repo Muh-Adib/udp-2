@@ -29,10 +29,16 @@ import BrandsModule from "@/components/crm/brands-module";
 import ChannelsModule from "@/components/crm/channels-module";
 import UsersModule from "@/components/crm/users-module";
 import AuditModule from "@/components/crm/audit-module";
+// ERP modules (Blueprint v2.0 — Task ERP)
+import HrisModule from "@/components/erp/hris-module";
+import PayrollModule from "@/components/erp/payroll-module";
+import AccountingModule from "@/components/erp/accounting-module";
+import WorkModule from "@/components/erp/work-module";
 import {
   LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
   FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu, PlugZap,
   ChevronDown, CircleUser, PanelLeftClose, PanelLeftOpen, LockKeyhole,
+  CalendarCheck2, Banknote, Landmark, GitBranch,
 } from "lucide-react";
 
 const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }>> = {
@@ -49,11 +55,16 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
   brands: Building2,
   users: UserCog,
   audit: ScrollText,
+  hris: CalendarCheck2,
+  payroll: Banknote,
+  accounting: Landmark,
+  work: GitBranch,
 };
 
 const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
   { label: "Operasional", modules: ["dashboard", "inbox", "contacts", "pipeline"] },
   { label: "Komersial & Produksi", modules: ["followups", "finance", "reports", "projects"] },
+  { label: "ERP", modules: ["work", "hris", "payroll", "accounting"] },
   { label: "Eksternal", modules: ["portal"] },
   { label: "Sistem", modules: ["channels", "brands", "users", "audit"] },
 ];
@@ -424,6 +435,10 @@ export default function AppShell() {
               {activeModule === "brands" && <BrandsModule />}
               {activeModule === "users" && <UsersModule />}
               {activeModule === "audit" && <AuditModule />}
+              {activeModule === "hris" && <HrisModule />}
+              {activeModule === "payroll" && <PayrollModule />}
+              {activeModule === "accounting" && <AccountingModule />}
+              {activeModule === "work" && <WorkModule />}
             </>
           )}
         </main>

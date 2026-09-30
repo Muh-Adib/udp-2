@@ -61,6 +61,9 @@ model Brand {
   services          Service[]
   numberingRules    NumberingRule[]
   intakeLinks       LeadIntakeLink[]
+  workflowTemplates WorkflowTemplate[]
+  workPeriods       WorkPeriod[]
+  expenseClaims     ExpenseClaim[]
 }
 
 /**
@@ -124,6 +127,8 @@ model User {
   brandAccess String   @default("all") // "all" or comma-separated brand slugs
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  employee Employee?
 }
 
 // ============ IDENTITY (company-centric & contact-centric) ============
@@ -411,6 +416,11 @@ model Project {
   tasks         Task[]
   // Ronde 48 — brief klien yang menghasilkan project ini (alur Won).
   brief         ClientBrief?
+  // ERP: work engine & biaya per proyek
+  workflowInstances WorkflowInstance[]
+  workPeriods       WorkPeriod[]
+  dailyLogs         DailyLog[]
+  expenseClaims     ExpenseClaim[]
 }
 
 /**
@@ -439,6 +449,8 @@ model ProjectDeliverable {
   reviewedAt    DateTime?
   createdBy     String?
   createdAt     DateTime @default(now())
+
+  versions DeliverableVersion[]
 }
 
 model Milestone {
@@ -908,4 +920,547 @@ model ModulePermission {
 
   @@unique([role, module])
   @@index([role])
+}
+
+// ==================== ERP EXTENSION (Blueprint UDP Integrated Operations Platform v2.0) ====================
+// Fase 3 Work Engine · Fase 5 HRIS · Fase 6 Compensation · Fase 7 Finance depth.
+// Konvensi: String utk status/enum (SQLite), CUID id, Float uang (IDR), audit via logAudit.
+
+// ============ FASE 3 — WORK ENGINE (workflow berversi + periode kerja) ============
+
+// Template workflow produk (contoh: "Digmar — Siklus Konten Bulanan").
+model WorkflowTemplate {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  brandId     String?
+  brand       Brand?  @relation(fields: [brandId], references: [id])
+  active      Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions WorkflowVersion[]
+}
+
+// Versi workflow — template berversi; instance lama TIDAK berubah saat versi baru publish.
+model WorkflowVersion {
+  id         String  @id @default(cuid())
+  templateId String
+  template   WorkflowTemplate @relation(fields: [templateId], references: [id])
+  version    Int
+  status     String  @default("draft") // draft, published, archived
+  note       String?
+  publishedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  steps    WorkflowStep[]
+  instances WorkflowInstance[]
+
+  @@unique([templateId, version])
+}
+
+// Tahapan workflow dlm satu versi (urutan + SLA + role pelaksana).
+model WorkflowStep {
+  id         String @id @default(cuid())
+  versionId  String
+  version    WorkflowVersion @relation(fields: [versionId], references: [id])
+  position   Int
+  name       String
+  kind       String  @default("task") // task, review, approval, publish
+  roleNeeded String? // role pelaksana ideal (contoh production, finance)
+  slaHours   Int?
+}
+
+// Instance workflow = pelaksanaan nyata satu pekerjaan mengikuti satu versi.
+model WorkflowInstance {
+  id           String  @id @default(cuid())
+  versionId    String
+  version      WorkflowVersion @relation(fields: [versionId], references: [id])
+  projectId    String?
+  project      Project? @relation(fields: [projectId], references: [id])
+  workPeriodId String?
+  workPeriod   WorkPeriod? @relation(fields: [workPeriodId], references: [id])
+  title        String
+  contextType  String  @default("project") // project, retainer, rnd, standalone
+  status       String  @default("active") // active, done, cancelled
+  currentPos   Int     @default(0)
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+  assigneeIds  String? // comma-separated userId pelaksana
+}
+
+// Periode kerja berulang utk kontrak retainer (Digmar dkk) — siklus bulanan/periodik.
+model WorkPeriod {
+  id        String  @id @default(cuid())
+  brandId   String
+  brand     Brand   @relation(fields: [brandId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  name      String
+  periodStart DateTime
+  periodEnd   DateTime
+  status    String  @default("planned") // planned, active, closed
+  contractRef String? // referensi PKS/agreement
+  createdAt DateTime @default(now())
+
+  instances WorkflowInstance[]
+}
+
+// Versi konten deliverable — post/reel/artikel: versioning + review internal & klien.
+model DeliverableVersion {
+  id            String @id @default(cuid())
+  deliverableId String
+  deliverable   ProjectDeliverable @relation(fields: [deliverableId], references: [id])
+  version       Int
+  content       String? // caption/naskah/link — utk file ikut deliverable induk
+  url           String?
+  status        String  @default("draft") // draft, internal_review, client_review, approved, published, revision
+  feedback      String?
+  reviewedBy    String? // reviewer internal
+  clientReviewedBy String? // nama reviewer klien (claim)
+  publishedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  @@unique([deliverableId, version])
+}
+
+// ============ FASE 5 — HRIS ============
+
+// Master karyawan; opsional terhubung User (staf tanpa login tetap mungkin).
+model Employee {
+  id              String  @id @default(cuid())
+  userId          String? @unique
+  user            User?   @relation(fields: [userId], references: [id])
+  employeeNumber  String  @unique
+  preferredName   String
+  employmentStatus String @default("permanent") // permanent, intern, freelance
+  department      String? // marketing, production, finance, hr
+  position        String?
+  supervisorId    String?
+  supervisor      Employee? @relation("EmpSupervisor", fields: [supervisorId], references: [id])
+  subordinates    Employee[] @relation("EmpSupervisor")
+  joinedOn        DateTime?
+  leftOn          DateTime?
+  // Data magang
+  internProgram   String?
+  internStart     DateTime?
+  internEnd       DateTime?
+  stipendDaily    Float? // uang saku per hari hadir
+  // Data sensitif (ACL: hr/director saja via API)
+  bankName        String?
+  bankAccount     String?
+  umkRegion       String? // kode wilayah utk formula insentif
+  active          Boolean @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  attendanceEvents AttendanceEvent[]
+  leaveRequests    LeaveRequest[]
+  overtimeRequests OvertimeRequest[]
+  travelOrders     TravelOrder[]
+  dailyLogs        DailyLog[]
+  payslips         Payslip[]
+  pointAccount     PointAccount?
+  pointEntries     PointLedgerEntry[]
+  pointReservations PointReservation[]
+  incentiveProposals IncentiveProposal[]
+  internAccruals   InternAccrual[]
+  internSettlements InternSettlement[]
+  expenseClaims    ExpenseClaim[]
+  obligations      FinancialObligation[]
+}
+
+// Event absensi append-only (check_in/check_out) dgn GPS + status validasi server.
+model AttendanceEvent {
+  id               String   @id @default(cuid())
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  kind             String   // check_in, check_out
+  businessDate     DateTime
+  clientEventId    String? // idempotency key dari klien (offline replay guard)
+  claimedAt        DateTime? // waktu klaim klien (untrusted)
+  receivedAt       DateTime @default(now())
+  lat              Float?
+  lng              Float?
+  accuracyM        Float?
+  locationVerdict  String   @default("unknown") // matched, unmatched, unknown
+  validationStatus String   @default("valid") // valid, exception, pending, rejected
+  note             String?
+  createdAt        DateTime @default(now())
+
+  @@unique([employeeId, clientEventId])
+  @@index([employeeId, businessDate])
+}
+
+// Izin/sakit/cuti/koreksi absensi.
+model LeaveRequest {
+  id          String   @id @default(cuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  type        String   // izin, sakit, cuti, koreksi
+  startDate   DateTime
+  endDate     DateTime
+  reason      String
+  evidenceUrl String?
+  status      String   @default("pending") // pending, approved, rejected, cancelled
+  approvedBy  String?
+  decidedAt   DateTime?
+  decisionNote String?
+  createdAt   DateTime @default(now())
+
+  @@index([employeeId, status])
+}
+
+// Lembur: order + consent + realisasi (bukan sekadar pengajuan).
+model OvertimeRequest {
+  id              String   @id @default(cuid())
+  employeeId      String
+  employee        Employee @relation(fields: [employeeId], references: [id])
+  date            DateTime
+  startMinute     Int // menit dari 00:00
+  endMinute       Int // boleh >1440 (lintas tengah malam, di-segment per tanggal)
+  reason          String
+  taskRef         String?
+  consent         Boolean  @default(false) // consent staf — atasan TIDAK boleh memberi consent
+  requestedBy     String
+  status          String   @default("pending") // pending, approved, rejected, verified
+  approvedBy      String?
+  decidedAt       DateTime?
+  realizedMinutes Int? // realisasi faktual (HR verifikasi)
+  verifiedBy      String?
+  complianceFlag  String? // exception kepatuhan (cap 4j/hari 18j/minggu dsb)
+  createdAt       DateTime @default(now())
+}
+
+// Perjalanan dinas: order → advance → realisasi → settlement (3 hari kerja utk bukti).
+model TravelOrder {
+  id             String   @id @default(cuid())
+  employeeId     String
+  employee       Employee @relation(fields: [employeeId], references: [id])
+  purpose        String
+  projectRef     String?
+  destination    String // kota/tujuan — dipakai utk UMK insentif
+  departDate     DateTime
+  returnDate     DateTime
+  advanceAmount  Float    @default(0)
+  allowanceDaily Float    @default(0)
+  actualAmount   Float?
+  status         String   @default("draft") // draft, approved, ongoing, settlement_pending, closed
+  settlementStatus String @default("none") // none, return_due, additional_payable, balanced
+  settlementDueAt DateTime?
+  approvedBy     String?
+  decidedAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([employeeId, status])
+}
+
+// Log pekerjaan harian (kapasitas & basis insentif).
+model DailyLog {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  date       DateTime
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  content    String
+  hours      Float    @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([employeeId, date])
+}
+
+// Kalender libur (nasional/perusahaan) — klasifikasi hari kerja.
+model HolidayCalendar {
+  id   String   @id @default(cuid())
+  date DateTime @unique
+  name String
+  kind String   @default("national") // national, company
+}
+
+// ============ FASE 6 — COMPENSATION (payroll, poin, insentif, magang) ============
+
+// Periode payroll — cutoff tanggal 21, bayar tanggal 25 (dimajukan bila bukan hari kerja).
+model PayrollPeriod {
+  id        String   @id @default(cuid())
+  name      String   @unique // "2026-09"
+  startDate DateTime
+  endDate   DateTime // tanggal cutoff (21)
+  payDate   DateTime // tanggal pencairan (25, dimajukan)
+  status    String   @default("open") // open, locked, finalized
+  lockedAt  DateTime?
+  createdAt DateTime @default(now())
+
+  runs PayrollRun[]
+}
+
+// Run payroll dlm periode (revisi via adjustment run, tidak rewrite slip lama).
+model PayrollRun {
+  id        String   @id @default(cuid())
+  periodId  String
+  period    PayrollPeriod @relation(fields: [periodId], references: [id])
+  revision  Int      @default(1)
+  status    String   @default("draft") // draft, calculated, approved, finalized
+  inputHash String?
+  note      String?
+  createdBy String
+  finalizedAt DateTime?
+  createdAt DateTime @default(now())
+
+  slips Payslip[]
+
+  @@unique([periodId, revision])
+}
+
+// Slip gaji per karyawan per run — immutable setelah finalize.
+model Payslip {
+  id         String   @id @default(cuid())
+  runId      String
+  run        PayrollRun @relation(fields: [runId], references: [id])
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  gross      Float    @default(0)
+  deduction  Float    @default(0)
+  reimbursement Float @default(0)
+  net        Float    @default(0)
+  currency   String   @default("IDR")
+  status     String   @default("draft") // draft, finalized
+  createdAt  DateTime @default(now())
+
+  items PayslipItem[]
+
+  @@unique([runId, employeeId])
+}
+
+model PayslipItem {
+  id             String  @id @default(cuid())
+  payslipId      String
+  payslip        Payslip @relation(fields: [payslipId], references: [id])
+  componentCode  String // base_salary, allowance, overtime, incentive, point_redemption, stipend, deduction
+  label          String
+  classification String // earning, deduction, reimbursement
+  quantity       Float   @default(1)
+  rate           Float   @default(0)
+  amount         Float   @default(0)
+  sourceRef      String? // trace sumber (id overtime/incentive/reservasi poin/dll)
+}
+
+// Rekening poin per karyawan (cache; sumber kebenaran = PointLedgerEntry append-only).
+model PointAccount {
+  id         String   @id @default(cuid())
+  employeeId String   @unique
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Ledger poin append-only: earn / redeem / adjust.
+model PointLedgerEntry {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  kind       String // earn, redeem, adjust
+  points     Float // earn/adjust positif, redeem negatif
+  sourceType String? // task, overtime, travel, project, manual
+  sourceRef  String?
+  note       String?
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId])
+}
+
+// Reservasi poin utk pencairan (kelipatan 10) — anti pembayaran ganda:
+// available = posted_earned - posted_redeemed - active_reserved.
+model PointReservation {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  points     Float
+  status     String   @default("reserved") // reserved, released, settled
+  requestId  String   @unique // idempotency key pencairan
+  createdAt  DateTime @default(now())
+  settledAt  DateTime?
+}
+
+// Proposal insentif (poin dan/atau uang) dari tugas/dinas/proyek — approval dulu baru ledger.
+model IncentiveProposal {
+  id             String   @id @default(cuid())
+  employeeId     String
+  employee       Employee @relation(fields: [employeeId], references: [id])
+  sourceType     String // task, overtime, travel, project, manual
+  sourceRef      String?
+  proposedPoints Float    @default(0)
+  proposedAmount Float    @default(0)
+  reason         String
+  ruleVersion    String? // snapshot aturan/formula
+  status         String   @default("pending") // pending, approved, rejected, paid
+  proposedBy     String
+  decidedBy      String?
+  decidedAt      DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime @default(now())
+}
+
+// Akumulasi uang saku magang per hari hadir terverifikasi (unique intern+tanggal).
+model InternAccrual {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  businessDate DateTime
+  rate       Float
+  fraction   Float    @default(1) // 1 = penuh, <1 sebagian
+  amount     Float
+  status     String   @default("provisional") // provisional, verified, adjusted
+  sourceRef  String? // referensi sesi absensi
+  createdAt  DateTime @default(now())
+
+  @@unique([employeeId, businessDate])
+}
+
+// Penyelesaian uang saku magang (setelah selesai, maksimal satu bulan).
+model InternSettlement {
+  id           String   @id @default(cuid())
+  employeeId   String
+  employee     Employee @relation(fields: [employeeId], references: [id])
+  totalAccrued Float    @default(0)
+  paidTotal    Float    @default(0)
+  status       String   @default("open") // open, submitted, approved, paid
+  dueDate      DateTime?
+  approvedBy   String?
+  paidAt       DateTime?
+  createdAt    DateTime @default(now())
+}
+
+// Referensi UMK per wilayah per tahun — basis formula insentif dinas.
+model UmkReference {
+  id         String @id @default(cuid())
+  regionCode String
+  regionName String
+  year       Int
+  amount     Float
+
+  @@unique([regionCode, year])
+}
+
+// ============ FASE 7 — FINANCE DEPTH (pengeluaran & pembukuan) ============
+
+// Buku besar — bagan akun.
+model Account {
+  id     String  @id @default(cuid())
+  code   String  @unique
+  name   String
+  type   String // asset, liability, equity, revenue, expense
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  journalLines JournalLine[]
+}
+
+// Jurnal umum — draft editable, posted immutable (koreksi via entry pembalik).
+model JournalEntry {
+  id         String   @id @default(cuid())
+  date       DateTime
+  memo       String
+  sourceType String?  // invoice, payment, expense, payroll, manual
+  sourceId   String?
+  status     String   @default("draft") // draft, posted
+  postedAt   DateTime?
+  createdBy  String
+  createdAt  DateTime @default(now())
+  periodId   String?
+  period     AccountingPeriod? @relation(fields: [periodId], references: [id])
+
+  lines JournalLine[]
+}
+
+model JournalLine {
+  id        String  @id @default(cuid())
+  entryId   String
+  entry     JournalEntry @relation(fields: [entryId], references: [id])
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id])
+  debit     Float   @default(0)
+  credit    Float   @default(0)
+}
+
+// Klaim reimbursement karyawan (header + item).
+model ExpenseClaim {
+  id          String   @id @default(cuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  title       String
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id])
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id])
+  totalAmount Float    @default(0)
+  status      String   @default("draft") // draft, submitted, approved, rejected, paid
+  submittedAt DateTime?
+  approvedBy  String?
+  decidedAt   DateTime?
+  decisionNote String?
+  payoutAt    DateTime?
+  createdAt   DateTime @default(now())
+
+  items ExpenseItem[]
+
+  @@index([employeeId, status])
+}
+
+model ExpenseItem {
+  id           String  @id @default(cuid())
+  claimId      String
+  claim        ExpenseClaim @relation(fields: [claimId], references: [id])
+  purchaseDate DateTime
+  description  String
+  category     String // transport, meals, accommodation, material, other
+  amount       Float
+  receiptRef   String? // referensi nota/evidence
+}
+
+// Periode pembukuan — tutup buku menolak posting baru.
+model AccountingPeriod {
+  id       String   @id @default(cuid())
+  name     String   @unique // "2026-09"
+  status   String   @default("open") // open, closed
+  closedAt DateTime?
+  closedBy String?
+  createdAt DateTime @default(now())
+
+  entries JournalEntry[]
+}
+
+// Kewajiban finansial terpadu (payroll/reimbursement/poin/settlement magang) — anti double-pay.
+model FinancialObligation {
+  id              String   @id @default(cuid())
+  payeeType       String   @default("employee") // employee, vendor
+  payeeEmployeeId String?
+  payee           Employee? @relation(fields: [payeeEmployeeId], references: [id])
+  payeeName       String
+  amount          Float
+  currency        String   @default("IDR")
+  sourceType      String // payroll, expense, intern_settlement, point_redemption, travel_settlement
+  sourceId        String
+  status          String   @default("open") // open, paid
+  createdAt       DateTime @default(now())
+
+  disbursements CashDisbursement[]
+
+  @@unique([sourceType, sourceId])
+}
+
+// Pencairan dana (bukti pembayaran nyata — terpisah dari kewajiban).
+model CashDisbursement {
+  id           String   @id @default(cuid())
+  obligationId String?
+  obligation   FinancialObligation? @relation(fields: [obligationId], references: [id])
+  payeeName    String
+  amount       Float
+  method       String   @default("transfer") // transfer, cash
+  bankRef      String?
+  disbursedAt  DateTime @default(now())
+  createdBy    String
+  note         String?
 }
