@@ -26,6 +26,15 @@ examples
 .claude
 .z-ai-config
 
+# database dev (data user asli TIDAK boleh masuk image — seed .seed tetap ikut,
+# dipakai entrypoint untuk first-boot; build tidak menyentuh db — terverifikasi)
+db/custom.db
+db/custom.db-journal
+
+# artefak sesi lokal
+worklog.md
+.tmp-audit
+
 # qa artifacts
 qa*.png
 

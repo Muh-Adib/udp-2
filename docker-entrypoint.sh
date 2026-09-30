@@ -50,5 +50,20 @@ fi
 echo "[entrypoint] Sinkronisasi schema Prisma..."
 bun "$PRISMA_CLI" db push --accept-data-loss --skip-generate --schema=/app/prisma/schema.prisma
 
-echo "[entrypoint] Menjalankan server di port ${PORT:-3000}..."
-exec bun .next/standalone/server.js
+# --- Lokasi server standalone ---
+# Dockerfile runner menyalin ISI .next/standalone ke /app (pola resmi Next.js
+# Docker: COPY --from=builder /app/.next/standalone ./) → server berada di
+# /app/server.js — BUKAN /app/.next/standalone/server.js (layout bersarang hanya
+# ada di repo host / `bun start`). Fallback kedua utk kompatibilitas layout lama.
+# Tanpa ini container crash-loop: "Module not found .next/standalone/server.js".
+if [ -f "/app/server.js" ]; then
+  SERVER_JS="/app/server.js"
+elif [ -f "/app/.next/standalone/server.js" ]; then
+  SERVER_JS="/app/.next/standalone/server.js"
+else
+  echo "[entrypoint] FATAL: server.js standalone tidak ditemukan di image (cari /app/server.js & /app/.next/standalone/server.js)" >&2
+  exit 1
+fi
+
+echo "[entrypoint] Menjalankan server di port ${PORT:-3000} (${SERVER_JS})..."
+exec bun "$SERVER_JS"
