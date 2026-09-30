@@ -2524,3 +2524,18 @@ Work Log:
 
 Stage Summary:
 - Rebase selesai tapi hasilnya dibuang karena commit lokalnya terkontaminasi file liar (middleware.ts dkk. kembali sebagai tracked). Sandbox kembali = origin/main 4e64d8f persis, bersih, server sehat, simpan palet brand terverifikasi 200. DB reseeded tapi konfigurasi warna Segia milik user utuh.
+
+---
+Task ID: 64
+Agent: main (Z.ai Code)
+Task: "hai rebase dan pastikan sudah ter update kemudian tolong perbaiki deployment ini" — deployment Coolify udp-2:main gagal di 'RUN bun run build' (exit 1, Dockerfile:30)
+
+Work Log:
+- GIT: rebase ulang ke origin/main sukses (worklog R63-c replay 401d861; push berikutnya menyusul) — sandbox ter-update.
+- DIAGNOSIS: log Coolify hanya "exit code 1" tanpa sebab — direproduksi di salinan terisolasi /tmp/build-test (rsync tanpa node_modules/.next/db; bun install + prisma generate + DATABASE_URL dummy + bun run build — TIDAK memakai .next sandbox agar dev server aman). Error sebab: "SESSION_SECRET wajib diisi di produksi … cookie sesi bisa dipalsukan" — guard fail-closed Ronde 36 (src/lib/crm/session.ts) melempar error saat fase "Collecting page data" next build (NODE_ENV=production, modul route dievaluasi, secret kosong). Dockerfile builder stage tak punya SESSION_SECRET, compose juga tidak → build gagal, dan runtime pun akan crash-loop bila build lolos.
+- FIX 3 LAPIS: (1) Dockerfile builder: ENV SESSION_SECRET dummy (pola sama dgn DATABASE_URL dummy) — build lolos; (2) docker-entrypoint.sh: bila env SESSION_SECRET kosong → muat dari volume /app/data/.session-secret, atau generate random 32-byte (bun -e node:crypto) + simpan chmod 600 — secret PERSISTEN antar restart (sesi user tidak gugur), fail-closed tetap terjaga (selalu ada secret nyata saat server menyala); env eksplisit dr Coolify tetap diprioritaskan; (3) docker-compose.yml: passthrough SESSION_SECRET=${SESSION_SECRET:-}.
+- VERIFIKASI: build ulang di salinan terisolasi dgn SESSION_SECRET dummy → SUKSES penuh (route manifest lengkap, standalone + proxy terdeteksi); sh -n entrypoint OK; bun -e crypto OK; /api/health ada (healthcheck compose); lint bersih; /tmp/build-test dihapus.
+- PUSH: 5a96b39 (Dockerfile, docker-compose.yml, docker-entrypoint.sh) + worklog ini.
+
+Stage Summary:
+- Deployment Coolify gagal krn SESSION_SECRET fail-closed (Ronde 36) dievaluasi saat next build tanpa secret di Docker. Kini: build punya dummy secret (hanya utk build), runtime otomatis dapat secret nyata yang di-generate & dipersistenkan di volume oleh entrypoint (atau dari env Coolify bila diset). Silakan redeploy udp-2:main (commit 5a96b39) — build akan lolos dan container menyala tanpa konfigurasi tambahan.
