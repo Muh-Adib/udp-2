@@ -6,8 +6,8 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "UDP CRM — Multi-Brand Creative Agency Platform",
-    short_name: "UDP CRM",
+    name: "UDP ERP — Multi-Brand Business Suite",
+    short_name: "UDP ERP",
     description:
       "Multi-brand CRM, sales pipeline, finance, project production & client portal untuk Unimasi, Segia Tech, Erfo Multimedia, dan Unicam Studio.",
     id: "/",

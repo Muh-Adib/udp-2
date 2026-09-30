@@ -440,39 +440,32 @@ function parseTaxOption(v: string): { name: string | null; rate: number } {
   return { name: name || null, rate: Number.isFinite(parsed) ? parsed : 0 };
 }
 
-/** Ronde 47 — unduh daftar invoice terfilter sebagai CSV (BOM UTF-8 agar Excel rapi). */
-function exportInvoicesCsv(list: InvoiceDTO[]) {
-  const esc = (v: unknown) => {
-    const s = String(v ?? "");
-    return /[";,\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const rows: string[] = [
-    ["Number", "Perusahaan", "Brand", "Deskripsi", "Subtotal", "Pajak", "Total", "Mata Uang", "Status", "Terbayar", "Sisa", "Terbit", "Jatuh Tempo"].join(";"),
-  ];
-  for (const inv of list) {
-    const paid = (inv.payments ?? []).reduce((s, p) => s + p.amount, 0);
-    rows.push([
-      esc(inv.number),
-      esc(inv.company?.name ?? ""),
-      esc(inv.brand?.name ?? ""),
-      esc(inv.description ?? ""),
-      String(inv.amount),
-      esc(inv.taxName ? `${inv.taxName} ${inv.taxRate}%` : "-"),
-      String(inv.total),
-      inv.currency,
-      esc(statusMeta(inv.status).label),
-      String(paid),
-      String(Math.max(0, inv.total - paid)),
-      formatDate(inv.issueDate),
-      formatDate(inv.dueDate),
-    ].join(";"));
+// ---------- Task 73-c: ekspor CSV server-side via /api/exports/{type} ----------
+
+/** Unduh CSV dari /api/exports/{type} (sesi cookie dikirim); gagal → Error berisi pesan API. */
+async function downloadCsvExport(type: string, params: URLSearchParams): Promise<void> {
+  const qs = params.toString();
+  const res = await fetch(`/api/exports/${type}${qs ? `?${qs}` : ""}`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let message = `Ekspor gagal (HTTP ${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: unknown };
+      if (typeof data?.error === "string" && data.error) message = data.error;
+    } catch {
+      // body bukan JSON — pakai pesan default
+    }
+    throw new Error(message);
   }
-  const blob = new Blob(["\uFEFF" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
+  // Nama file dari Content-Disposition server; fallback udp-{type}-{yyyyMMdd}.csv
+  const match = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+  a.download = match?.[1] ?? `udp-${type}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;
   a.href = url;
-  a.download = `invoice-udp-crm-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }
 
@@ -745,6 +738,8 @@ export default function FinanceModule() {
   // Ronde 56 — diskon nominal + jadwal termin (term of payment) pada faktur.
   const [createDiscount, setCreateDiscount] = useState("");
   const [createTerms, setCreateTerms] = useState<TermRow[]>(defaultTermRows());
+  // Task 73-c — ekspor CSV server-side sedang berjalan (tombol disabled)
+  const [exporting, setExporting] = useState(false);
 
   const [editTarget, setEditTarget] = useState<InvoiceWithProject | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", tax: TAX_NONE, due: "", notes: "" });
@@ -795,6 +790,23 @@ export default function FinanceModule() {
   }, [statusFilter, brandFilter]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Task 73-c — ekspor CSV invoice via API dengan filter status/brand aktif.
+  async function handleExportInvoicesCsv() {
+    if (exporting) return;
+    const params = new URLSearchParams();
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (brandFilter !== "all") params.set("brandId", brandFilter);
+    setExporting(true);
+    try {
+      await downloadCsvExport("invoices", params);
+      toast.success("Ekspor CSV dimulai");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ekspor CSV gagal");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // Global search (ronde 26) — buka sheet detail invoice hasil pencarian (⌘K).
   // Bila daftar belum termuat (null), pendingFocus dipertahankan — effect berjalan lagi
@@ -1370,11 +1382,11 @@ export default function FinanceModule() {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline" size="sm"
-            onClick={() => exportInvoicesCsv(invoices ?? [])}
-            disabled={!invoices || invoices.length === 0}
+            onClick={() => void handleExportInvoicesCsv()}
+            disabled={exporting}
             aria-label="Ekspor daftar invoice ke CSV"
           >
-            <Download className="h-4 w-4" aria-hidden /> Ekspor CSV
+            <Download className={`h-4 w-4 ${exporting ? "animate-pulse" : ""}`} aria-hidden /> {exporting ? "Mengekspor…" : "Ekspor CSV"}
           </Button>
           <Button
             size="sm"

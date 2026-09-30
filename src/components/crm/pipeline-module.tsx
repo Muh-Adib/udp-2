@@ -87,7 +87,7 @@ const UNASSIGNED = "__unassigned";
 
 type ViewMode = "kanban" | "table";
 
-// ---------- Ekspor CSV opportunity (Task 13): BOM + CRLF + separator titik-koma ----------
+// ---------- Impor CSV opportunity (Task 13): urutan kolom header yang dikenali mapper ----------
 
 const OPP_CSV_HEADERS = [
   "judul", "brand", "perusahaan", "kontak", "kategori_layanan", "layanan",
@@ -95,36 +95,33 @@ const OPP_CSV_HEADERS = [
   "probabilitas_pct", "owner", "target_close", "aksi_berikutnya", "dibuat",
 ] as const;
 
-function escapeCsvField(value: string): string {
-  if (/[;"\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
+// ---------- Task 73-c: ekspor CSV server-side via /api/exports/{type} ----------
 
-function buildOpportunitiesCsv(opps: OpportunityDTO[]): string {
-  const lines: string[] = [OPP_CSV_HEADERS.join(";")];
-  for (const o of opps) {
-    const fields: string[] = [
-      o.title,
-      o.brand?.name ?? "",
-      o.company?.name ?? "",
-      o.contact?.fullName ?? "",
-      o.serviceCategory ?? "",
-      o.serviceName ?? "",
-      stageLabel(o.stage),
-      o.temperature,
-      o.priority,
-      String(o.score ?? ""),
-      o.estimatedValue != null ? String(o.estimatedValue) : "",
-      o.currency,
-      String(o.probability),
-      o.ownerName ?? "",
-      o.expectedCloseDate ? formatDate(o.expectedCloseDate) : "",
-      o.nextAction ?? "",
-      formatDate(o.createdAt),
-    ];
-    lines.push(fields.map(escapeCsvField).join(";"));
+/** Unduh CSV dari /api/exports/{type} (sesi cookie dikirim); gagal → Error berisi pesan API. */
+async function downloadCsvExport(type: string, params: URLSearchParams): Promise<void> {
+  const qs = params.toString();
+  const res = await fetch(`/api/exports/${type}${qs ? `?${qs}` : ""}`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let message = `Ekspor gagal (HTTP ${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: unknown };
+      if (typeof data?.error === "string" && data.error) message = data.error;
+    } catch {
+      // body bukan JSON — pakai pesan default
+    }
+    throw new Error(message);
   }
-  return "\uFEFF" + lines.join("\r\n");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  // Nama file dari Content-Disposition server; fallback udp-{type}-{yyyyMMdd}.csv
+  const match = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+  a.download = match?.[1] ?? `udp-${type}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;
+  a.href = url;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ---------- Impor CSV opportunity (Task 15-a): round-trip dengan format ekspor ----------
@@ -1220,6 +1217,8 @@ export default function PipelineModule() {
   const [newOpen, setNewOpen] = useState(false);
   // Ronde 57 — dialog kelola shareable intake link
   const [intakeOpen, setIntakeOpen] = useState(false);
+  // Task 73-c — ekspor CSV server-side sedang berjalan (tombol disabled)
+  const [exporting, setExporting] = useState(false);
 
   const oppsRef = useRef<OpportunityDTO[]>([]);
   const draggedRecentlyRef = useRef(false);
@@ -1338,6 +1337,24 @@ export default function PipelineModule() {
       cancelled = true;
     };
   }, [pendingFocus, loading, clearPendingFocus]);
+
+  // Task 73-c — ekspor CSV opportunity via API dengan filter aktif (brand/owner/q).
+  async function handleExportCsv() {
+    if (exporting) return;
+    const params = new URLSearchParams();
+    if (activeBrandFilter !== "all") params.set("brandId", activeBrandFilter);
+    if (q.trim()) params.set("q", q.trim());
+    if (owner !== "all") params.set("owner", owner); // "__unassigned" didukung API (ownerName null)
+    setExporting(true);
+    try {
+      await downloadCsvExport("opportunities", params);
+      toast.success("Ekspor CSV dimulai");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Ekspor CSV gagal");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function toggleSort() {
     setSortDir((prev) => (prev === null ? "desc" : prev === "desc" ? "asc" : null));
@@ -1537,29 +1554,12 @@ export default function PipelineModule() {
             variant="outline"
             size="sm"
             aria-label="Ekspor opportunity ke CSV"
-            title={`Ekspor ${view === "table" ? tableRows.length : filtered.length} opportunity ke CSV`}
-            onClick={() => {
-              const rows = view === "table" ? tableRows : filtered;
-              if (rows.length === 0) {
-                toast.error("Tidak ada opportunity untuk diekspor");
-                return;
-              }
-              const csv = buildOpportunitiesCsv(rows);
-              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              const ymd = new Date().toISOString().slice(0, 10);
-              a.href = url;
-              a.download = `opportunity-grupcrm-${ymd}.csv`;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              URL.revokeObjectURL(url);
-              toast.success(`Ekspor CSV selesai — ${rows.length} opportunity diunduh`);
-            }}
+            title="Ekspor opportunity sesuai filter aktif (brand/owner/pencarian) ke CSV"
+            disabled={exporting}
+            onClick={() => void handleExportCsv()}
           >
-            <Download className="size-4" aria-hidden="true" />
-            <span className="hidden sm:inline">Ekspor CSV</span>
+            <Download className={`size-4 ${exporting ? "animate-pulse" : ""}`} aria-hidden="true" />
+            <span className="hidden sm:inline">{exporting ? "Mengekspor…" : "Ekspor CSV"}</span>
           </Button>
           <Button
             variant="outline"

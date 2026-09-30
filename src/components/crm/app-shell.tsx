@@ -105,12 +105,12 @@ function SidebarNav({ onNavigate, collapsed = false }: { onNavigate?: () => void
                     aria-current={active ? "page" : undefined}
                     aria-label={collapsed ? MODULE_META[m].label : undefined}
                     className={cn(
-                      "group flex items-center rounded-lg text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400",
-                      collapsed ? "relative mx-auto h-9 w-9 justify-center" : "w-full gap-2.5 px-3 py-2",
-                      active ? "bg-zinc-800 text-white font-medium" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                      "group flex items-center rounded-md text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-600",
+                      collapsed ? "relative mx-auto h-9 w-9 justify-center" : "w-full gap-2.5 px-3 py-1.5",
+                      active ? "bg-zinc-800 text-white font-medium" : "text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-100"
                     )}
                   >
-                    <Icon className={cn("h-4 w-4 shrink-0", active ? "text-amber-400" : "text-zinc-500 group-hover:text-zinc-300")} aria-hidden />
+                    <Icon className={cn("h-4 w-4 shrink-0", active ? "text-zinc-100" : "text-zinc-500 group-hover:text-zinc-300")} aria-hidden />
                     <span className={cn("truncate", collapsed && "hidden")}>{MODULE_META[m].label}</span>
                     {hasUnread && !collapsed && (
                       <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white" title="Lead baru menunggu respons" aria-label="Ada lead baru di inbox">
@@ -284,10 +284,10 @@ export default function AppShell() {
         aria-label="Sidebar"
       >
         <div className={cn("flex items-center gap-2.5 px-4 py-4", collapsed && "justify-center px-2")}>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-rose-600 text-sm font-black text-white" aria-hidden>U</div>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-sm font-black tracking-tight text-zinc-100 ring-1 ring-zinc-700/60" aria-hidden>U</div>
           <div className={cn("min-w-0", collapsed && "hidden")}>
-            <p className="truncate text-sm font-bold text-zinc-50">UDP CRM</p>
-            <p className="truncate text-[10px] text-zinc-500">Multi-Brand Platform</p>
+            <p className="truncate text-sm font-semibold tracking-tight text-zinc-50">UDP ERP</p>
+            <p className="truncate text-[10px] text-zinc-500">Multi-Brand Business Suite</p>
           </div>
         </div>
         <SidebarNav collapsed={collapsed} />
@@ -318,7 +318,7 @@ export default function AppShell() {
               </SheetTrigger>
               <SheetContent side="left" className="w-72 bg-zinc-950 p-0 text-zinc-50 [&>button]:text-zinc-400">
                 <SheetHeader className="border-b border-zinc-800 px-4 py-4 text-left">
-                  <SheetTitle className="text-sm text-zinc-50">UDP CRM</SheetTitle>
+                  <SheetTitle className="text-sm text-zinc-50">UDP ERP</SheetTitle>
                 </SheetHeader>
                 <SidebarNav onNavigate={() => setMobileOpen(false)} />
                 <BrandStrip />
@@ -326,8 +326,8 @@ export default function AppShell() {
             </Sheet>
 
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-sm font-bold text-zinc-900 sm:text-base">{meta?.label}</h1>
-              <p className="hidden truncate text-xs text-zinc-500 sm:block">{meta?.description}</p>
+              <h1 className="truncate text-sm font-semibold tracking-tight text-zinc-900 sm:text-base">{meta?.label}</h1>
+              <p className="hidden truncate text-xs text-zinc-400 sm:block">{meta?.description}</p>
             </div>
 
             {/* Global search (Ctrl+K) — tombol + palette; terpasang sekali di sini */}
@@ -449,7 +449,7 @@ export default function AppShell() {
             <p className="text-xs text-zinc-500">
               © 2026 UDP — <span className="font-medium text-zinc-700">Unimasi</span> · <span className="font-medium text-zinc-700">Segia Tech</span> · <span className="font-medium text-zinc-700">Erfo Multimedia</span> · <span className="font-medium text-zinc-700">Unicam Studio</span>
             </p>
-            <p className="text-[11px] text-zinc-400">Multi-Brand CRM v1.0 · Audit log aktif</p>
+            <p className="text-[11px] text-zinc-400">ERP Suite v2.0 · Audit log aktif</p>
           </div>
         </footer>
       </div>

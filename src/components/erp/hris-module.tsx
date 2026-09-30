@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle, BadgeCheck, Banknote, Briefcase, CalendarDays, Check, Clock,
@@ -32,7 +32,7 @@ import { formatCurrency, formatDate } from "@/lib/crm/utils";
 import {
   hrisApi,
   type AttendanceRow, type DailyLogRow, type EmployeeRow, type HrisOverview,
-  type LeaveRow, type OvertimeRow, type TodayAttendanceRow, type TravelRow,
+  type LeaveBalanceRow, type LeaveRow, type OvertimeRow, type TodayAttendanceRow, type TravelRow,
 } from "@/lib/erp/hris-client";
 
 // ===== Konstanta & util =====
@@ -157,6 +157,24 @@ function ListSkeleton({ rows = 4 }: { rows?: number }) {
   );
 }
 
+/** Bar sisa cuti: emerald bila sisa ≥ 30% kuota total, amber ≥ 0, rose negatif. */
+function LeaveBalanceBar({ remaining, total }: { remaining: number; total: number }) {
+  const pct = total > 0 ? Math.min(100, Math.max(0, Math.round((remaining / total) * 100))) : 100;
+  const tone = total > 0 && remaining >= total * 0.3 ? "bg-emerald-500" : remaining >= 0 ? "bg-amber-500" : "bg-rose-500";
+  return (
+    <div
+      className="h-2 w-full rounded-full bg-zinc-100"
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label="Proporsi sisa kuota cuti"
+    >
+      <div className={`h-2 rounded-full ${tone}`} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
 // ===== Komponen utama =====
 
 export default function HrisModule() {
@@ -183,6 +201,10 @@ export default function HrisModule() {
   const [travels, setTravels] = useState<TravelRow[]>([]);
   const [logs, setLogs] = useState<DailyLogRow[]>([]);
   const [myPending, setMyPending] = useState({ leaves: 0, overtimes: 0 });
+  const [balances, setBalances] = useState<LeaveBalanceRow[]>([]);
+  const [balanceYear, setBalanceYear] = useState<string>(String(new Date().getUTCFullYear()));
+  const [balLoading, setBalLoading] = useState(false);
+  const [balError, setBalError] = useState<string | null>(null);
 
   // ===== Dialog state =====
   const [leaveDialog, setLeaveDialog] = useState(false);
@@ -195,6 +217,7 @@ export default function HrisModule() {
   const [employeeDialog, setEmployeeDialog] = useState(false);
   const [employeeEditing, setEmployeeEditing] = useState<EmployeeRow | null>(null);
   const [logEditing, setLogEditing] = useState<DailyLogRow | null>(null);
+  const [balEditing, setBalEditing] = useState<LeaveBalanceRow | null>(null);
 
   const loadOverview = useCallback(async () => {
     const res = await hrisApi.overview();
@@ -251,6 +274,77 @@ export default function HrisModule() {
     }
   }, []);
 
+  // ===== Kuota cuti tahunan =====
+  const loadBalances = useCallback(async () => {
+    setBalLoading(true);
+    try {
+      const res = await hrisApi.leaveBalances({ year: Number(balanceYear) });
+      setBalances(res.balances);
+      setBalError(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Gagal memuat kuota cuti";
+      setBalError(msg);
+      throw new Error(msg);
+    } finally {
+      setBalLoading(false);
+    }
+  }, [balanceYear]);
+
+  // Pilihan tahun kuota: 3 tahun mulai 2025 — min digeser ke tahun join paling
+  // awal bila lebih besar dari 2025.
+  const balanceYearOptions = useMemo(() => {
+    const joinYears = employees
+      .map((e) => (e.joinedOn ? Number(e.joinedOn.slice(0, 4)) : 0))
+      .filter((y) => Number.isInteger(y) && y > 1900);
+    const minYear = Math.max(2025, joinYears.length ? Math.min(...joinYears) : 2025);
+    return [minYear, minYear + 1, minYear + 2];
+  }, [employees]);
+
+  const balanceYearTouched = useRef(false);
+  useEffect(() => {
+    // Muat awal sudah di-cover loadAll — refetch hanya saat tahun diganti.
+    if (!balanceYearTouched.current) {
+      balanceYearTouched.current = true;
+      return;
+    }
+    void loadBalances().catch(() => {
+      // sudah ditandai di balError + global banner via loadAll pattern
+    });
+  }, [balanceYear, loadBalances]);
+
+  const [balForm, setBalForm] = useState({ quotaDays: "", carriedDays: "", note: "" });
+  const openBalEdit = (row: LeaveBalanceRow) => {
+    setBalEditing(row);
+    setBalForm({ quotaDays: String(row.quotaDays), carriedDays: String(row.carriedDays), note: "" });
+  };
+  const submitBalEdit = async () => {
+    if (!balEditing) return;
+    try {
+      const quotaDays = Number(balForm.quotaDays);
+      const carriedDays = Number(balForm.carriedDays);
+      if (!Number.isFinite(quotaDays) || quotaDays < 0 || quotaDays > 365) {
+        toast.error("Kuota cuti harus angka 0–365");
+        return;
+      }
+      if (!Number.isFinite(carriedDays) || carriedDays < 0 || carriedDays > 365) {
+        toast.error("Bawaan tahun lalu harus angka 0–365");
+        return;
+      }
+      await hrisApi.upsertLeaveBalance({
+        employeeId: balEditing.employeeId,
+        year: Number(balanceYear),
+        quotaDays,
+        carriedDays,
+        ...(balForm.note.trim() ? { note: balForm.note.trim() } : {}),
+      });
+      toast.success(`Kuota cuti ${balEditing.preferredName} tersimpan`);
+      setBalEditing(null);
+      await loadBalances();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal menyimpan kuota cuti");
+    }
+  };
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     setGlobalError(null);
@@ -263,6 +357,7 @@ export default function HrisModule() {
       ["Lembur", loadOvertimes],
       ["Dinas", loadTravels],
       ["Log Harian", loadLogs],
+      ["Kuota Cuti", loadBalances],
       ["Pengajuan saya", loadMyPending],
     ];
     const results = await Promise.allSettled(tasks.map(([, fn]) => fn()));
@@ -273,7 +368,7 @@ export default function HrisModule() {
       toast.error(msg);
     }
     setLoading(false);
-  }, [loadOverview, loadEmployees, loadAttendanceToday, loadMyHistory, loadLeaves, loadOvertimes, loadTravels, loadLogs, loadMyPending]);
+  }, [loadOverview, loadEmployees, loadAttendanceToday, loadMyHistory, loadLeaves, loadOvertimes, loadTravels, loadLogs, loadBalances, loadMyPending]);
 
   useEffect(() => {
     void loadAll();
@@ -284,6 +379,8 @@ export default function HrisModule() {
     () => overview?.todayAttendance.find((r) => r.userId && r.userId === myId),
     [overview, myId],
   );
+  // Kuota cuti saya (self-scope → 1 baris dari GET leave-balances)
+  const myBalance: LeaveBalanceRow | null = balances.length > 0 ? balances[0] : null;
   const hasCheckIn = !!myRow?.checkInAt;
   const hasCheckOut = !!myRow?.checkOutAt;
 
@@ -645,6 +742,7 @@ export default function HrisModule() {
             <TabsList className="flex w-full flex-wrap justify-start gap-1 overflow-x-auto">
               <TabsTrigger value="kehadiran" className="gap-1.5"><Clock className="h-4 w-4" />Kehadiran</TabsTrigger>
               <TabsTrigger value="pengajuan" className="gap-1.5"><CalendarDays className="h-4 w-4" />Pengajuan</TabsTrigger>
+              <TabsTrigger value="kuota" className="gap-1.5"><CalendarDays className="h-4 w-4" />Kuota Cuti</TabsTrigger>
               <TabsTrigger value="lembur" className="gap-1.5"><Timer className="h-4 w-4" />Lembur</TabsTrigger>
               <TabsTrigger value="dinas" className="gap-1.5"><Briefcase className="h-4 w-4" />Dinas</TabsTrigger>
               <TabsTrigger value="log" className="gap-1.5"><NotebookPen className="h-4 w-4" />Log Harian</TabsTrigger>
@@ -823,6 +921,121 @@ export default function HrisModule() {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* ===== TAB: KUOTA CUTI ===== */}
+            <TabsContent value="kuota" className="mt-4 space-y-4">
+              {isManagerPlus && (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-zinc-500">Kuota tahunan + bawaan tahun lalu — cuti disetujui terhitung otomatis dari hari kerja.</p>
+                  <Select value={balanceYear} onValueChange={(v) => setBalanceYear(v)}>
+                    <SelectTrigger className="w-full sm:w-36" aria-label="Pilih tahun kuota cuti">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {balanceYearOptions.map((y) => (
+                        <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {balError && (
+                <Card className="border-rose-200 bg-rose-50">
+                  <CardContent className="flex items-center justify-between gap-3 py-3">
+                    <p className="flex items-center gap-2 text-sm text-rose-700"><AlertTriangle className="h-4 w-4" /> {balError}</p>
+                    <Button size="sm" variant="outline" onClick={() => void loadBalances().catch(() => {})}>Coba Lagi</Button>
+                  </CardContent>
+                </Card>
+              )}
+
+              {isManagerPlus ? (
+                <Card className="rounded-xl border bg-white shadow-sm">
+                  <CardContent className="pt-4">
+                    {loading || balLoading ? <ListSkeleton rows={5} /> : balances.length === 0 ? (
+                      <p className="py-6 text-center text-sm text-zinc-500">Tidak ada data kuota cuti</p>
+                    ) : (
+                      <div className="max-h-96 overflow-y-auto crm-scroll">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Nama</TableHead>
+                              <TableHead>Departemen</TableHead>
+                              <TableHead className="text-right">Kuota</TableHead>
+                              <TableHead className="text-right">Bawaan</TableHead>
+                              <TableHead className="text-right">Terpakai</TableHead>
+                              <TableHead className="w-44">Sisa</TableHead>
+                              {isHrTeam && <TableHead className="text-right">Aksi</TableHead>}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {balances.map((b) => (
+                              <TableRow key={b.employeeId}>
+                                <TableCell>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-medium text-zinc-900">{b.preferredName}</p>
+                                    <EmploymentStatusBadge status={b.employmentStatus} />
+                                  </div>
+                                  <p className="text-xs text-zinc-500">{b.employeeNumber}</p>
+                                </TableCell>
+                                <TableCell className="text-sm capitalize">{b.department ?? "—"}</TableCell>
+                                <TableCell className="text-right text-sm font-medium">{b.quotaDays}</TableCell>
+                                <TableCell className="text-right text-sm font-medium">{b.carriedDays}</TableCell>
+                                <TableCell className="text-right text-sm">{b.usedDays}</TableCell>
+                                <TableCell>
+                                  <p className={`text-sm font-semibold ${b.remaining < 0 ? "text-rose-600" : "text-zinc-900"}`}>{b.remaining} hari</p>
+                                  <LeaveBalanceBar remaining={b.remaining} total={b.quotaDays + b.carriedDays} />
+                                </TableCell>
+                                {isHrTeam && (
+                                  <TableCell className="text-right">
+                                    <Button size="sm" variant="ghost" className="h-8" aria-label={`Edit kuota cuti ${b.preferredName}`} onClick={() => openBalEdit(b)}>
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="rounded-xl border bg-white shadow-sm">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4 text-zinc-500" /> Kuota Cuti Saya {balanceYear}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {loading || balLoading ? <Skeleton className="h-28 w-full rounded-lg" /> : !myBalance ? (
+                      <p className="py-6 text-center text-sm text-zinc-500">Data kuota tidak tersedia — hubungi HR bila Anda karyawan aktif</p>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-6">
+                          <div>
+                            <p className="text-xs uppercase tracking-wide text-zinc-500">Sisa cuti</p>
+                            <p className={`text-4xl font-bold ${myBalance.remaining < 0 ? "text-rose-600" : "text-zinc-900"}`}>
+                              {myBalance.remaining}<span className="ml-1 text-base font-medium text-zinc-400">hari</span>
+                            </p>
+                          </div>
+                          <div className="flex-1">
+                            <LeaveBalanceBar remaining={myBalance.remaining} total={myBalance.quotaDays + myBalance.carriedDays} />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 rounded-lg border bg-zinc-50 p-3 text-sm">
+                          <div><p className="text-xs text-zinc-500">Kuota</p><p className="font-semibold text-zinc-900">{myBalance.quotaDays} hari</p></div>
+                          <div><p className="text-xs text-zinc-500">Bawaan tahun lalu</p><p className="font-semibold text-zinc-900">{myBalance.carriedDays} hari</p></div>
+                          <div><p className="text-xs text-zinc-500">Terpakai</p><p className="font-semibold text-zinc-900">{myBalance.usedDays} hari</p></div>
+                        </div>
+                        <p className="text-xs text-zinc-500">
+                          Cuti yang sudah disetujui otomatis terhitung — Sabtu, Minggu, dan hari libur nasional tidak dipotong dari kuota.
+                        </p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             {/* ===== TAB: LEMBUR ===== */}
@@ -1445,6 +1658,44 @@ export default function HrisModule() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setSettleTravel(null)}>Batal</Button>
             <Button className="bg-zinc-900 text-white hover:bg-zinc-800" onClick={() => void submitSettle()}>Ajukan Settlement</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Dialog: Edit kuota cuti ===== */}
+      <Dialog open={!!balEditing} onOpenChange={(o) => !o && setBalEditing(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Edit Kuota Cuti{balEditing ? ` — ${balEditing.preferredName} (${balanceYear})` : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="bal-quota">Kuota tahunan (hari) *</Label>
+                <Input id="bal-quota" type="number" min="0" max="365" value={balForm.quotaDays} onChange={(e) => setBalForm((f) => ({ ...f, quotaDays: e.target.value }))} aria-label="Kuota cuti tahunan (hari)" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="bal-carried">Bawaan tahun lalu (hari)</Label>
+                <Input id="bal-carried" type="number" min="0" max="365" value={balForm.carriedDays} onChange={(e) => setBalForm((f) => ({ ...f, carriedDays: e.target.value }))} aria-label="Sisa cuti dibawa dari tahun lalu (hari)" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="bal-note">Catatan</Label>
+              <Textarea id="bal-note" placeholder="mis. sisa 2 hari dibawa dari 2025" value={balForm.note} onChange={(e) => setBalForm((f) => ({ ...f, note: e.target.value }))} />
+            </div>
+            {balEditing && (
+              <p className="text-xs text-zinc-500">
+                Terpakai {balEditing.usedDays} hari (cuti disetujui) — sisa dihitung ulang otomatis: kuota + bawaan − terpakai.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBalEditing(null)}>Batal</Button>
+            <Button className="bg-zinc-900 text-white hover:bg-zinc-800" onClick={() => void submitBalEdit()}>
+              Simpan
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

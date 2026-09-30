@@ -135,13 +135,13 @@ const EMPTY_OPP_FORM: OpportunityFormState = {
 // ============ Mapping kanal (tanpa indigo/blue) ============
 
 const CHANNEL_STYLE: Record<string, { icon: LucideIcon; circle: string; badge: string }> = {
-  whatsapp: { icon: WhatsAppIcon, circle: "bg-emerald-100 text-emerald-600", badge: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  email: { icon: Mail, circle: "bg-amber-100 text-amber-600", badge: "border-amber-200 bg-amber-50 text-amber-700" },
-  instagram: { icon: Instagram, circle: "bg-rose-100 text-rose-600", badge: "border-rose-200 bg-rose-50 text-rose-700" },
-  website: { icon: Globe, circle: "bg-violet-100 text-violet-600", badge: "border-violet-200 bg-violet-50 text-violet-700" },
-  phone: { icon: Phone, circle: "bg-cyan-100 text-cyan-600", badge: "border-cyan-200 bg-cyan-50 text-cyan-700" },
-  meeting: { icon: Video, circle: "bg-zinc-200 text-zinc-700", badge: "border-zinc-200 bg-zinc-100 text-zinc-700" },
-  portal: { icon: LayoutDashboard, circle: "bg-orange-100 text-orange-600", badge: "border-orange-200 bg-orange-50 text-orange-700" },
+  whatsapp: { icon: WhatsAppIcon, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  email: { icon: Mail, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  instagram: { icon: Instagram, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  website: { icon: Globe, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  phone: { icon: Phone, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  meeting: { icon: Video, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
+  portal: { icon: LayoutDashboard, circle: "bg-zinc-100 text-zinc-600", badge: "border-zinc-200 bg-zinc-50 text-zinc-600" },
 };
 
 function channelMeta(channel: string) {
@@ -349,20 +349,15 @@ function BrandChip({ name, color }: { name: string; color: string }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: number; tone: "zinc" | "amber" | "rose" }) {
-  const tones: Record<string, string> = {
-    zinc: "bg-zinc-100 text-zinc-600",
-    amber: "bg-amber-100 text-amber-600",
-    rose: "bg-rose-100 text-rose-600",
-  };
+function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border bg-white p-4 shadow-sm">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", tones[tone])} aria-hidden="true">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600" aria-hidden="true">
         <Icon className="size-4" />
       </span>
       <div className="min-w-0">
-        <p className="truncate text-xs uppercase tracking-wide text-zinc-500">{label}</p>
-        <p className="text-lg font-bold leading-tight text-zinc-900">{value}</p>
+        <p className="truncate text-xs text-zinc-500">{label}</p>
+        <p className="text-lg font-bold leading-tight tabular-nums text-zinc-900">{value}</p>
       </div>
     </div>
   );
@@ -397,8 +392,7 @@ function LeadCard({
       className={cn(
         "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
         breached ? "border-l-4 border-l-rose-500" : responded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
-        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
-        selected && breached && "ring-1 ring-rose-500"
+        selected && "border-zinc-900 ring-1 ring-zinc-900"
       )}
     >
       <div className="flex items-start gap-3">
@@ -556,8 +550,7 @@ function ThreadCard({ group, selected, onSelect, onDelete }: {
       className={cn(
         "w-full cursor-pointer rounded-xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
         breached ? "border-l-4 border-l-rose-500" : group.converted ? "border-l-4 border-l-emerald-500" : group.allResponded ? "border-l-4 border-l-emerald-500" : "hover:border-zinc-300",
-        selected && !breached && "border-zinc-900 ring-1 ring-zinc-900",
-        selected && breached && "ring-1 ring-rose-500"
+        selected && "border-zinc-900 ring-1 ring-zinc-900"
       )}
     >
       <div className="flex items-start gap-3">
@@ -612,7 +605,7 @@ function ThreadCard({ group, selected, onSelect, onDelete }: {
               <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">{`${thread.messageCount} pesan`}</Badge>
             ) : null}
             {thread.channels.length > 1 ? (
-              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">{`${thread.channels.length} kanal`}</Badge>
+              <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-600">{`${thread.channels.length} kanal`}</Badge>
             ) : null}
             {newest.brand ? <BrandChip name={newest.brand.name} color={newest.brand.color} /> : null}
           </div>
@@ -3112,7 +3105,7 @@ export default function InboxModule() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg font-bold text-zinc-900 sm:text-xl">Lead Inbox</h1>
+              <h1 className="text-lg font-semibold text-zinc-900 sm:text-xl">Lead Inbox</h1>
               {leads ? (
                 <Badge className="bg-zinc-900 text-white" aria-label="Jumlah percakapan">
                   {`${stats.conversations} percakapan · ${stats.threadMessages} pesan`}
@@ -3264,11 +3257,11 @@ export default function InboxModule() {
 
       {/* ===== Stat strip ===== */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard icon={Inbox} label="Total Lead" value={stats.total} tone="zinc" />
-        <StatCard icon={AlarmClock} label="Terlambat Respons" value={stats.late} tone={stats.late > 0 ? "rose" : "zinc"} />
-        <StatCard icon={Reply} label="Sudah Direspons" value={stats.responded} tone="zinc" />
-        <StatCard icon={AlertTriangle} label="Warning Duplikat" value={stats.duplicate} tone={stats.duplicate > 0 ? "amber" : "zinc"} />
-        <StatCard icon={MessagesSquare} label="Percakapan" value={stats.conversations} tone="zinc" />
+        <StatCard icon={Inbox} label="Total Lead" value={stats.total} />
+        <StatCard icon={AlarmClock} label="Terlambat Respons" value={stats.late} />
+        <StatCard icon={Reply} label="Sudah Direspons" value={stats.responded} />
+        <StatCard icon={AlertTriangle} label="Warning Duplikat" value={stats.duplicate} />
+        <StatCard icon={MessagesSquare} label="Percakapan" value={stats.conversations} />
       </div>
 
       {/* ===== Layout full chat: list 1 kolom + chat 2 kolom ===== */}

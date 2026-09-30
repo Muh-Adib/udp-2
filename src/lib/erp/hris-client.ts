@@ -160,6 +160,30 @@ export type HolidayRow = {
   kind: string; // national | company
 };
 
+export type LeaveBalanceRow = {
+  id: string | null; // null = belum ada record Ledger (default kuota 12, bawaan 0)
+  employeeId: string;
+  employeeNumber: string;
+  preferredName: string;
+  employmentStatus: string; // permanent | intern | freelance
+  department: string | null;
+  quotaDays: number;
+  carriedDays: number;
+  usedDays: number; // hari kerja Sen–Jum di luar libur, dari cuti approved
+  remaining: number; // quotaDays + carriedDays − usedDays
+};
+
+export type LeaveBalanceRecord = {
+  id: string;
+  employeeId: string;
+  year: number;
+  quotaDays: number;
+  carriedDays: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AttendanceStatusToday = "hadir" | "izin" | "belum" | "exception";
 
 export type TodayAttendanceRow = {
@@ -268,6 +292,14 @@ export type DailyLogInput = {
   projectId?: string | null;
 };
 
+export type LeaveBalanceUpsertInput = {
+  employeeId: string;
+  year: number;
+  quotaDays: number;
+  carriedDays: number;
+  note?: string | null;
+};
+
 // ===== API =====
 
 export const hrisApi = {
@@ -367,6 +399,17 @@ export const hrisApi = {
     request<{ holidays: HolidayRow[] }>(
       `/api/erp/hris/holidays${qs(params as Record<string, QueryValue>)}`,
     ),
+
+  // Kuota cuti tahunan
+  leaveBalances: (params?: { year?: number; employeeId?: string }) =>
+    request<{ year: number; balances: LeaveBalanceRow[] }>(
+      `/api/erp/hris/leave-balances${qs(params as Record<string, QueryValue>)}`,
+    ),
+  upsertLeaveBalance: (data: LeaveBalanceUpsertInput) =>
+    request<{ balance: LeaveBalanceRecord }>("/api/erp/hris/leave-balances", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   // Ringkasan modul
   overview: (params?: { month?: string }) =>

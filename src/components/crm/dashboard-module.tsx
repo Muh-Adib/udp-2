@@ -68,17 +68,6 @@ function normalizeDashboard(res: DashboardData): DashboardFullData {
   };
 }
 
-interface KpiDef {
-  key: KpiTrendKey;
-  label: string;
-  value: string;
-  icon: LucideIcon;
-  hint: string;
-  accent: boolean;
-  goodWhen: "up" | "down";
-  badge?: ReactNode;
-}
-
 const TOOLTIP_STYLE: CSSProperties = {
   borderRadius: 10,
   border: "1px solid #e4e4e7",
@@ -97,7 +86,7 @@ const ACTION_BADGE_CLASS: Record<string, string> = {
   update: "bg-amber-100 text-amber-700",
   delete: "bg-rose-100 text-rose-700",
   convert: "bg-violet-100 text-violet-700",
-  stage_change: "bg-cyan-100 text-cyan-700",
+  stage_change: "bg-zinc-100 text-zinc-600",
   payment: "bg-emerald-100 text-emerald-700",
   login: "bg-zinc-100 text-zinc-600",
 };
@@ -166,7 +155,7 @@ function actionBadgeClass(action: string): string {
 // ============ Sub-komponen ============
 
 function KpiCard({
-  label, value, icon: Icon, hint, trend, badge, accentColor, tone = "default",
+  label, value, icon: Icon, hint, trend, badge, tone = "default",
 }: {
   label: string;
   value: string;
@@ -174,23 +163,18 @@ function KpiCard({
   hint: string;
   trend?: ReactNode;
   badge?: ReactNode;
-  accentColor?: string;
   /** Fase 3 — tone semantik: danger (rose/red), ok (emerald), default (zinc). */
   tone?: "default" | "danger" | "ok";
 }) {
   const valueClass = tone === "danger" ? "text-red-600" : tone === "ok" ? "text-emerald-600" : "text-zinc-900";
-  const chipClass = tone === "danger" ? "bg-rose-100 text-rose-600" : tone === "ok" ? "bg-emerald-100 text-emerald-600" : "bg-zinc-100 text-zinc-600";
   return (
-    <div className="relative overflow-hidden rounded-xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
-      {accentColor ? (
-        <span aria-hidden className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accentColor }} />
-      ) : null}
+    <div className="rounded-xl border bg-white p-4 shadow-sm transition-all hover:border-zinc-300 hover:shadow-md">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
           <p className={`mt-1 text-2xl font-bold tabular-nums ${valueClass}`}>{value}</p>
         </div>
-        <span className={`shrink-0 rounded-lg p-2 ${chipClass}`}>
+        <span className="shrink-0 rounded-lg bg-zinc-100 p-2 text-zinc-600">
           <Icon className="h-4 w-4" aria-hidden />
         </span>
       </div>
@@ -584,7 +568,7 @@ function MarketingCockpit({ view, onOpen }: { view: DashboardMineView; onOpen: (
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-            <ListTodo className="h-4 w-4 text-orange-600" aria-hidden /> Tugas Saya
+            <ListTodo className="h-4 w-4 text-zinc-500" aria-hidden /> Tugas Saya
           </h3>
           <div className="flex gap-1.5">
             {view.tasksDueToday > 0 ? (
@@ -626,7 +610,7 @@ function MarketingCockpit({ view, onOpen }: { view: DashboardMineView; onOpen: (
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-            <Target className="h-4 w-4 text-orange-600" aria-hidden /> Deal Terbesar Saya
+            <Target className="h-4 w-4 text-zinc-500" aria-hidden /> Deal Terbesar Saya
           </h3>
           <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.openLeads} terbuka</Badge>
         </div>
@@ -663,7 +647,7 @@ function MarketingCockpit({ view, onOpen }: { view: DashboardMineView; onOpen: (
       {/* Funnel personal */}
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-          <TrendingUp className="h-4 w-4 text-orange-600" aria-hidden /> Pipeline Saya per Tahap
+          <TrendingUp className="h-4 w-4 text-zinc-500" aria-hidden /> Pipeline Saya per Tahap
         </h3>
         <div className="space-y-1.5">
           {view.funnel.filter((f) => f.count > 0).length === 0 ? (
@@ -673,11 +657,11 @@ function MarketingCockpit({ view, onOpen }: { view: DashboardMineView; onOpen: (
               const max = Math.max(...view.funnel.map((x) => x.count), 1);
               return (
                 <div key={f.stage} className="flex items-center gap-2">
-                  <span className="w-24 shrink-0 truncate text-xs text-zinc-600" title={stageLabel(f.stage)}>{stageLabel(f.stage)}</span>
+                  <span className="w-24 shrink-0 truncate text-xs text-zinc-500" title={stageLabel(f.stage)}>{stageLabel(f.stage)}</span>
                   <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
-                    <div className="h-full rounded bg-orange-500 transition-all duration-500" style={{ width: `${Math.round((f.count / max) * 100)}%` }} />
+                    <div className="h-full rounded bg-zinc-800 transition-all duration-500" style={{ width: `${Math.round((f.count / max) * 100)}%` }} />
                   </div>
-                  <span className="w-8 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">{f.count}</span>
+                  <span className="w-8 shrink-0 text-right text-xs font-medium tabular-nums text-zinc-700">{f.count}</span>
                 </div>
               );
             })
@@ -706,7 +690,7 @@ function FinanceCockpit({ view, onOpen }: { view: DashboardFinanceView; onOpen: 
       {/* Status invoice */}
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-          <Coins className="h-4 w-4 text-orange-600" aria-hidden /> Status Invoice
+          <Coins className="h-4 w-4 text-zinc-500" aria-hidden /> Status Invoice
         </h3>
         <div className="space-y-1.5">
           {view.byStatus.map((s) => {
@@ -738,7 +722,7 @@ function FinanceCockpit({ view, onOpen }: { view: DashboardFinanceView; onOpen: 
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-            <Banknote className="h-4 w-4 text-rose-600" aria-hidden /> Tagihan Terlambat
+            <Banknote className="h-4 w-4 text-zinc-500" aria-hidden /> Tagihan Terlambat
           </h3>
           {view.overdueCount > 0 ? (
             <Badge className="border-transparent bg-rose-100 text-rose-700 tabular-nums">{view.overdueCount} invoice</Badge>
@@ -779,7 +763,7 @@ function FinanceCockpit({ view, onOpen }: { view: DashboardFinanceView; onOpen: 
       {/* Outstanding per brand */}
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-          <ReceiptText className="h-4 w-4 text-orange-600" aria-hidden /> Outstanding per Brand
+          <ReceiptText className="h-4 w-4 text-zinc-500" aria-hidden /> Outstanding per Brand
         </h3>
         {view.byBrand.length === 0 ? (
           <EmptyState text="Belum ada invoice pada brand." />
@@ -821,7 +805,7 @@ function ProductionCockpit({ view, onOpen }: { view: DashboardProductionView; on
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-            <Rocket className="h-4 w-4 text-orange-600" aria-hidden /> Antrian Produksi
+            <Rocket className="h-4 w-4 text-zinc-500" aria-hidden /> Antrian Produksi
           </h3>
           <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.activeProjects} aktif</Badge>
         </div>
@@ -874,7 +858,7 @@ function ProductionCockpit({ view, onOpen }: { view: DashboardProductionView; on
         <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-              <CalendarClock className="h-4 w-4 text-orange-600" aria-hidden /> Milestone ≤ 7 Hari
+              <CalendarClock className="h-4 w-4 text-zinc-500" aria-hidden /> Milestone ≤ 7 Hari
             </h3>
             <Badge variant="outline" className="bg-zinc-50 tabular-nums">{view.milestonesDueSoon.length}</Badge>
           </div>
@@ -925,7 +909,7 @@ function TeamCockpit({ view, auditItems, onOpen }: { view: DashboardTeamView; au
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-            <Users className="h-4 w-4 text-orange-600" aria-hidden /> Komposisi Tim
+            <Users className="h-4 w-4 text-zinc-500" aria-hidden /> Komposisi Tim
           </h3>
           <Badge variant="outline" className="bg-emerald-50 text-emerald-700 tabular-nums">{view.activeUsers}/{view.totalUsers} aktif</Badge>
         </div>
@@ -950,7 +934,7 @@ function TeamCockpit({ view, auditItems, onOpen }: { view: DashboardTeamView; au
 
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-          <ListTodo className="h-4 w-4 text-orange-600" aria-hidden /> Beban Tugas Tim
+          <ListTodo className="h-4 w-4 text-zinc-500" aria-hidden /> Beban Tugas Tim
         </h3>
         <div className="grid grid-cols-3 gap-2 text-center">
           <div className="rounded-lg bg-zinc-50 p-3">
@@ -973,7 +957,7 @@ function TeamCockpit({ view, auditItems, onOpen }: { view: DashboardTeamView; au
 
       <div className="rounded-xl border bg-white p-4 shadow-sm sm:p-5">
         <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
-          <Clock3 className="h-4 w-4 text-orange-600" aria-hidden /> Aktivitas Terbaru
+          <Clock3 className="h-4 w-4 text-zinc-500" aria-hidden /> Aktivitas Terbaru
         </h3>
         <RecentAuditList items={auditItems} maxHeight="max-h-64" />
         <Button variant="ghost" size="sm" className="mt-2 w-full text-zinc-500" onClick={() => onOpen("audit")} aria-label="Buka Audit Logs">
@@ -988,7 +972,7 @@ function TeamCockpit({ view, auditItems, onOpen }: { view: DashboardTeamView; au
 function ClientWelcome({ onOpen }: { onOpen: (m: ModuleKey) => void }) {
   return (
     <section aria-label="Selamat datang klien" className="rounded-xl border bg-white p-8 text-center shadow-sm">
-      <UserCheck className="mx-auto h-10 w-10 text-orange-500" aria-hidden />
+      <UserCheck className="mx-auto h-10 w-10 text-zinc-400" aria-hidden />
       <h2 className="mt-3 text-lg font-bold text-zinc-900">Selamat datang di UDP CRM</h2>
       <p className="mx-auto mt-1 max-w-md text-sm text-zinc-500">
         Akun klien diproses lewat Portal Klien — di sana Anda bisa meninjau deliverable, memberi persetujuan, dan mengajukan change request.
@@ -1117,7 +1101,6 @@ export default function DashboardModule() {
   const pendingCRs = data.pendingChangeRequests ?? 0;
   const canOpenInbox = canAccess("inbox", user?.role);
   const activeBrandCount = brands.length > 0 ? brands.filter((b) => b.active).length : data.byBrand.length;
-  const firstBrandColor = brands[0]?.color ?? data.byBrand[0]?.color ?? "#ea580c";
   const funnelMap = new Map(data.funnel.map((f) => [f.stage, f] as const));
   const funnelMax = Math.max(...data.funnel.map((f) => f.count), 1);
   const wonCount = data.funnel.find((f) => f.stage === "won")?.count ?? 0;
@@ -1146,30 +1129,30 @@ export default function DashboardModule() {
   const lostMax = Math.max(...data.lostReasons.map((r) => r.count), 1);
 
   // ==== Ronde 31 — KPI cards sesuai peran ====
-  interface RoleKpi { key?: KpiTrendKey; label: string; value: string; icon: LucideIcon; hint: string; accent?: boolean; goodWhen?: "up" | "down"; badge?: ReactNode; tone?: "default" | "danger" | "ok" }
+  interface RoleKpi { key?: KpiTrendKey; label: string; value: string; icon: LucideIcon; hint: string; goodWhen?: "up" | "down"; badge?: ReactNode; tone?: "default" | "danger" | "ok" }
   const roleKpis: RoleKpi[] = (() => {
     const mv = roleView?.mine;
     const fv = roleView?.finance;
     const pv = roleView?.production;
     if (isMarketing && mv) {
       return [
-        { label: "Pipeline Saya", value: formatCurrency(mv.pipelineValue), icon: Wallet, hint: `${mv.openLeads} deal terbuka milik saya`, accent: true },
-        { label: "Deal Won Saya", value: formatCurrency(mv.wonValue), icon: Trophy, hint: `${mv.wonCount} deal berhasil ditutup`, accent: true },
+        { label: "Pipeline Saya", value: formatCurrency(mv.pipelineValue), icon: Wallet, hint: `${mv.openLeads} deal terbuka milik saya` },
+        { label: "Deal Won Saya", value: formatCurrency(mv.wonValue), icon: Trophy, hint: `${mv.wonCount} deal berhasil ditutup` },
         { label: "Tugas Due Hari Ini", value: String(mv.tasksDueToday), icon: CalendarClock, hint: mv.tasksDueToday > 0 ? "selesaikan sebelum hari berakhir" : "tidak ada tenggat hari ini", tone: mv.tasksDueToday > 0 ? "danger" : "ok" },
         { label: "Tugas Terlambat", value: String(mv.tasksOverdue), icon: AlarmClockOff, hint: mv.tasksOverdue > 0 ? "segera follow-up kembali" : "semua tugas dalam kontrol", tone: mv.tasksOverdue > 0 ? "danger" : "ok" },
       ];
     }
     if (isFinance && fv) {
       return [
-        { label: "Outstanding", value: formatCurrency(fv.outstanding), icon: ReceiptText, hint: "total tagihan belum lunas", accent: true, goodWhen: "down" },
-        { label: "Terkumpul Bulan Ini", value: formatCurrency(fv.collectedThisMonth), icon: Coins, hint: "payment diterima bulan berjalan", accent: true },
+        { label: "Outstanding", value: formatCurrency(fv.outstanding), icon: ReceiptText, hint: "total tagihan belum lunas", goodWhen: "down" },
+        { label: "Terkumpul Bulan Ini", value: formatCurrency(fv.collectedThisMonth), icon: Coins, hint: "payment diterima bulan berjalan" },
         { label: "Diterbitkan Bulan Ini", value: formatCurrency(fv.billedThisMonth), icon: Banknote, hint: "invoice terbit bulan berjalan" },
         { label: "Invoice Terlambat", value: String(fv.overdueCount), icon: AlarmClockOff, hint: fv.overdueCount > 0 ? "perlu penagihan segera" : "semua tagihan lancar", tone: fv.overdueCount > 0 ? "danger" : "ok" },
       ];
     }
     if (isProduction && pv) {
       return [
-        { label: "Proyek Aktif", value: String(pv.activeProjects), icon: Rocket, hint: "planning + berjalan + review", accent: true },
+        { label: "Proyek Aktif", value: String(pv.activeProjects), icon: Rocket, hint: "planning + berjalan + review" },
         { label: "Proyek Berisiko", value: String(pv.atRisk), icon: AlertTriangle, hint: "tenggat ≤ 7 hari & belum selesai", tone: pv.atRisk > 0 ? "danger" : "ok" },
         { label: "Milestone ≤ 7 Hari", value: String(pv.milestonesDueSoon.length), icon: CalendarClock, hint: "milestone jatuh tempo minggu ini", tone: pv.milestonesDueSoon.length > 0 ? "danger" : "ok" },
         { label: "Deliverable Pending", value: String(pv.deliverablesPending), icon: ClipboardList, hint: "menunggu review internal/klien", tone: pv.deliverablesPending > 0 ? "danger" : "ok" },
@@ -1178,7 +1161,7 @@ export default function DashboardModule() {
     if (isHr && roleView?.team) {
       const tv = roleView.team;
       return [
-        { label: "Total Pengguna", value: String(tv.totalUsers), icon: Users, hint: "seluruh akun terdaftar", accent: true },
+        { label: "Total Pengguna", value: String(tv.totalUsers), icon: Users, hint: "seluruh akun terdaftar" },
         { label: "Pengguna Aktif", value: String(tv.activeUsers), icon: UserCheck, hint: `${tv.totalUsers - tv.activeUsers} akun nonaktif`, tone: tv.activeUsers < tv.totalUsers ? "danger" : "ok" },
         { label: "Tugas Tim Terbuka", value: String(tv.tasksOpen), icon: ListTodo, hint: `${tv.tasksDueToday} due hari ini` },
         { label: "Tugas Tim Terlambat", value: String(tv.tasksOverdue), icon: AlarmClockOff, hint: tv.tasksOverdue > 0 ? "butuh redistribusi beban" : "beban tim terkendali", tone: tv.tasksOverdue > 0 ? "danger" : "ok" },
@@ -1186,12 +1169,12 @@ export default function DashboardModule() {
     }
     // Eksekutif (super_admin/director/manager) + fallback — KPI bawaan
     return [
-      { key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue), icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, accent: true, goodWhen: "up" },
-      { key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline), icon: Target, hint: "estimasi probabilitas tertimbang", accent: true, goodWhen: "up" },
-      { key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`, icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, accent: true, goodWhen: "up" },
-      { key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue), icon: Handshake, hint: `${wonCount} deal won`, accent: true, goodWhen: "up" },
-      { key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours), icon: Timer, hint: "rata-rata waktu respons lead", accent: false, goodWhen: "down", badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge> },
-      { key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices), icon: ReceiptText, hint: "total tagihan belum lunas", accent: false, goodWhen: "down" },
+      { key: "pipelineValue", label: "Pipeline Value", value: formatCurrency(kpi.pipelineValue), icon: Wallet, hint: `${kpi.openLeads} lead terbuka`, goodWhen: "up" },
+      { key: "weightedPipeline", label: "Weighted Forecast", value: formatCurrency(kpi.weightedPipeline), icon: Target, hint: "estimasi probabilitas tertimbang", goodWhen: "up" },
+      { key: "winRate", label: "Win Rate", value: `${kpi.winRate}%`, icon: Trophy, hint: `${wonCount} deal berhasil ditutup`, goodWhen: "up" },
+      { key: "wonValue", label: "Won Value", value: formatCurrency(kpi.wonValue), icon: Handshake, hint: `${wonCount} deal won`, goodWhen: "up" },
+      { key: "avgResponseHours", label: "Avg Response", value: formatHours(kpi.avgResponseHours), icon: Timer, hint: "rata-rata waktu respons lead", goodWhen: "down", badge: <Badge className={`border-transparent ${slaBadgeClass(kpi.avgResponseHours)}`}>SLA</Badge> },
+      { key: "outstandingInvoices", label: "Outstanding Invoice", value: formatCurrency(kpi.outstandingInvoices), icon: ReceiptText, hint: "total tagihan belum lunas", goodWhen: "down" },
     ];
   })();
 
@@ -1200,7 +1183,7 @@ export default function DashboardModule() {
       {/* ============ Header ============ */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">Command Center</h1>
+          <h1 className="text-xl font-semibold text-zinc-900 sm:text-2xl">Command Center</h1>
           <p className="mt-0.5 text-sm text-zinc-500">
             {role ? (ROLE_DASH_SUBTITLE[role] ?? "Ringkasan eksekutif lintas brand") : "Ringkasan eksekutif lintas brand"}
           </p>
@@ -1284,7 +1267,6 @@ export default function DashboardModule() {
               hint={c.hint}
               badge={c.badge}
               trend={c.key ? trendNode(trends[c.key] ?? null, c.goodWhen ?? "up") : null}
-              accentColor={c.accent ? firstBrandColor : undefined}
               tone={c.tone ?? "default"}
             />
           ))}
@@ -1375,7 +1357,7 @@ export default function DashboardModule() {
               const pct = Math.round((entry.count / funnelMax) * 100);
               return (
                 <div key={stage.key} className="flex items-center gap-3">
-                  <div className="w-28 shrink-0 truncate text-xs text-zinc-600 sm:w-36" title={stageLabel(stage.key)}>
+                  <div className="w-28 shrink-0 truncate text-xs text-zinc-500 sm:w-36" title={stageLabel(stage.key)}>
                     {stageLabel(stage.key)}
                   </div>
                   <div className="relative h-5 flex-1 overflow-hidden rounded-md bg-zinc-100">
@@ -1386,7 +1368,7 @@ export default function DashboardModule() {
                     />
                   </div>
                   <div className="w-20 shrink-0 text-right text-xs tabular-nums sm:w-28">
-                    <div className="font-semibold text-zinc-900">{entry.count} deal</div>
+                    <div className="font-medium text-zinc-700">{entry.count} deal</div>
                     <div className="text-zinc-500">{formatCurrency(entry.value)}</div>
                   </div>
                 </div>
@@ -1405,7 +1387,7 @@ export default function DashboardModule() {
           >
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={data.forecast} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" vertical={false} />
                 <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
                 <YAxis
                   width={72}
@@ -1442,7 +1424,7 @@ export default function DashboardModule() {
                     <stop offset="95%" stopColor="#059669" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#71717a" }} axisLine={false} tickLine={false} />
                 <YAxis
                   allowDecimals={false}
@@ -1541,14 +1523,14 @@ export default function DashboardModule() {
                   const pct = Math.round((r.count / lostMax) * 100);
                   return (
                     <div key={r.reason} className="flex items-center gap-3">
-                      <div className="w-32 shrink-0 truncate text-xs text-zinc-600 sm:w-44" title={r.reason}>{r.reason}</div>
+                      <div className="w-32 shrink-0 truncate text-xs text-zinc-500 sm:w-44" title={r.reason}>{r.reason}</div>
                       <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
                         <div
                           className="h-full rounded transition-all duration-500"
                           style={{ width: `${pct}%`, backgroundColor: "#dc2626" }}
                         />
                       </div>
-                      <div className="w-6 shrink-0 text-right text-xs font-semibold tabular-nums text-zinc-900">
+                      <div className="w-6 shrink-0 text-right text-xs font-medium tabular-nums text-zinc-700">
                         {r.count}
                       </div>
                     </div>
