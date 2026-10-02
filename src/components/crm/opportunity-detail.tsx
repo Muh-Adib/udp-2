@@ -3254,7 +3254,7 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
       const res = await api.aiSummary(activeId);
       setAiText(res.summary);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Gagal membuat ringkasan AI";
+      const msg = e instanceof Error ? e.message : "Gagal membuat ringkasan otomatis";
       setAiError(msg);
       toast.error(msg);
     } finally {
@@ -3629,16 +3629,16 @@ export default function OpportunityDetail({ opportunityId, open, onOpenChange, o
                   </div>
                 ) : null}
 
-                {/* Tombol AI */}
+                {/* Tombol ringkasan otomatis */}
                 <div className="mt-4 flex items-center justify-between gap-2">
-                  <p className="text-xs text-zinc-400">Asisten AI meringkas riwayat percakapan lead.</p>
+                  <p className="text-xs text-zinc-400">Ringkasan otomatis dari data & riwayat percakapan lead.</p>
                   <Button size="sm" variant="outline" onClick={() => void runAi()} disabled={aiLoading}>
                     {aiLoading ? (
                       <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                     ) : (
                       <Sparkles className="size-4" aria-hidden="true" />
                     )}
-                    Ringkas dengan AI
+                    Ringkasan Otomatis
                   </Button>
                 </div>
 

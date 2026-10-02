@@ -29,16 +29,19 @@ import BrandsModule from "@/components/crm/brands-module";
 import ChannelsModule from "@/components/crm/channels-module";
 import UsersModule from "@/components/crm/users-module";
 import AuditModule from "@/components/crm/audit-module";
-// ERP modules (Blueprint v2.0 — Task ERP)
-import HrisModule from "@/components/erp/hris-module";
+// ERP modules (Blueprint v2.0 — Task ERP; Task 74: HRIS dipecah jadi 3 modul fokus)
+import AttendanceModule from "@/components/erp/attendance-module";
+import RequestsModule from "@/components/erp/requests-module";
+import EmployeesModule from "@/components/erp/employees-module";
 import PayrollModule from "@/components/erp/payroll-module";
 import AccountingModule from "@/components/erp/accounting-module";
 import WorkModule from "@/components/erp/work-module";
+import TasksModule from "@/components/crm/tasks-module";
 import {
   LayoutDashboard, Inbox, Users2, KanbanSquare, BellRing, Wallet, BarChart3,
   FolderKanban, Globe2, Building2, UserCog, ScrollText, LogOut, Menu, PlugZap,
   ChevronDown, CircleUser, PanelLeftClose, PanelLeftOpen, LockKeyhole,
-  CalendarCheck2, Banknote, Landmark, GitBranch,
+  CalendarCheck2, Banknote, Landmark, GitBranch, ListChecks, ClipboardCheck, Briefcase,
 } from "lucide-react";
 
 const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }>> = {
@@ -47,6 +50,7 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
   contacts: Users2,
   pipeline: KanbanSquare,
   followups: BellRing,
+  tasks: ListChecks,
   finance: Wallet,
   reports: BarChart3,
   projects: FolderKanban,
@@ -55,16 +59,20 @@ const MODULE_ICONS: Record<ModuleKey, React.ComponentType<{ className?: string }
   brands: Building2,
   users: UserCog,
   audit: ScrollText,
-  hris: CalendarCheck2,
+  attendance: CalendarCheck2,
+  requests: ClipboardCheck,
+  employees: Briefcase,
   payroll: Banknote,
   accounting: Landmark,
   work: GitBranch,
 };
 
 const NAV_SECTIONS: { label: string; modules: ModuleKey[] }[] = [
-  { label: "Operasional", modules: ["dashboard", "inbox", "contacts", "pipeline"] },
-  { label: "Komersial & Produksi", modules: ["followups", "finance", "reports", "projects"] },
-  { label: "ERP", modules: ["work", "hris", "payroll", "accounting"] },
+  { label: "Beranda", modules: ["dashboard"] },
+  { label: "Komersial", modules: ["inbox", "contacts", "pipeline", "followups", "reports"] },
+  { label: "Produksi", modules: ["projects", "tasks", "work"] },
+  { label: "Keuangan", modules: ["finance", "accounting"] },
+  { label: "SDM", modules: ["attendance", "requests", "employees", "payroll"] },
   { label: "Eksternal", modules: ["portal"] },
   { label: "Sistem", modules: ["channels", "brands", "users", "audit"] },
 ];
@@ -435,7 +443,10 @@ export default function AppShell() {
               {activeModule === "brands" && <BrandsModule />}
               {activeModule === "users" && <UsersModule />}
               {activeModule === "audit" && <AuditModule />}
-              {activeModule === "hris" && <HrisModule />}
+              {activeModule === "tasks" && <TasksModule />}
+              {activeModule === "attendance" && <AttendanceModule />}
+              {activeModule === "requests" && <RequestsModule />}
+              {activeModule === "employees" && <EmployeesModule />}
               {activeModule === "payroll" && <PayrollModule />}
               {activeModule === "accounting" && <AccountingModule />}
               {activeModule === "work" && <WorkModule />}

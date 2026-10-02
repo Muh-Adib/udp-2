@@ -43,8 +43,9 @@ const ROLE_BADGE: Record<string, string> = {
 };
 
 const MODULE_ORDER: ModuleKey[] = [
-  "dashboard", "inbox", "contacts", "pipeline", "followups",
+  "dashboard", "inbox", "contacts", "pipeline", "followups", "tasks",
   "finance", "reports", "projects", "portal", "channels", "brands", "users", "audit",
+  "attendance", "requests", "employees", "payroll", "accounting", "work",
 ];
 
 const ACCESS_LEVELS_ORDER: AccessLevel[] = ["none", "read", "write", "full"];

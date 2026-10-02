@@ -8,7 +8,12 @@
 #     - sinkronisasi schema Prisma (db push, idempoten)
 #   service `app` (runtime murni `CMD bun server.js` — TANPA entrypoint/shell):
 #     - start SETELAH migrate sukses (depends_on service_completed_successfully)
-#     - secret dibaca dari file volume oleh src/instrumentation.ts saat start
+#     - secret dibaca via `bun --env-file=/app/data/.session-secret` (CMD Dockerfile)
+#
+# Prioritas SESSION_SECRET: env platform (Coolify) > file .session-secret di volume
+# (digenerate service migrate saat first deploy) > generate otomatis saat migrate.
+# Semua variabel aplikasi bersifat OPSIONAL dgn pola ${VAR:-} — kosong di Coolify
+# = fitur off / default aman; user bebas mengisinya di tab Environment Variables.
 #
 # Mengikuti pola "Generated Stack Values" Coolify:
 # https://coolify.io/docs/applications/builds/docker-compose#generated-stack-values
@@ -26,7 +31,8 @@ services:
     command: ["sh", "/app/docker-migrate.sh"]
     environment:
       - DATABASE_URL=file:/app/data/custom.db
-      # Env platform dipakai bila diset; bila kosong → script generate file secret.
+      # Env platform dipakai bila diset; bila kosong → script generate file secret
+      # persisten di volume (prioritas: env Coolify > file .session-secret > generate).
       - SESSION_SECRET=${SESSION_SECRET:-}
       - NEXT_TELEMETRY_DISABLED=1
     volumes:
@@ -50,14 +56,27 @@ services:
       - DATABASE_URL=file:/app/data/custom.db
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
-      # Opsional — kunci layanan AI (ringkasan opportunity). Kosongkan bila tak dipakai.
-      - ZAI_API_KEY=${ZAI_API_KEY:-}
-      - Z_AI_API_KEY=${Z_AI_API_KEY:-}
       # Kunci tanda-tangan cookie sesi (fail-closed sejak Ronde 36).
-      # Prioritas: env platform > file /app/data/.session-secret di volume
-      # (dibaca src/instrumentation.ts saat start; file digenerate service migrate).
+      # Prioritas: env platform (Coolify) > file /app/data/.session-secret di volume
+      # — file dimuat `bun --env-file=...` di CMD Dockerfile SEBELUM modul apa pun
+      # dievaluasi; env Coolify TIDAK tertimpa file; bila keduanya kosong, service
+      # `migrate` mengenerate file secret persisten di volume saat first deploy.
       - SESSION_SECRET=${SESSION_SECRET:-}
-      # Opsional — variabel SMTP global (kredensial email kanal dikelola via UI Saluran & Integrasi).
+      # Opsional — webhook WhatsApp (Meta): token handshake GET verify & secret
+      # validasi tanda-tangan X-Hub-Signature-256. Kosong = fallback kredensial
+      # kanal di DB (UI Saluran & Integrasi); produksi tanpa keduanya menolak webhook.
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      - WHATSAPP_APP_SECRET=${WHATSAPP_APP_SECRET:-}
+      # Opsional — Web Push (VAPID): kosong = fitur push browser nonaktif.
+      # Pasangan kunci dibuat via `bunx web-push generate-vapid-keys`.
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      # Opsional — set "1" utk mengizinkan reseed paksa via POST /api/bootstrap
+      # di produksi (di luar itu reseed paksa hanya di development). Kosong = off.
+      - ALLOW_RESEED=${ALLOW_RESEED:-}
+      # Aplikasi TIDAK memakai API pihak ketiga berbayar (ringkasan opportunity
+      # memakai heuristik lokal tanpa jaringan; kredensial kanal dikelola via UI).
     volumes:
       - db-data:/app/data
     restart: unless-stopped

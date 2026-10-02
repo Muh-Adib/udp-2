@@ -32,9 +32,9 @@ export function isAccessLevel(v: unknown): v is AccessLevel {
 
 /** Daftar modul — sinkron dengan ModuleKey di lib/crm/store.ts (copy defensif server-side). */
 export const MODULE_KEYS = [
-  "dashboard", "inbox", "contacts", "pipeline", "followups",
+  "dashboard", "inbox", "contacts", "pipeline", "followups", "tasks",
   "finance", "reports", "projects", "portal", "channels", "brands", "users", "audit",
-  "hris", "payroll", "accounting", "work",
+  "attendance", "requests", "employees", "payroll", "accounting", "work",
 ] as const;
 
 /**
@@ -43,33 +43,59 @@ export const MODULE_KEYS = [
  * role lain = write utk modul operasionalnya, read utk modul pantauan.
  */
 export const DEFAULT_MATRIX: Record<string, Record<string, AccessLevel>> = {
-  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
-  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", hris: "full", payroll: "full", accounting: "full", work: "full" },
-  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "write", projects: "write", hris: "write", work: "full" },
-  hr: { dashboard: "read", followups: "write", users: "read", hris: "full", payroll: "full", work: "read" },
-  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", reports: "read", projects: "write", hris: "write", work: "write" },
-  finance: { dashboard: "read", contacts: "read", pipeline: "read", finance: "full", reports: "read", hris: "read", payroll: "write", accounting: "full", work: "read" },
-  production: { dashboard: "read", followups: "write", projects: "write", hris: "write", work: "write" },
+  super_admin: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", tasks: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", attendance: "full", requests: "full", employees: "full", payroll: "full", accounting: "full", work: "full" },
+  director: { dashboard: "full", inbox: "full", contacts: "full", pipeline: "full", followups: "full", tasks: "full", finance: "full", reports: "full", projects: "full", portal: "full", channels: "full", brands: "full", users: "full", audit: "full", attendance: "full", requests: "full", employees: "full", payroll: "full", accounting: "full", work: "full" },
+  manager: { dashboard: "write", inbox: "write", contacts: "write", pipeline: "write", followups: "write", tasks: "write", reports: "write", projects: "write", attendance: "write", requests: "write", employees: "write", work: "full" },
+  hr: { dashboard: "read", followups: "write", tasks: "write", users: "read", attendance: "write", requests: "write", employees: "full", payroll: "full", work: "read" },
+  marketing: { dashboard: "read", inbox: "write", contacts: "write", pipeline: "write", followups: "write", tasks: "write", reports: "read", projects: "write", attendance: "write", requests: "write", employees: "read", work: "write" },
+  finance: { dashboard: "read", contacts: "read", pipeline: "read", tasks: "write", finance: "full", reports: "read", attendance: "write", requests: "write", employees: "read", payroll: "write", accounting: "full", work: "read" },
+  production: { dashboard: "read", followups: "write", tasks: "write", projects: "write", attendance: "write", requests: "write", employees: "read", work: "write" },
   client: { dashboard: "read", portal: "read" },
 };
 
-/** Pastikan tabel terisi default bila kosong — idempoten, aman dipanggil tiap GET. */
+/** Pastikan tabel terisi default — idempoten, aman dipanggil tiap GET.
+ * Upgrade path (Task 74): bila modul BARU (mis. hasil pemisahan HRIS →
+ * attendance/requests/employees atau tasks) belum punya baris utk suatu role,
+ * baris default-nya ditambahkan — DB lama (termasuk volume produksi) ikut
+ * terisi tanpa seed ulang. Baris modul usang (mis. "hris") dibiarkan —
+ * tidak dirujuk nav lagi. */
 export async function ensureDefaultPermissions(): Promise<void> {
   const count = await db.modulePermission.count();
-  if (count > 0) return;
-  const rows: { role: string; module: string; level: AccessLevel }[] = [];
+  if (count === 0) {
+    const rows: { role: string; module: string; level: AccessLevel }[] = [];
+    for (const [role, modules] of Object.entries(DEFAULT_MATRIX)) {
+      for (const [module, level] of Object.entries(modules)) {
+        rows.push({ role, module, level });
+      }
+    }
+    // SQLite createMany tanpa skipDuplicates — dua proses bersamaan tetap aman:
+    // pelanggaran unik (P2002) diabaikan karena isinya sama-sama default.
+    try {
+      await db.modulePermission.createMany({ data: rows });
+    } catch {
+      // tabel mungkin sudah terisi oleh proses lain — aman diabaikan
+    }
+    invalidatePermissionCache();
+    return;
+  }
+  // Upgrade inkremental: isi pasangan (role, module) default yang belum ada.
+  const existing = await db.modulePermission.findMany({
+    select: { role: true, module: true },
+  });
+  const seen = new Set(existing.map((r) => `${r.role}:${r.module}`));
+  const missing: { role: string; module: string; level: AccessLevel }[] = [];
   for (const [role, modules] of Object.entries(DEFAULT_MATRIX)) {
     for (const [module, level] of Object.entries(modules)) {
-      rows.push({ role, module, level });
+      if (!seen.has(`${role}:${module}`)) missing.push({ role, module, level });
     }
   }
-  // SQLite createMany tanpa skipDuplicates — dua proses bersamaan tetap aman:
-  // pelanggaran unik (P2002) diabaikan karena isinya sama-sama default.
+  if (missing.length === 0) return;
   try {
-    await db.modulePermission.createMany({ data: rows });
+    await db.modulePermission.createMany({ data: missing });
   } catch {
-    // tabel mungkin sudah terisi oleh proses lain — aman diabaikan
+    // proses lain mungkin sudah mengisi — aman diabaikan
   }
+  invalidatePermissionCache();
 }
 
 type Matrix = Record<string, Record<string, AccessLevel>>;

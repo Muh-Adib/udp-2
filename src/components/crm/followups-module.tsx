@@ -758,11 +758,19 @@ export default function FollowupsModule() {
     try {
       // Ronde 40-E — filter assignee TIDAK lagi dikirim ke server (match server hanya
       // assigneeName utama); multi-assignee difilter di klien agar semua penerima tampil.
-      const res = await api.tasks({
-        status: statusFilter !== "all" ? statusFilter : undefined,
-        overdue: onlyOverdue ? "true" : undefined,
+      // Task 74-b — modul Follow-up HANYA task komersial: selalu kirim type=follow_up
+      // (tugas produksi/rapat/internal tampil di modul Tugas). Param type dikirim via
+      // query string langsung karena api.tasks() belum menerima param type/excludeType.
+      const sp = new URLSearchParams({ type: "follow_up" });
+      if (statusFilter !== "all") sp.set("status", statusFilter);
+      if (onlyOverdue) sp.set("overdue", "true");
+      const res = await fetch(`/api/tasks?${sp}`, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
       });
-      setTasks(res.tasks);
+      const data = (await res.json().catch(() => ({}))) as { tasks?: TaskDTO[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setTasks(data.tasks ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat task");
       if (!silent) toast.error("Gagal memuat task follow-up");
@@ -867,8 +875,13 @@ export default function FollowupsModule() {
       {/* Header + filter */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
+          {/* Task 74-b — judul & deskripsi diperjelas: modul ini fokus aktivitas KOMERSIAL
+              (lead & opportunity); tugas non-komersial pindah ke modul Tugas. */}
           <h1 className="text-xl font-bold tracking-tight text-zinc-900">Follow-up Center</h1>
-          <p className="text-sm text-zinc-500">Task &amp; jadwal follow-up per opportunity</p>
+          <p className="text-sm text-zinc-500">
+            Follow-up — aktivitas komersial lead &amp; opportunity. Tugas non-komersial
+            (produksi, rapat, internal) ada di modul <span className="font-medium text-zinc-700">Tugas</span>.
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button

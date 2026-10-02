@@ -13,6 +13,14 @@ export async function GET(req: NextRequest) {
   // Ronde 52 — filter task produksi per project / milestone
   const projectId = sp.get("projectId");
   const milestoneId = sp.get("milestoneId");
+  // Task 74-b — pisah tampilan Follow-up (komersial) vs Tugas (produksi/internal):
+  // type → cocok persis (dipakai modul Follow-up), excludeType → NOT sama (dipakai modul Tugas).
+  // Boleh dikombinasikan dgn filter existing (status/assignee/overdue/projectId/milestoneId).
+  const type = sp.get("type");
+  const excludeType = sp.get("excludeType");
+  const typeWhere: { equals?: string; not?: string } = {};
+  if (type && type !== "all") typeWhere.equals = type;
+  if (excludeType && excludeType !== "all") typeWhere.not = excludeType;
 
   const tasks = await db.task.findMany({
     where: {
@@ -21,6 +29,7 @@ export async function GET(req: NextRequest) {
       ...(overdue === "true" ? { dueDate: { lt: new Date() } } : {}),
       ...(projectId ? { projectId } : {}),
       ...(milestoneId ? { milestoneId } : {}),
+      ...(Object.keys(typeWhere).length > 0 ? { type: typeWhere } : {}),
     },
     include: { opportunity: { include: { brand: true, contact: true } }, project: { select: { id: true, code: true, name: true } }, milestone: { select: { id: true, name: true } } },
     orderBy: [{ status: "asc" }, { dueDate: "asc" }],
